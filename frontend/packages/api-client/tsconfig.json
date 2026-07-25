@@ -1,0 +1,10 @@
+{
+  "extends": "../config/tsconfig/package.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@webtui/types": ["../types/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

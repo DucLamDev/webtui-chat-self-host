@@ -1,0 +1,221 @@
+erDiagram
+    users ||--o{ user_sessions : dang_nhap
+    users ||--o{ workspace_members : tham_gia
+    workspaces ||--o{ workspace_members : co
+    workspaces ||--o{ workspace_settings : cau_hinh
+    workspaces ||--o{ departments : co
+    departments ||--o{ department_members : gom
+    users ||--o{ department_members : thuoc
+
+    permissions ||--o{ role_permissions : gan
+    roles ||--o{ role_permissions : co
+    roles ||--o{ workspace_member_roles : gan
+    workspace_members ||--o{ workspace_member_roles : nhan
+    roles ||--o{ channel_member_roles : gan
+
+    workspaces ||--o{ channels : co
+    departments ||--o{ channels : quan_ly
+    channels ||--o{ channel_members : co
+    users ||--o{ channel_members : tham_gia
+    channel_members ||--o{ channel_member_roles : nhan
+
+    channels ||--o| direct_conversations : dai_dien
+    direct_conversations ||--o{ direct_conversation_members : co
+    users ||--o{ direct_conversation_members : tham_gia
+
+    workspaces ||--o{ messages : chia_partition
+    channels ||--o{ messages : nhan
+    users ||--o{ messages : gui
+    messages ||--o{ messages : thread
+    messages ||--o{ message_reactions : co
+    messages ||--o{ message_mentions : nhac
+    messages ||--o{ message_attachments : dinh_kem
+    messages ||--o{ message_reads : read_receipt_chi_tiet
+
+    files ||--o{ file_versions : co_phien_ban
+    files ||--o{ message_attachments : duoc_dinh_kem
+
+    users ||--o{ notifications : nhan
+    notifications ||--o{ notification_jobs : phat
+    users ||--o{ user_presence : hien_dien
+
+    workspaces ||--o{ bots : co
+    bots ||--o{ bot_installations : cai_dat
+    workspaces ||--o{ api_tokens : cap
+    api_tokens ||--o{ api_token_scopes : co
+    api_scopes ||--o{ api_token_scopes : duoc_cap
+    workspaces ||--o{ incoming_webhooks : co
+    workspaces ||--o{ outgoing_webhooks : co
+    outgoing_webhooks ||--o{ webhook_deliveries : phat
+    workspaces ||--o{ audit_logs : ghi
+    workspaces ||--o{ backup_jobs : sao_luu
+    workspaces ||--o{ search_documents : lap_chi_muc
+
+    users {
+        uuid id PK
+        citext email
+        citext username
+        text display_name
+        text password_hash
+        text device_name
+        inet registration_ip_address
+        text registration_device_name
+        inet last_ip_address
+        text status
+        timestamptz last_seen_at
+        timestamptz deleted_at
+    }
+
+    workspaces {
+        uuid id PK
+        citext slug
+        text name
+        text plan
+        text status
+        uuid owner_id FK
+        timestamptz deleted_at
+    }
+
+    workspace_settings {
+        uuid workspace_id PK
+        text key PK
+        jsonb value
+        text value_type
+        uuid updated_by FK
+    }
+
+    permissions {
+        uuid id PK
+        citext code
+        text module
+        text action
+        text name
+    }
+
+    roles {
+        uuid id PK
+        uuid workspace_id FK
+        citext code
+        text name
+        boolean is_system
+        timestamptz deleted_at
+    }
+
+    channels {
+        uuid id PK
+        uuid workspace_id FK
+        uuid department_id FK
+        citext slug
+        text name
+        text type
+        text status
+        uuid created_by FK
+    }
+
+    direct_conversations {
+        uuid id PK
+        uuid workspace_id FK
+        uuid channel_id FK
+        text participant_key
+        text conversation_type
+        uuid last_message_id
+    }
+
+    messages {
+        uuid workspace_id PK
+        uuid id PK
+        uuid channel_id FK
+        uuid sender_id FK
+        uuid parent_id FK
+        uuid thread_root_id FK
+        text kind
+        text body
+        tsvector search_vector
+        jsonb metadata
+        timestamptz created_at
+        timestamptz deleted_at
+    }
+
+    files {
+        uuid id PK
+        uuid workspace_id FK
+        uuid owner_id FK
+        text storage_provider
+        text object_key
+        text status
+    }
+
+    file_versions {
+        uuid id PK
+        uuid file_id FK
+        integer version_number
+        text object_key
+        bigint byte_size
+    }
+
+    notifications {
+        uuid id PK
+        uuid user_id FK
+        uuid workspace_id FK
+        uuid channel_id FK
+        uuid message_id FK
+        text type
+        timestamptz read_at
+    }
+
+    notification_jobs {
+        uuid id PK
+        uuid notification_id FK
+        uuid user_id FK
+        text channel
+        text status
+        integer attempt_count
+        timestamptz next_attempt_at
+    }
+
+    user_presence {
+        uuid user_id PK
+        text device_id PK
+        text socket_id
+        text node_id
+        text status
+        timestamptz last_heartbeat_at
+    }
+
+    api_tokens {
+        uuid id PK
+        uuid workspace_id FK
+        uuid owner_id FK
+        text name
+        text token_hash
+        text status
+    }
+
+    api_scopes {
+        uuid id PK
+        citext code
+        text module
+        text action
+    }
+
+    audit_logs {
+        uuid id PK
+        uuid workspace_id FK
+        uuid actor_user_id FK
+        text action
+        text entity_type
+        uuid entity_id
+        jsonb before_data
+        jsonb after_data
+        jsonb metadata
+    }
+
+    search_documents {
+        uuid id PK
+        uuid workspace_id FK
+        text source_type
+        uuid source_id
+        text title
+        text body
+        tsvector search_vector
+    }

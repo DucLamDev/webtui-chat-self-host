@@ -1,0 +1,134 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.local
+*.secret
+*.secrets
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+
+# OS and editors
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# Logs
+*.log
+logs/
+**/logs/
+frontend/.dev-logs/
+frontend/*-dev.out.log
+frontend/*-dev.err.log
+
+# Dependency caches
+node_modules/
+.npm-cache/
+**/.npm-cache/
+.pnpm-store/
+.yarn/cache/
+.cache/
+.parcel-cache/
+
+# Go backend
+backend/bin/
+backend/tmp/
+backend/coverage.out
+backend/.gocache/
+*.test
+
+# Frontend / Next.js / Playwright / Vitest
+.next/
+**/.next/
+out/
+**/out/
+dist/
+**/dist/
+coverage/
+**/coverage/
+playwright-report/
+**/playwright-report/
+test-results/
+**/test-results/
+frontend/.test-results/
+*.tsbuildinfo
+
+# Flutter / Dart / mobile build outputs
+.dart_tool/
+**/.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+**/build/
+clients/mobile/ios/Flutter/.last_build_id
+clients/mobile/ios/Flutter/Generated.xcconfig
+clients/mobile/ios/Flutter/flutter_export_environment.sh
+clients/mobile/ios/Flutter/ephemeral/
+clients/mobile/ios/Runner/GeneratedPluginRegistrant.*
+clients/mobile/android/app/debug/
+clients/mobile/android/app/profile/
+clients/mobile/android/app/release/
+
+# Mobile signing material
+clients/mobile/android/key.properties
+clients/mobile/android/app/*.jks
+clients/mobile/android/app/*.keystore
+clients/mobile/ios/**/*.p8
+clients/mobile/ios/**/*.cer
+clients/mobile/ios/**/*.provisionprofile
+
+# Desktop / Tauri / native release artifacts
+clients/desktop/node_modules/
+clients/desktop/web-dist/
+clients/desktop/src-tauri/.generated/
+clients/desktop/src-tauri/target/
+**/src-tauri/target/
+*.msi
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
+# Generated app packages and archives
+*.apk
+*.aab
+*.ipa
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Deploy runtime data, backups and local release drops
+/data/
+deploy/.env
+deploy/data/
+deploy/**/data/
+deploy/self-hosted/backups/
+deploy/**/backups/
+portal/download/**/*.apk
+portal/download/**/*.aab
+portal/download/**/*.ipa
+
+# Local operator notes
+vps-info.md
+Task_list.md
+
+# Codex / local agent scratch space
+.codex/
+.tmp-docker-config/
+.agents/**/references/architecture.md

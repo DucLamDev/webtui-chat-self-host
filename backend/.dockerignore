@@ -1,0 +1,6 @@
+.gocache
+bin
+tmp
+data
+coverage.out
+*.log

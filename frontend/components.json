@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "packages/ui/src/styles.css",
+    "baseColor": "slate",
+    "cssVariables": true
+  },
+  "aliases": {
+    "components": "@webtui/ui",
+    "utils": "@webtui/ui",
+    "ui": "@webtui/ui",
+    "lib": "@webtui/ui",
+    "hooks": "@/hooks"
+  },
+  "iconLibrary": "lucide"
+}

@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "deploy/self-hosted/**"
+      - "docs/**"
+      - "CleanArchitecture.md"
+      - ".github/workflows/ci.yml"
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "deploy/self-hosted/**"
+      - "docs/**"
+      - "CleanArchitecture.md"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: Check docs and structure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check required architecture files
+        run: |
+          test -f CleanArchitecture.md
+          test -f docs/architecture/source-layout.md
+          test -f docs/database/postgresql-design.md
+          test -f backend/db/migrations/000001_initial_schema.up.sql
+
+      - name: Check common encoding corruption
+        run: |
+          # Detect common mojibake sequences without flagging valid Vietnamese text.
+          pattern="$(printf '\303\204|\303\206|\303\241\302\272|\303\241\302\273|\303\242\342\202\254|\303\242\342\202\254\342\204\242|\303\242\342\202\254\305\223|\303\242\342\202\254\357\277\275|\303\242\342\202\254\342\200\234|\303\242\342\202\254\342\200\235')"
+          if grep -RInE "$pattern" --include='*.go' --include='*.md' --include='*.yaml' --include='*.yml' .; then
+            echo "Detected text that looks like encoding corruption."
+            exit 1
+          fi
+          if grep -RIn "$(printf '\357\277\275')" --include='*.go' --include='*.md' --include='*.yaml' --include='*.yml' .; then
+            echo "Detected Unicode replacement characters."
+            exit 1
+          fi
+
+  backend:
+    name: Backend Go
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check go.mod
+        id: gomod
+        run: |
+          if [ -f go.mod ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Go
+        if: steps.gomod.outputs.exists == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Test
+        if: steps.gomod.outputs.exists == 'true'
+        run: go test ./...
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check package.json
+        id: package
+        run: |
+          if [ -f frontend/package.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.package.outputs.exists == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        if: steps.package.outputs.exists == 'true'
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        if: steps.package.outputs.exists == 'true'
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Lint
+        if: steps.package.outputs.exists == 'true'
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Unit test
+        if: steps.package.outputs.exists == 'true'
+        working-directory: frontend
+        run: npm run test:unit
+
+      - name: Build web
+        if: steps.package.outputs.exists == 'true'
+        working-directory: frontend
+        run: npm run build:web
+
+      - name: Build admin
+        if: steps.package.outputs.exists == 'true'
+        working-directory: frontend
+        run: npm run build:admin

@@ -1,0 +1,8 @@
+.dev-logs
+.test-results
+apps/*/.next/cache
+apps/*/tsconfig.tsbuildinfo
+coverage
+node_modules
+playwright-report
+test-results

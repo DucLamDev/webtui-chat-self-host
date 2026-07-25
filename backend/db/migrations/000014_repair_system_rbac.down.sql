@@ -1,0 +1,11 @@
+-- 000014 is an idempotent, forward-only RBAC data repair.
+--
+-- The up migration may activate an existing workspace membership, repair an
+-- owner's role, grant an approved administrator role, and normalize system
+-- role permissions. The database did not record which of those rows existed
+-- before 000014, so deleting them here could revoke legitimate production
+-- access or remove permissions added independently after deployment.
+--
+-- Keep rollback intentionally non-destructive. A future permission rollback
+-- must be a new audited forward migration with an explicit target matrix.
+SELECT 1;

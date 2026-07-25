@@ -1,0 +1,2 @@
+-- No-op rollback: this migration repairs missing system bot targets. Removing
+-- them on downgrade could delete bot installations that are already in use.
