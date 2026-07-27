@@ -108,6 +108,8 @@ services:
       - path: .env
         required: false
     environment:
+      JITSI_BASE_URL: ${JITSI_BASE_URL:-https://meet.jit.si}
+      RATE_LIMIT_ENABLED: "false"
       SERVICE_NAME: api
     volumes:
       - storage_data:/var/lib/vpsttt-chat/storage
@@ -168,7 +170,7 @@ services:
         NEXT_PUBLIC_APP_NAME: ${INSTANCE_NAME}
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS}
-        NEXT_PUBLIC_JITSI_BASE_URL: ${NEXT_PUBLIC_JITSI_BASE_URL:-}
+        NEXT_PUBLIC_JITSI_BASE_URL: ${NEXT_PUBLIC_JITSI_BASE_URL:-https://meet.jit.si}
         NEXT_PUBLIC_WS_BASE_URL: wss://${INSTANCE_DOMAIN}/ws
     image: vpsttt-chat-web:${APP_VERSION:-self-hosted}
     restart: unless-stopped

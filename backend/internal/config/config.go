@@ -236,7 +236,7 @@ func Load() (*Config, error) {
 			TrustedProxies:       getEnvCSV("TRUSTED_PROXIES", []string{}),
 			CORSAllowedOrigins:   getEnvCSVWithDefaults("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins),
 			SecureHeadersEnabled: getEnvBool("SECURE_HEADERS_ENABLED", true),
-			RateLimitEnabled:     getEnvBool("RATE_LIMIT_ENABLED", true),
+			RateLimitEnabled:     getEnvBool("RATE_LIMIT_ENABLED", false),
 			RateLimitPerMinute:   getEnvInt("RATE_LIMIT_PER_MINUTE", 120),
 			RateLimitBurst:       getEnvInt("RATE_LIMIT_BURST", 60),
 		},

@@ -5275,6 +5275,43 @@
   }
 }
 
+/* Final layout corrections */
+.chat-app-shell--zalo .settings-page {
+  padding: clamp(18px, 2vw, 28px);
+}
+
+.chat-app-shell--zalo .settings-page__intro,
+.chat-app-shell--zalo .settings-grid {
+  max-width: none;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .chat-panel-open-button--active.ui-button {
+  background: var(--zalo-blue);
+  border-color: var(--zalo-blue);
+  color: #fff;
+}
+
+.talk-whiteboard__canvas {
+  background: #fff;
+  border: 1px solid #dce5ef;
+  border-radius: 11px;
+  cursor: crosshair;
+  min-height: 230px;
+  touch-action: none;
+  width: 100%;
+}
+
+.talk-whiteboard .ui-button svg {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  cursor: inherit;
+  min-height: 0;
+  touch-action: auto;
+  width: auto;
+}
+
 @media (min-width: 768px) {
   .chat-app-shell--zalo .ui-navigation-rail__brand-wrap {
     align-items: center;
@@ -5303,6 +5340,38 @@
   .chat-app-shell--zalo .ui-navigation-rail__brand-wrap > strong {
     display: none;
   }
+}
+
+/* Full-width settings and a persistent Zalo-style information toggle. */
+.chat-app-shell--zalo .settings-page {
+  padding: clamp(18px, 2vw, 28px);
+}
+
+.chat-app-shell--zalo .settings-page__intro,
+.chat-app-shell--zalo .settings-grid {
+  max-width: none;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .chat-panel-open-button--active.ui-button {
+  background: var(--zalo-blue);
+  border-color: var(--zalo-blue);
+  color: #fff;
+}
+
+.chat-app-shell--zalo .chat-panel-open-button--active.ui-button:hover {
+  background: #005ee8;
+  color: #fff;
+}
+
+.talk-whiteboard .ui-button svg {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  cursor: inherit;
+  min-height: 0;
+  touch-action: auto;
+  width: auto;
 }
 
 /* Compact brand mark: the organization name lives in the workspace, not the rail. */
@@ -14725,7 +14794,7 @@ button.message-reply-preview:hover {
   box-shadow: 0 0 0 2px #4d91e7;
 }
 
-.talk-whiteboard svg {
+.talk-whiteboard__canvas {
   background: #fff;
   border: 1px solid #dce5ef;
   border-radius: 11px;
@@ -15500,4 +15569,41 @@ button.message-reply-preview:hover {
       "desktop"
       "sessions";
   }
+}
+
+/* Production overrides: keep these rules last. */
+.chat-app-shell--zalo .settings-page {
+  padding: clamp(18px, 2vw, 28px);
+}
+
+.chat-app-shell--zalo .settings-page__intro,
+.chat-app-shell--zalo .settings-grid {
+  max-width: none;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .chat-panel-open-button--active.ui-button {
+  background: var(--zalo-blue);
+  border-color: var(--zalo-blue);
+  color: #fff;
+}
+
+.talk-whiteboard__canvas {
+  background: #fff;
+  border: 1px solid #dce5ef;
+  border-radius: 11px;
+  cursor: crosshair;
+  min-height: 230px;
+  touch-action: none;
+  width: 100%;
+}
+
+.talk-whiteboard .ui-button svg {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  cursor: inherit;
+  min-height: 0;
+  touch-action: auto;
+  width: auto;
 }

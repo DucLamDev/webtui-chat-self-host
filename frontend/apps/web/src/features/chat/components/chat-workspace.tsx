@@ -151,12 +151,11 @@ const railItems = [
   { id: "messages", label: "Tin nhắn", icon: ConversationSolidIcon },
   { id: "channels", label: "Kênh", icon: GroupSolidIcon },
   { id: "contacts", label: "Bạn bè", icon: AddContactSolidIcon },
-  { id: "tickets", label: "Hỗ trợ", icon: Ticket },
   { id: "files", label: "Tài liệu", icon: FileText },
   { id: "settings", label: "Cài đặt", icon: SettingsSolidIcon }
 ] as const;
 
-type RailItemId = (typeof railItems)[number]["id"] | "departments" | "bots" | "automation";
+type RailItemId = (typeof railItems)[number]["id"] | "departments" | "tickets" | "bots" | "automation";
 type MessageSidebarTab = "conversations" | "channels";
 type ContactsTab = "employees" | "friends" | "discover";
 type ChatWorkspaceData = ReturnType<typeof useChatWorkspaceData>;
@@ -6839,18 +6838,19 @@ function ChatHeader({
             </div>
           ) : null}
         </div>
-        {!isDetailPanelOpen && onToggleDetailPanel ? (
-          <Tooltip label="Mở bảng thông tin">
+        {onToggleDetailPanel ? (
+          <Tooltip label={isDetailPanelOpen ? "Ẩn bảng thông tin" : "Mở bảng thông tin"}>
             <Button
-              aria-label="Mở bảng thông tin cuộc trò chuyện"
-              className="chat-panel-open-button"
+              aria-label={isDetailPanelOpen ? "Ẩn bảng thông tin cuộc trò chuyện" : "Mở bảng thông tin cuộc trò chuyện"}
+              aria-pressed={isDetailPanelOpen}
+              className={isDetailPanelOpen ? "chat-panel-open-button chat-panel-open-button--active" : "chat-panel-open-button"}
               onClick={() => {
                 setOpenPopover(null);
                 onToggleDetailPanel();
               }}
               variant="icon"
             >
-              <PanelRightOpen size={19} />
+              {isDetailPanelOpen ? <PanelRightClose size={19} /> : <PanelRightOpen size={19} />}
             </Button>
           </Tooltip>
         ) : null}

@@ -1085,6 +1085,7 @@ function CollaborativeWhiteboard({
       </header>
       <svg
         aria-label="Bảng trắng cộng tác"
+        className="talk-whiteboard__canvas"
         onPointerDown={start}
         onPointerMove={move}
         onPointerUp={end}
