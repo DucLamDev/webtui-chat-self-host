@@ -121,10 +121,10 @@ func (s *Service) UpdateZoneQuota(
 		input.MaxStorageBytes <= 0 ||
 		input.MaxAutomationInstallations <= 0 || input.MaxAutomationInstallations > 1000000 ||
 		input.MaxWebhooks <= 0 || input.MaxWebhooks > 1000000 {
-		return ZoneQuotaOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Gia tri quota khong hop le.")
+		return ZoneQuotaOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Giá trị hạn mức không hợp lệ.")
 	}
 	if input.EnforcementMode != "monitor" && input.EnforcementMode != "hard" {
-		return ZoneQuotaOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "enforcement_mode khong hop le.")
+		return ZoneQuotaOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Chế độ áp dụng hạn mức không hợp lệ.")
 	}
 	quota, usage, err := s.repo.UpdateZoneQuota(ctx, UpdateZoneQuotaParams{
 		ActorUserID:                input.ActorUserID,
@@ -260,7 +260,7 @@ func (s *Service) UpdateOIDCProvider(
 	if input.Scopes != nil {
 		scopes := normalizeOIDCScopes(*input.Scopes)
 		if len(scopes) == 0 {
-			return OIDCProviderDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "OIDC scopes khong duoc rong.")
+			return OIDCProviderDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Phạm vi OIDC không được để trống.")
 		}
 		input.Scopes = &scopes
 	}
@@ -311,31 +311,31 @@ func (s *Service) DeleteOIDCProvider(
 
 func validateOIDCProvider(name string, issuerURL string, clientID string, secretRef string, status string) error {
 	if name == "" || len([]rune(name)) > 120 || clientID == "" || len(clientID) > 500 {
-		return apperrors.BadRequest("VALIDATION_ERROR", "name va client_id OIDC khong hop le.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "Tên và client_id OIDC không hợp lệ.")
 	}
 	parsed, err := url.Parse(issuerURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" ||
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return apperrors.BadRequest("VALIDATION_ERROR", "issuer_url phai la HTTPS URL khong chua user, query hoac fragment.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "issuer_url phải là URL HTTPS không chứa thông tin người dùng, query hoặc fragment.")
 	}
 	if secretRef != "" && !validOIDCSecretRef(secretRef) {
-		return apperrors.BadRequest("INVALID_SECRET_REF", "client_secret_ref phai dung provider secret duoc ho tro.")
+		return apperrors.BadRequest("INVALID_SECRET_REF", "client_secret_ref phải dùng nhà cung cấp secret được hỗ trợ.")
 	}
 	if status == "" {
 		status = "configured"
 	}
 	if status != "configured" && status != "disabled" {
-		return apperrors.BadRequest("VALIDATION_ERROR", "status OIDC khong hop le.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "Trạng thái OIDC không hợp lệ.")
 	}
 	return nil
 }
 
 func validateOptionalOIDCProvider(input UpdateOIDCProviderInput) error {
 	if input.Name != nil && (*input.Name == "" || len([]rune(*input.Name)) > 120) {
-		return apperrors.BadRequest("VALIDATION_ERROR", "name OIDC khong hop le.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "Tên OIDC không hợp lệ.")
 	}
 	if input.ClientID != nil && (*input.ClientID == "" || len(*input.ClientID) > 500) {
-		return apperrors.BadRequest("VALIDATION_ERROR", "client_id OIDC khong hop le.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "client_id OIDC không hợp lệ.")
 	}
 	if input.IssuerURL != nil {
 		if err := validateOIDCProvider("provider", *input.IssuerURL, "client", "", "configured"); err != nil {
@@ -343,10 +343,10 @@ func validateOptionalOIDCProvider(input UpdateOIDCProviderInput) error {
 		}
 	}
 	if input.ClientSecretRef != nil && *input.ClientSecretRef != "" && !validOIDCSecretRef(*input.ClientSecretRef) {
-		return apperrors.BadRequest("INVALID_SECRET_REF", "client_secret_ref phai dung provider secret duoc ho tro.")
+		return apperrors.BadRequest("INVALID_SECRET_REF", "client_secret_ref phải dùng nhà cung cấp secret được hỗ trợ.")
 	}
 	if input.Status != nil && *input.Status != "configured" && *input.Status != "disabled" {
-		return apperrors.BadRequest("VALIDATION_ERROR", "status OIDC khong hop le.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "Trạng thái OIDC không hợp lệ.")
 	}
 	return nil
 }
@@ -381,12 +381,12 @@ func validateOIDCClaimMapping(mapping map[string]any) error {
 	}
 	for field, rawClaimName := range mapping {
 		if _, ok := allowed[field]; !ok {
-			return apperrors.BadRequest("VALIDATION_ERROR", "claim_mapping chua truong khong duoc ho tro.")
+			return apperrors.BadRequest("VALIDATION_ERROR", "claim_mapping chứa trường không được hỗ trợ.")
 		}
 		claimName, ok := rawClaimName.(string)
 		claimName = strings.TrimSpace(claimName)
 		if !ok || claimName == "" || len(claimName) > 200 {
-			return apperrors.BadRequest("VALIDATION_ERROR", "claim_mapping phai anh xa sang ten claim hop le.")
+			return apperrors.BadRequest("VALIDATION_ERROR", "claim_mapping phải ánh xạ sang tên claim hợp lệ.")
 		}
 		mapping[field] = claimName
 	}
@@ -409,11 +409,11 @@ func mapPolicyError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, tenancydomain.ErrOIDCProviderNotFound):
-		return apperrors.NotFound("OIDC_PROVIDER_NOT_FOUND", "Khong tim thay OIDC provider trong zone hien tai.")
+		return apperrors.NotFound("OIDC_PROVIDER_NOT_FOUND", "Không tìm thấy nhà cung cấp OIDC trong vùng máy chủ hiện tại.")
 	case errors.Is(err, tenancydomain.ErrOIDCProviderConflict):
-		return apperrors.Conflict("OIDC_PROVIDER_CONFLICT", "Ten OIDC provider da ton tai trong zone.")
+		return apperrors.Conflict("OIDC_PROVIDER_CONFLICT", "Tên nhà cung cấp OIDC đã tồn tại trong vùng máy chủ.")
 	case errors.Is(err, tenancydomain.ErrZoneQuotaExceeded):
-		return apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Zone da dat gioi han quota.")
+		return apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Vùng máy chủ đã đạt giới hạn hạn mức.")
 	default:
 		return err
 	}

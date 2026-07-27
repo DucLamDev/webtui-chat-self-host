@@ -70,7 +70,7 @@ func DefaultWorkspaceBots() []DefaultBotDefinition {
 func CustomerWorkspaceChannels() []DefaultChannelDefinition {
 	return []DefaultChannelDefinition{
 		{Slug: "general", Name: "General", Description: "Trao doi chung trong workspace", Type: "public"},
-		{Slug: "announcements", Name: "Announcements", Description: "Thong bao noi bo cua workspace", Type: "public"},
+		{Slug: "announcements", Name: "Thông báo", Description: "Thông báo nội bộ của workspace", Type: "public"},
 	}
 }
 
@@ -280,7 +280,7 @@ func (s *Service) Create(ctx context.Context, input CreateWorkspaceInput) (Works
 	input.ActorUserID = strings.TrimSpace(input.ActorUserID)
 	input.ZoneID = strings.TrimSpace(input.ZoneID)
 	if input.ZoneID == "" {
-		return WorkspaceDTO{}, apperrors.BadRequest("ZONE_REQUIRED", "Khong xac dinh duoc zone hien tai.")
+		return WorkspaceDTO{}, apperrors.BadRequest("ZONE_REQUIRED", "Không xác định được vùng máy chủ hiện tại.")
 	}
 	allowed, err := s.checker.HasAnyZonePermission(ctx, input.ActorUserID, input.ZoneID, "workspace.manage")
 	if err != nil {
@@ -308,7 +308,7 @@ func (s *Service) Create(ctx context.Context, input CreateWorkspaceInput) (Works
 	})
 	if err != nil {
 		if errors.Is(err, workspacesdomain.ErrWorkspaceQuotaExceeded) {
-			return WorkspaceDTO{}, apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Zone da dat gioi han workspace.")
+			return WorkspaceDTO{}, apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Vùng máy chủ đã đạt giới hạn workspace.")
 		}
 		if errors.Is(err, workspacesdomain.ErrWorkspaceConflict) {
 			return WorkspaceDTO{}, apperrors.Conflict("WORKSPACE_ALREADY_EXISTS", "Slug workspace đã tồn tại.")

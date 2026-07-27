@@ -2984,9 +2984,9 @@ function InstanceAdministration({
                 defaultValue={zoneOverview.zone.registration_mode}
                 name="registration_mode"
               >
-                <option value="open">Open</option>
-                <option value="invite_only">Invite only</option>
-                <option value="closed">Closed</option>
+                <option value="open">Mở tự đăng ký</option>
+                <option value="invite_only">Chỉ chấp nhận mã mời</option>
+                <option value="closed">Đóng đăng ký</option>
               </select>
             </label>
             <Button disabled={data.updateCurrentZoneMutation.isPending} type="submit">

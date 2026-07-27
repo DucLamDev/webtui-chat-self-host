@@ -4,18 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
 
 	botsdomain "github.com/duclamdev/application-chat/backend/internal/modules/bots/domain"
+	"github.com/duclamdev/application-chat/backend/internal/shared/botauto"
+	"github.com/duclamdev/application-chat/backend/internal/shared/botsecrets"
 	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
 var botSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
+var botAIEnvironmentReference = regexp.MustCompile(`^env://BOT_AI_[A-Z0-9_]+$`)
 
 type PermissionChecker interface {
 	HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error)
+}
+
+type FlowRuntime interface {
+	Complete(
+		ctx context.Context,
+		config botsdomain.AIConfig,
+		flow botsdomain.Flow,
+		input botauto.MessageInput,
+	) (string, error)
 }
 
 type Repository interface {
@@ -34,8 +47,10 @@ type Repository interface {
 }
 
 type Service struct {
-	repo    Repository
-	checker PermissionChecker
+	repo        Repository
+	checker     PermissionChecker
+	flowRuntime FlowRuntime
+	secretKey   string
 }
 
 type CreateBotInput struct {
@@ -97,6 +112,7 @@ type AIConfigInput struct {
 	Provider    string
 	Model       string
 	SecretRef   string
+	APIKey      string
 	Settings    json.RawMessage
 }
 
@@ -161,6 +177,9 @@ type TestFlowParams struct {
 	BotID       string
 	FlowID      string
 	Input       []byte
+	Transcript  []byte
+	Status      string
+	Error       string
 	ActorUserID string
 }
 
@@ -246,6 +265,149 @@ type FlowRunDTO struct {
 
 func NewService(repo Repository, checker PermissionChecker) *Service {
 	return &Service{repo: repo, checker: checker}
+}
+
+func (s *Service) SetFlowRuntime(runtime FlowRuntime) {
+	s.flowRuntime = runtime
+}
+
+func (s *Service) SetSecretMasterKey(secret string) {
+	s.secretKey = strings.TrimSpace(secret)
+}
+
+// HandleMessage lets every published bot flow act as a workspace-scoped
+// responder. A bot only receives messages from channels where it is installed,
+// and the flow trigger decides whether the model should run.
+func (s *Service) HandleMessage(ctx context.Context, input botauto.MessageInput) ([]botauto.BotMessage, error) {
+	if s == nil || s.repo == nil || s.flowRuntime == nil {
+		return nil, nil
+	}
+	workspaceID := strings.TrimSpace(input.WorkspaceID)
+	channelID := strings.TrimSpace(input.ChannelID)
+	if workspaceID == "" || channelID == "" || strings.TrimSpace(input.Body) == "" {
+		return nil, nil
+	}
+
+	bots, err := s.repo.ListBots(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]botauto.BotMessage, 0)
+	for _, bot := range bots {
+		if bot.Status != "active" {
+			continue
+		}
+		installations, listErr := s.repo.ListInstallations(ctx, workspaceID, bot.ID)
+		if listErr != nil || !botInstalledInChannel(installations, channelID) {
+			continue
+		}
+		flows, listErr := s.repo.ListFlows(ctx, workspaceID, bot.ID)
+		if listErr != nil {
+			continue
+		}
+		for _, flow := range flows {
+			if flow.Status != "published" || !botFlowMatches(flow, bot, input.Body) {
+				continue
+			}
+			config, configErr := s.repo.GetAIConfig(ctx, workspaceID, bot.ID)
+			if configErr != nil {
+				slog.Warn("Bot chưa có cấu hình AI khả dụng",
+					"workspace_id", workspaceID,
+					"channel_id", channelID,
+					"bot_id", bot.ID,
+					"error", configErr,
+				)
+				break
+			}
+			body, completionErr := s.flowRuntime.Complete(ctx, config, flow, input)
+			if completionErr != nil {
+				slog.Warn("Bot không tạo được phản hồi AI",
+					"workspace_id", workspaceID,
+					"channel_id", channelID,
+					"bot_id", bot.ID,
+					"flow_id", flow.ID,
+					"error", completionErr,
+				)
+				break
+			}
+			body = strings.TrimSpace(body)
+			if body == "" {
+				break
+			}
+			metadata, _ := json.Marshal(map[string]any{
+				"bot_name":          bot.Name,
+				"bot_slug":          bot.Slug,
+				"flow_id":           flow.ID,
+				"flow_name":         flow.Name,
+				"source":            "generic_bot_flow",
+				"source_message_id": input.MessageID,
+			})
+			message, sendErr := s.repo.SendBotMessage(ctx, SendBotMessageParams{
+				WorkspaceID: workspaceID,
+				BotID:       bot.ID,
+				ChannelID:   channelID,
+				Body:        body,
+				Metadata:    metadata,
+			})
+			if sendErr != nil {
+				return responses, sendErr
+			}
+			responses = append(responses, botauto.BotMessage{
+				ID:          message.ID,
+				WorkspaceID: message.WorkspaceID,
+				ChannelID:   message.ChannelID,
+				BotID:       message.BotID,
+				Kind:        message.Kind,
+				Body:        message.Body,
+				Metadata:    message.Metadata,
+				CreatedAt:   message.CreatedAt.UTC().Format(time.RFC3339Nano),
+			})
+			break
+		}
+	}
+	return responses, nil
+}
+
+func botInstalledInChannel(installations []botsdomain.Installation, channelID string) bool {
+	for _, installation := range installations {
+		if installation.Status != "active" {
+			continue
+		}
+		if installation.ChannelID == nil || strings.TrimSpace(*installation.ChannelID) == channelID {
+			return true
+		}
+	}
+	return false
+}
+
+func botFlowMatches(flow botsdomain.Flow, bot botsdomain.Bot, body string) bool {
+	var trigger struct {
+		Type     string   `json:"type"`
+		Keywords []string `json:"keywords"`
+		Prefix   string   `json:"prefix"`
+	}
+	if len(flow.TriggerConfig) > 0 {
+		_ = json.Unmarshal(flow.TriggerConfig, &trigger)
+	}
+	normalizedBody := strings.ToLower(strings.TrimSpace(body))
+	switch strings.ToLower(strings.TrimSpace(trigger.Type)) {
+	case "", "mention":
+		return strings.Contains(normalizedBody, "@"+strings.ToLower(bot.Slug)) ||
+			strings.Contains(normalizedBody, "@"+strings.ToLower(bot.Name))
+	case "all", "always", "message":
+		return true
+	case "command":
+		prefix := strings.ToLower(strings.TrimSpace(trigger.Prefix))
+		return prefix != "" && strings.HasPrefix(normalizedBody, prefix)
+	case "keyword", "keywords":
+		for _, keyword := range trigger.Keywords {
+			if keyword = strings.ToLower(strings.TrimSpace(keyword)); keyword != "" &&
+				strings.Contains(normalizedBody, keyword) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) CreateBot(ctx context.Context, input CreateBotInput) (BotDTO, error) {
@@ -370,12 +532,34 @@ func (s *Service) UpsertAIConfig(ctx context.Context, input AIConfigInput) (AICo
 	if err != nil {
 		return AIConfigDTO{}, err
 	}
+	secretRef := strings.TrimSpace(input.SecretRef)
+	apiKey := strings.TrimSpace(input.APIKey)
+	if len(apiKey) > 4096 {
+		return AIConfigDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "API key không được vượt quá 4096 ký tự.")
+	}
+	if apiKey != "" {
+		if s.secretKey == "" {
+			return AIConfigDTO{}, apperrors.ServiceUnavailable("BOT_SECRET_STORAGE_UNAVAILABLE", "Máy chủ chưa cấu hình khóa mã hóa API key cho bot.")
+		}
+		secretRef, err = botsecrets.Encrypt(s.secretKey, apiKey)
+		if err != nil {
+			return AIConfigDTO{}, apperrors.Internal("Không mã hóa được API key của bot.")
+		}
+	} else if botsecrets.IsMasked(secretRef) {
+		existing, getErr := s.repo.GetAIConfig(ctx, strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.BotID))
+		if getErr != nil || existing.SecretRef == nil || !botsecrets.IsEncrypted(*existing.SecretRef) {
+			return AIConfigDTO{}, apperrors.BadRequest("BOT_SECRET_NOT_FOUND", "API key đã lưu không còn tồn tại. Hãy nhập lại API key.")
+		}
+		secretRef = *existing.SecretRef
+	} else if secretRef != "" && !botAIEnvironmentReference.MatchString(secretRef) {
+		return AIConfigDTO{}, apperrors.BadRequest("INVALID_SECRET_REF", "Secret reference phải có dạng env://BOT_AI_*.")
+	}
 	config, err := s.repo.UpsertAIConfig(ctx, AIConfigParams{
 		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
 		BotID:       strings.TrimSpace(input.BotID),
 		Provider:    provider,
 		Model:       model,
-		SecretRef:   strings.TrimSpace(input.SecretRef),
+		SecretRef:   secretRef,
 		Settings:    settings,
 		ActorUserID: strings.TrimSpace(input.ActorUserID),
 	})
@@ -448,11 +632,62 @@ func (s *Service) TestFlow(ctx context.Context, input TestFlowInput) (FlowRunDTO
 	if err != nil {
 		return FlowRunDTO{}, err
 	}
+	if s.flowRuntime == nil {
+		return FlowRunDTO{}, apperrors.ServiceUnavailable("BOT_AI_RUNTIME_UNAVAILABLE", "Runtime AI của bot chưa sẵn sàng.")
+	}
+	workspaceID := strings.TrimSpace(input.WorkspaceID)
+	botID := strings.TrimSpace(input.BotID)
+	flowID := strings.TrimSpace(input.FlowID)
+	config, err := s.repo.GetAIConfig(ctx, workspaceID, botID)
+	if err != nil {
+		return FlowRunDTO{}, mapBotError(err)
+	}
+	flows, err := s.repo.ListFlows(ctx, workspaceID, botID)
+	if err != nil {
+		return FlowRunDTO{}, mapBotError(err)
+	}
+	var selectedFlow *botsdomain.Flow
+	for index := range flows {
+		if flows[index].ID == flowID {
+			selectedFlow = &flows[index]
+			break
+		}
+	}
+	if selectedFlow == nil {
+		return FlowRunDTO{}, apperrors.NotFound("BOT_FLOW_NOT_FOUND", "Không tìm thấy nghiệp vụ bot.")
+	}
+	messageBody := string(payload)
+	var testInput struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(payload, &testInput) == nil && strings.TrimSpace(testInput.Message) != "" {
+		messageBody = strings.TrimSpace(testInput.Message)
+	}
+	completion, completionErr := s.flowRuntime.Complete(ctx, config, *selectedFlow, botauto.MessageInput{
+		ActorUserID: strings.TrimSpace(input.ActorUserID),
+		WorkspaceID: workspaceID,
+		Body:        messageBody,
+	})
+	status := "success"
+	errorMessage := ""
+	transcriptValue := map[string]any{"content": strings.TrimSpace(completion)}
+	if completionErr != nil {
+		status = "failed"
+		errorMessage = completionErr.Error()
+		transcriptValue = map[string]any{"error": errorMessage}
+	}
+	transcript, marshalErr := json.Marshal(transcriptValue)
+	if marshalErr != nil {
+		return FlowRunDTO{}, apperrors.Internal("Không ghi được kết quả chạy thử bot.")
+	}
 	run, err := s.repo.TestFlow(ctx, TestFlowParams{
-		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
-		BotID:       strings.TrimSpace(input.BotID),
-		FlowID:      strings.TrimSpace(input.FlowID),
+		WorkspaceID: workspaceID,
+		BotID:       botID,
+		FlowID:      flowID,
 		Input:       payload,
+		Transcript:  transcript,
+		Status:      status,
+		Error:       errorMessage,
 		ActorUserID: strings.TrimSpace(input.ActorUserID),
 	})
 	if err != nil {
@@ -609,12 +844,17 @@ func toAIConfigDTO(config botsdomain.AIConfig) AIConfigDTO {
 	if len(settings) == 0 {
 		settings = json.RawMessage(`{}`)
 	}
+	secretRef := config.SecretRef
+	if secretRef != nil && botsecrets.IsEncrypted(*secretRef) {
+		masked := botsecrets.MaskedReference()
+		secretRef = &masked
+	}
 	return AIConfigDTO{
 		WorkspaceID: config.WorkspaceID,
 		BotID:       config.BotID,
 		Provider:    config.Provider,
 		Model:       config.Model,
-		SecretRef:   config.SecretRef,
+		SecretRef:   secretRef,
 		Settings:    settings,
 		CreatedBy:   config.CreatedBy,
 		UpdatedBy:   config.UpdatedBy,

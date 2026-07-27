@@ -43,9 +43,9 @@ theo `INSTANCE_DOMAIN` và `INSTANCE_NAME`.
 5. Chạy installer self-hosted.
 6. Mở `https://chat.vpsttt.com/portal`, nhập `chat.company.com`.
 7. Portal kiểm tra discovery rồi chuyển tới màn đăng ký trên `chat.company.com`.
-8. Tài khoản đầu tiên trở thành workspace owner; sau đó đăng ký mở chuyển sang
-   `invite_only`.
-9. Owner mời nhân viên hoặc cấu hình SSO/OIDC nếu cần.
+8. Tài khoản đầu tiên trở thành workspace owner. Trước khi có owner, đăng ký
+   luôn ở chế độ `open` để tránh khóa nhầm server mới.
+9. Owner có thể đổi sang `invite_only`/`closed`, mời nhân viên hoặc cấu hình SSO/OIDC.
 10. Người dùng cài mobile/desktop, nhập cùng domain `chat.company.com` để đăng nhập.
 
 ## Cài mới
@@ -166,8 +166,8 @@ Kiểm tra các URL chính:
 
 Mở `https://chat.vpsttt.com/portal`, nhập `chat.company.com` và tiếp tục tại màn
 đăng ký mà portal điều hướng tới. Backend sẽ cấp owner cho tài khoản đầu tiên
-nếu workspace chưa có owner, rồi chuyển registration mode sang `invite_only` để
-người lạ không tự đăng ký thêm. Có thể mở thẳng web customer khi cần khôi phục
+nếu workspace chưa có owner. Sau đó, owner có thể đổi chính sách trong mục
+**Cài đặt → Thương hiệu & truy cập**. Có thể mở thẳng web customer khi cần khôi phục
 hoặc vận hành nội bộ; password và token trong cả hai trường hợp đều chỉ gửi tới
 instance customer.
 
@@ -212,6 +212,29 @@ sync cursor khi mở lại để không mất sự kiện.
 
 Đây là phần khác biệt lớn so với web: web có thể sống nhờ WebSocket khi tab mở,
 mobile cần push + sync cursor để không mất sự kiện sau background.
+
+## Bot AI theo nghiệp vụ của tổ chức
+
+Owner tạo bot tại `Kênh & Bot`, cài bot vào kênh, chọn provider và tạo flow.
+Flow chỉ chạy sau khi được xuất bản. Trigger hỗ trợ:
+
+- `{"type":"mention"}`: chạy khi tin nhắn nhắc `@slug-bot`;
+- `{"type":"keyword","keywords":["nghỉ phép","chấm công"]}`;
+- `{"type":"command","prefix":"/hr"}`;
+- `{"type":"all"}`: nhận mọi tin nhắn trong kênh đã cài bot.
+
+Ollama và LocalAI trong mạng Docker dùng được ngay khi endpoint nằm trong
+`BOT_AI_ALLOWED_HOSTS`. Với endpoint tương thích OpenAI hoặc webhook bên ngoài,
+thêm đúng hostname vào biến này. API key không lưu trực tiếp trong database:
+
+```dotenv
+BOT_AI_ALLOWED_HOSTS=ollama,local-ai,ai.company.com
+BOT_AI_OPENAI_KEY=replace-with-a-secret
+```
+
+Sau đó nhập `env://BOT_AI_OPENAI_KEY` vào `Secret reference`. Runtime chỉ cho
+đọc biến môi trường bắt đầu bằng `BOT_AI_`, chặn URL có credentials và chặn
+hostname công khai chưa nằm trong allowlist.
 
 ## Cuộc gọi và media
 

@@ -463,7 +463,7 @@ export function mapMessage(
   const systemAuthor = systemTone
     ? {
         id: systemTone === "announcement" ? "system:announcement" : "system",
-        name: systemTone === "announcement" ? "Thong bao" : "He thong",
+        name: systemTone === "announcement" ? "Thông báo" : "Hệ thống",
         status: "offline" as const
       }
     : null;
@@ -643,24 +643,25 @@ function mapBotMessageAuthor(message: ApiMessage): ChatUser | null {
   const metadata = message.metadata;
   const botId = typeof metadata?.bot_id === "string" ? metadata.bot_id.trim() : "";
   const botSlug = typeof metadata?.bot_slug === "string" ? metadata.bot_slug.trim().toLowerCase() : "";
+  const botName = typeof metadata?.bot_name === "string" ? metadata.bot_name.trim() : "";
 
   if (message.kind !== "bot" && !botId && !botSlug) {
     return null;
   }
 
-  const names: Record<string, string> = {
-    "cskh-bot": "CSKH Bot",
-    "gia-han-bot": "Gia Hạn Bot",
-    "server-alert-bot": "Server Alert Bot",
-    "thanh-toan-bot": "Thanh Toán Bot",
-    "ticket-bot": "Ticket Bot"
-  };
-
   return {
     id: botId || (botSlug ? `bot:${botSlug}` : "bot:system"),
-    name: names[botSlug] ?? "Bot hệ thống",
+    name: botName || displayBotSlug(botSlug) || "Bot",
     status: "online"
   };
+}
+
+function displayBotSlug(slug: string) {
+  return slug
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function mapMessageAttachments(attachments?: MessageAttachment[]): MessageAttachmentItem[] {

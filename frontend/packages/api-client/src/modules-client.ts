@@ -4,6 +4,9 @@ import type {
   BackupJob,
   BackupRun,
   Bot,
+  BotAIConfig,
+  BotFlow,
+  BotFlowRun,
   BotInstallation,
   BotMessage,
   CreateBackupJobInput,
@@ -38,6 +41,8 @@ import type {
   Presence,
   PresenceHeartbeatInput,
   SaveCronJobInput,
+  SaveBotAIConfigInput,
+  SaveBotFlowInput,
   SendBotMessageInput,
   TestOutgoingWebhookInput,
   UpdateIncomingWebhookInput,
@@ -206,6 +211,46 @@ export function createBotsClient(http: HttpClient) {
       return http.post<BotMessage>(
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/messages`,
         input
+      );
+    },
+    aiConfig(workspaceId: string, botId: string) {
+      return http.get<BotAIConfig>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/ai-config`
+      );
+    },
+    saveAIConfig(workspaceId: string, botId: string, input: SaveBotAIConfigInput) {
+      return http.put<BotAIConfig>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/ai-config`,
+        input
+      );
+    },
+    async flows(workspaceId: string, botId: string) {
+      const data = await http.get<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/flows`
+      );
+      return collectionFrom<BotFlow>(data, "flows");
+    },
+    createFlow(workspaceId: string, botId: string, input: SaveBotFlowInput) {
+      return http.post<BotFlow>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/flows`,
+        input
+      );
+    },
+    updateFlow(workspaceId: string, botId: string, flowId: string, input: SaveBotFlowInput) {
+      return http.patch<BotFlow>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/flows/${encodeURIComponent(flowId)}`,
+        input
+      );
+    },
+    publishFlow(workspaceId: string, botId: string, flowId: string) {
+      return http.post<BotFlow>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/flows/${encodeURIComponent(flowId)}/publish`
+      );
+    },
+    testFlow(workspaceId: string, botId: string, flowId: string, input: unknown) {
+      return http.post<BotFlowRun>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/flows/${encodeURIComponent(flowId)}/test`,
+        { input }
       );
     }
   };

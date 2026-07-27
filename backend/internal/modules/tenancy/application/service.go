@@ -384,12 +384,12 @@ func NewService(repo Repository, options Options) *Service {
 func (s *Service) Discover(ctx context.Context, rawDomain string) (DiscoveryDTO, error) {
 	domain, err := NormalizeDomain(rawDomain)
 	if err != nil {
-		return DiscoveryDTO{}, apperrors.BadRequest("INVALID_DOMAIN", "Domain khong dung dinh dang.")
+		return DiscoveryDTO{}, apperrors.BadRequest("INVALID_DOMAIN", "Tên miền không đúng định dạng.")
 	}
 	resolved, err := s.repo.ResolveByDomain(ctx, domain)
 	if err != nil {
 		if errors.Is(err, tenancydomain.ErrZoneNotFound) {
-			return DiscoveryDTO{}, apperrors.NotFound("ZONE_NOT_FOUND", "Domain chua duoc cau hinh thanh zone chat.")
+			return DiscoveryDTO{}, apperrors.NotFound("ZONE_NOT_FOUND", "Tên miền chưa được cấu hình thành vùng chat.")
 		}
 		return DiscoveryDTO{}, err
 	}
@@ -455,14 +455,14 @@ func (s *Service) CreateDomainClaim(ctx context.Context, input CreateDomainClaim
 	input.ZoneName = strings.TrimSpace(input.ZoneName)
 	input.RegistrationMode = strings.ToLower(strings.TrimSpace(input.RegistrationMode))
 	if input.ActorUserID == "" {
-		return DomainClaimDTO{}, apperrors.Unauthorized("Ban can dang nhap de claim domain.")
+		return DomainClaimDTO{}, apperrors.Unauthorized("Bạn cần đăng nhập để xác nhận quyền sở hữu tên miền.")
 	}
 	domain, err := NormalizeDomain(input.Domain)
 	if err != nil || !fqdnPattern.MatchString(domain) {
-		return DomainClaimDTO{}, apperrors.BadRequest("INVALID_DOMAIN", "Chi ho tro domain cong khai hop le de tao zone.")
+		return DomainClaimDTO{}, apperrors.BadRequest("INVALID_DOMAIN", "Chỉ hỗ trợ tên miền công khai hợp lệ để tạo vùng máy chủ.")
 	}
 	if input.ZoneName == "" || len([]rune(input.ZoneName)) > 120 {
-		return DomainClaimDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Ten zone phai dai tu 1 den 120 ky tu.")
+		return DomainClaimDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Tên vùng máy chủ phải dài từ 1 đến 120 ký tự.")
 	}
 	if input.RegistrationMode == "" {
 		input.RegistrationMode = "invite_only"
@@ -470,7 +470,7 @@ func (s *Service) CreateDomainClaim(ctx context.Context, input CreateDomainClaim
 	switch input.RegistrationMode {
 	case "open", "invite_only", "closed":
 	default:
-		return DomainClaimDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "registration_mode khong hop le.")
+		return DomainClaimDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Chế độ đăng ký không hợp lệ.")
 	}
 
 	claim, err := s.repo.CreateDomainClaim(ctx, CreateDomainClaimParams{
@@ -483,7 +483,7 @@ func (s *Service) CreateDomainClaim(ctx context.Context, input CreateDomainClaim
 	})
 	if err != nil {
 		if errors.Is(err, tenancydomain.ErrDomainAlreadyClaimed) {
-			return DomainClaimDTO{}, apperrors.Conflict("DOMAIN_ALREADY_CLAIMED", "Domain da duoc claim boi mot zone khac.")
+			return DomainClaimDTO{}, apperrors.Conflict("DOMAIN_ALREADY_CLAIMED", "Tên miền đã được một vùng máy chủ khác xác nhận quyền sở hữu.")
 		}
 		return DomainClaimDTO{}, err
 	}
@@ -515,7 +515,7 @@ func (s *Service) VerifyDomainClaim(ctx context.Context, actorUserID string, dom
 
 	now := s.now().UTC()
 	if claim.Domain.VerificationExpiresAt == nil || !claim.Domain.VerificationExpiresAt.After(now) {
-		return DiscoveryDTO{}, apperrors.Conflict("DOMAIN_VERIFICATION_EXPIRED", "Ma xac minh domain da het han. Hay claim lai domain.")
+		return DiscoveryDTO{}, apperrors.Conflict("DOMAIN_VERIFICATION_EXPIRED", "Mã xác minh tên miền đã hết hạn. Hãy xác nhận lại quyền sở hữu tên miền.")
 	}
 
 	txtName := verificationDNSName(claim.Domain.Domain)
@@ -527,7 +527,7 @@ func (s *Service) VerifyDomainClaim(ctx context.Context, actorUserID string, dom
 			reason = "dns_lookup_failed"
 		}
 		_ = s.repo.RecordDomainVerificationFailure(ctx, domainID, actorUserID, now, reason)
-		err := apperrors.Conflict("DOMAIN_VERIFICATION_FAILED", "Chua tim thay DNS TXT xac minh domain.")
+		err := apperrors.Conflict("DOMAIN_VERIFICATION_FAILED", "Chưa tìm thấy bản ghi DNS TXT xác minh tên miền.")
 		err.Details = map[string]any{
 			"dns_name":  txtName,
 			"dns_value": expected,
@@ -595,24 +595,24 @@ func (s *Service) CreateAutomationInstallation(ctx context.Context, input Create
 		return CreatedAutomationInstallationDTO{}, err
 	}
 	if input.TemplateKey == "" || input.Name == "" || len([]rune(input.Name)) > 120 {
-		return CreatedAutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "template_key va name hop le la bat buoc.")
+		return CreatedAutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "template_key và tên hợp lệ là bắt buộc.")
 	}
 	if input.Status == "" {
 		input.Status = "disabled"
 	}
 	if input.Status != "enabled" && input.Status != "disabled" {
-		return CreatedAutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "status automation khong hop le.")
+		return CreatedAutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Trạng thái tự động hóa không hợp lệ.")
 	}
 	if containsInlineSecret(input.Config) {
 		return CreatedAutomationInstallationDTO{}, apperrors.BadRequest(
 			"INLINE_SECRET_FORBIDDEN",
-			"Khong luu secret, token, password hoac API key truc tiep trong config. Hay dung secret_ref.",
+			"Không lưu secret, token, mật khẩu hoặc API key trực tiếp trong cấu hình. Hãy dùng secret_ref.",
 		)
 	}
 	if input.SecretRef != "" && !validSecretRef(input.SecretRef) {
 		return CreatedAutomationInstallationDTO{}, apperrors.BadRequest(
 			"INVALID_SECRET_REF",
-			"secret_ref phai dung mot provider duoc ho tro.",
+			"secret_ref phải dùng một nhà cung cấp được hỗ trợ.",
 		)
 	}
 
@@ -631,12 +631,12 @@ func (s *Service) CreateAutomationInstallation(ctx context.Context, input Create
 		}
 		runtimeSecret, err = newAutomationSecret()
 		if err != nil {
-			return CreatedAutomationInstallationDTO{}, apperrors.Internal("Khong tao duoc signing secret cho automation.")
+			return CreatedAutomationInstallationDTO{}, apperrors.Internal("Không tạo được signing secret cho tự động hóa.")
 		}
 		runtimeSecretEncrypted, err = webhooksecurity.EncryptSecret(s.options.WebhookSigningSecret, runtimeSecret)
 		if err != nil {
 			return CreatedAutomationInstallationDTO{}, apperrors.Internal(
-				"Khong ma hoa duoc signing secret automation. Kiem tra WEBHOOK_SIGNING_SECRET.",
+				"Không mã hóa được signing secret tự động hóa. Hãy kiểm tra WEBHOOK_SIGNING_SECRET.",
 			)
 		}
 	}
@@ -679,14 +679,14 @@ func (s *Service) UpdateAutomationInstallation(ctx context.Context, input Update
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		if value == "" || len([]rune(value)) > 120 {
-			return AutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "name automation phai dai tu 1 den 120 ky tu.")
+			return AutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Tên cấu hình tự động hóa phải dài từ 1 đến 120 ký tự.")
 		}
 		input.Name = &value
 	}
 	if input.Status != nil {
 		value := strings.ToLower(strings.TrimSpace(*input.Status))
 		if value != "enabled" && value != "disabled" {
-			return AutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "status automation khong hop le.")
+			return AutomationInstallationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Trạng thái tự động hóa không hợp lệ.")
 		}
 		input.Status = &value
 	}
@@ -695,7 +695,7 @@ func (s *Service) UpdateAutomationInstallation(ctx context.Context, input Update
 		if containsInlineSecret(config) {
 			return AutomationInstallationDTO{}, apperrors.BadRequest(
 				"INLINE_SECRET_FORBIDDEN",
-				"Khong luu secret, token, password hoac API key truc tiep trong config. Hay dung secret_ref.",
+				"Không lưu secret, token, mật khẩu hoặc API key trực tiếp trong cấu hình. Hãy dùng secret_ref.",
 			)
 		}
 		input.Config = &config
@@ -705,7 +705,7 @@ func (s *Service) UpdateAutomationInstallation(ctx context.Context, input Update
 		if value != "" && !validSecretRef(value) {
 			return AutomationInstallationDTO{}, apperrors.BadRequest(
 				"INVALID_SECRET_REF",
-				"secret_ref phai dung mot provider duoc ho tro.",
+				"secret_ref phải dùng một nhà cung cấp được hỗ trợ.",
 			)
 		}
 		input.SecretRef = &value
@@ -750,17 +750,17 @@ func (s *Service) DeleteAutomationInstallation(
 func mapAutomationError(err error) error {
 	switch {
 	case errors.Is(err, tenancydomain.ErrAutomationTemplateNotFound):
-		return apperrors.NotFound("AUTOMATION_TEMPLATE_NOT_FOUND", "Khong tim thay template automation phu hop voi zone.")
+		return apperrors.NotFound("AUTOMATION_TEMPLATE_NOT_FOUND", "Không tìm thấy mẫu tự động hóa phù hợp với vùng máy chủ.")
 	case errors.Is(err, tenancydomain.ErrAutomationInstallationNotFound):
-		return apperrors.NotFound("AUTOMATION_INSTALLATION_NOT_FOUND", "Khong tim thay automation installation trong zone hien tai.")
+		return apperrors.NotFound("AUTOMATION_INSTALLATION_NOT_FOUND", "Không tìm thấy cấu hình tự động hóa trong vùng máy chủ hiện tại.")
 	case errors.Is(err, tenancydomain.ErrAutomationInstallationConflict):
-		return apperrors.Conflict("AUTOMATION_INSTALLATION_EXISTS", "Ten automation da ton tai trong zone.")
+		return apperrors.Conflict("AUTOMATION_INSTALLATION_EXISTS", "Tên cấu hình tự động hóa đã tồn tại trong vùng máy chủ.")
 	case errors.Is(err, tenancydomain.ErrAutomationConfigInvalid):
 		return apperrors.BadRequest("AUTOMATION_CONFIG_INVALID", err.Error())
 	case errors.Is(err, tenancydomain.ErrWorkspaceZoneMismatch):
-		return apperrors.BadRequest("WORKSPACE_ZONE_MISMATCH", "Workspace khong thuoc zone hien tai.")
+		return apperrors.BadRequest("WORKSPACE_ZONE_MISMATCH", "Workspace không thuộc vùng máy chủ hiện tại.")
 	case errors.Is(err, tenancydomain.ErrZoneQuotaExceeded):
-		return apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Zone da dat gioi han automation installation.")
+		return apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Vùng máy chủ đã đạt giới hạn cấu hình tự động hóa.")
 	default:
 		return err
 	}
@@ -770,17 +770,17 @@ func (s *Service) ensureZoneManager(ctx context.Context, actorUserID string, zon
 	actorUserID = strings.TrimSpace(actorUserID)
 	zoneID = strings.TrimSpace(zoneID)
 	if actorUserID == "" {
-		return apperrors.Unauthorized("Ban can dang nhap de quan ly zone.")
+		return apperrors.Unauthorized("Bạn cần đăng nhập để quản lý vùng máy chủ.")
 	}
 	if zoneID == "" {
-		return apperrors.BadRequest("ZONE_REQUIRED", "Khong xac dinh duoc zone hien tai.")
+		return apperrors.BadRequest("ZONE_REQUIRED", "Không xác định được vùng máy chủ hiện tại.")
 	}
 	allowed, err := s.repo.CanManageZone(ctx, zoneID, actorUserID)
 	if err != nil {
 		return err
 	}
 	if !allowed {
-		return apperrors.Forbidden("Ban khong co quyen quan ly zone nay.")
+		return apperrors.Forbidden("Bạn không có quyền quản lý vùng máy chủ này.")
 	}
 	return nil
 }
@@ -1102,11 +1102,11 @@ func routingDNSName(domain string, options Options) string {
 func mapClaimError(err error) error {
 	switch {
 	case errors.Is(err, tenancydomain.ErrDomainClaimNotFound):
-		return apperrors.NotFound("DOMAIN_CLAIM_NOT_FOUND", "Khong tim thay domain claim.")
+		return apperrors.NotFound("DOMAIN_CLAIM_NOT_FOUND", "Không tìm thấy yêu cầu xác minh tên miền.")
 	case errors.Is(err, tenancydomain.ErrDomainVerificationExpired):
-		return apperrors.Conflict("DOMAIN_VERIFICATION_EXPIRED", "Ma xac minh domain da het han.")
+		return apperrors.Conflict("DOMAIN_VERIFICATION_EXPIRED", "Mã xác minh tên miền đã hết hạn.")
 	case errors.Is(err, tenancydomain.ErrZoneAccessDenied):
-		return apperrors.Forbidden("Ban khong co quyen quan ly domain nay.")
+		return apperrors.Forbidden("Bạn không có quyền quản lý tên miền này.")
 	default:
 		return err
 	}
@@ -1157,7 +1157,7 @@ func automationWebhookRuntime(config map[string]any, defaults map[string]any) (s
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
 		return "", nil, apperrors.BadRequest(
 			"AUTOMATION_CONFIG_INVALID",
-			"endpoint_url cua automation phai la HTTPS URL hop le va khong chua thong tin dang nhap.",
+			"endpoint_url của tự động hóa phải là URL HTTPS hợp lệ và không chứa thông tin đăng nhập.",
 		)
 	}
 	eventTypes := normalizeAutomationEventTypes(merged["event_types"])

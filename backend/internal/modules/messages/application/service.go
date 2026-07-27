@@ -331,12 +331,12 @@ func (s *Service) Send(ctx context.Context, input SendInput) (MessageDTO, error)
 	if groupMentionPattern.MatchString(body) {
 		memberLister, ok := s.repo.(ChannelMemberLister)
 		if !ok {
-			return MessageDTO{}, apperrors.Internal("Khong the tai danh sach thanh vien de nhac ca nhom.")
+			return MessageDTO{}, apperrors.Internal("Không thể tải danh sách thành viên để nhắc cả nhóm.")
 		}
 		memberIDs, err := memberLister.ListActiveChannelMemberIDs(ctx, strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ChannelID))
 		if err != nil {
 			slog.Error("Message service khong tai duoc thanh vien cho @group", "error", err)
-			return MessageDTO{}, apperrors.Internal("Khong the tai danh sach thanh vien de nhac ca nhom.")
+			return MessageDTO{}, apperrors.Internal("Không thể tải danh sách thành viên để nhắc cả nhóm.")
 		}
 		mentionedUserIDs = normalizeMentions(body, append(mentionedUserIDs, memberIDs...))
 	}
@@ -574,7 +574,7 @@ func (s *Service) Delete(ctx context.Context, input DeleteInput) error {
 		ActorUserID: input.ActorUserID,
 	})
 	if !isUUID(ref.WorkspaceID) || !isUUID(ref.ChannelID) || !isUUID(ref.MessageID) || !isUUID(ref.ActorUserID) {
-		return apperrors.BadRequest("VALIDATION_ERROR", "Ma dinh danh tin nhan khong hop le.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "Mã định danh tin nhắn không hợp lệ.")
 	}
 	message, err := s.repo.Get(ctx, ref)
 	if err != nil {
@@ -909,7 +909,7 @@ func withMetadataValue(metadata []byte, key string, value any) ([]byte, error) {
 	if len(metadata) == 0 {
 		payload = map[string]any{}
 	} else if err := json.Unmarshal(metadata, &payload); err != nil {
-		return nil, apperrors.BadRequest("VALIDATION_ERROR", "Metadata cua tin nhan khong phai JSON object hop le.")
+		return nil, apperrors.BadRequest("VALIDATION_ERROR", "Metadata của tin nhắn không phải JSON object hợp lệ.")
 	}
 	if payload == nil {
 		payload = map[string]any{}

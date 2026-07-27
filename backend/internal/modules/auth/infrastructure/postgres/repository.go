@@ -314,20 +314,8 @@ FOR UPDATE
 		return err
 	}
 	if target.ZoneKind == "vpsttt_internal" || target.ZoneKind == "customer_dedicated" {
-		claimed, err := claimInitialWorkspaceOwnership(ctx, tx, userID, target.WorkspaceID)
-		if err != nil {
+		if _, err := claimInitialWorkspaceOwnership(ctx, tx, userID, target.WorkspaceID); err != nil {
 			return err
-		}
-		if claimed && target.ZoneKind == "customer_dedicated" {
-			if _, err := tx.Exec(ctx, `
-UPDATE zones
-SET registration_mode = 'invite_only'
-WHERE id = $1::uuid
-  AND registration_mode = 'open'
-  AND deleted_at IS NULL
-`, target.ZoneID); err != nil {
-				return err
-			}
 		}
 	}
 	if inviteID != "" {

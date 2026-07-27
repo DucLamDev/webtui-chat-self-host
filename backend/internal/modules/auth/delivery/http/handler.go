@@ -138,12 +138,12 @@ func (h *Handler) ListOIDCProviders(c *gin.Context) {
 
 func (h *Handler) StartOIDC(c *gin.Context) {
 	if h.oidcService == nil {
-		response.Fail(c, nethttp.StatusServiceUnavailable, "OIDC_NOT_CONFIGURED", "OIDC SSO runtime chua duoc cau hinh.", nil)
+		response.Fail(c, nethttp.StatusServiceUnavailable, "OIDC_NOT_CONFIGURED", "Runtime OIDC SSO chưa được cấu hình.", nil)
 		return
 	}
 	var req oidcStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	result, err := h.oidcService.Start(c.Request.Context(), authapp.OIDCStartInput{
@@ -164,7 +164,7 @@ func (h *Handler) StartOIDC(c *gin.Context) {
 
 func (h *Handler) OIDCCallback(c *gin.Context) {
 	if h.oidcService == nil {
-		response.Fail(c, nethttp.StatusServiceUnavailable, "OIDC_NOT_CONFIGURED", "OIDC SSO runtime chua duoc cau hinh.", nil)
+		response.Fail(c, nethttp.StatusServiceUnavailable, "OIDC_NOT_CONFIGURED", "Runtime OIDC SSO chưa được cấu hình.", nil)
 		return
 	}
 	result, err := h.oidcService.Callback(c.Request.Context(), authapp.OIDCCallbackInput{
@@ -181,12 +181,12 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 
 func (h *Handler) CompleteOIDC(c *gin.Context) {
 	if h.oidcService == nil {
-		response.Fail(c, nethttp.StatusServiceUnavailable, "OIDC_NOT_CONFIGURED", "OIDC SSO runtime chua duoc cau hinh.", nil)
+		response.Fail(c, nethttp.StatusServiceUnavailable, "OIDC_NOT_CONFIGURED", "Runtime OIDC SSO chưa được cấu hình.", nil)
 		return
 	}
 	var req oidcCompleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	result, err := h.oidcService.Complete(c.Request.Context(), authapp.OIDCCompleteInput{

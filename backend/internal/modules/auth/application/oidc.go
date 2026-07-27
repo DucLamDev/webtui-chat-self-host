@@ -228,7 +228,7 @@ func (s *OIDCService) ListProviders(ctx context.Context, domain string) ([]Publi
 
 func (s *OIDCService) Start(ctx context.Context, input OIDCStartInput) (OIDCStartResult, error) {
 	if !s.Enabled() {
-		return OIDCStartResult{}, apperrors.ServiceUnavailable("OIDC_NOT_CONFIGURED", "OIDC SSO runtime chua duoc cau hinh.")
+		return OIDCStartResult{}, apperrors.ServiceUnavailable("OIDC_NOT_CONFIGURED", "Runtime OIDC SSO chưa được cấu hình.")
 	}
 	input.Domain = normalizeOIDCDomain(input.Domain)
 	input.ProviderID = strings.TrimSpace(input.ProviderID)
@@ -250,21 +250,21 @@ func (s *OIDCService) Start(ctx context.Context, input OIDCStartInput) (OIDCStar
 	}
 	state, err := randomOIDCToken()
 	if err != nil {
-		return OIDCStartResult{}, apperrors.Internal("Khong tao duoc OIDC state.")
+		return OIDCStartResult{}, apperrors.Internal("Không tạo được trạng thái OIDC.")
 	}
 	nonce, err := randomOIDCToken()
 	if err != nil {
-		return OIDCStartResult{}, apperrors.Internal("Khong tao duoc OIDC nonce.")
+		return OIDCStartResult{}, apperrors.Internal("Không tạo được OIDC nonce.")
 	}
 	codeVerifier, err := randomOIDCToken()
 	if err != nil {
-		return OIDCStartResult{}, apperrors.Internal("Khong tao duoc PKCE verifier.")
+		return OIDCStartResult{}, apperrors.Internal("Không tạo được mã xác minh PKCE.")
 	}
 	authorizationURL, err := s.protocol.AuthorizationURL(
 		ctx, provider, clientSecret, input.RedirectURI, state, nonce, codeVerifier,
 	)
 	if err != nil {
-		return OIDCStartResult{}, apperrors.ServiceUnavailable("OIDC_PROVIDER_UNAVAILABLE", "Khong ket noi duoc OIDC provider.")
+		return OIDCStartResult{}, apperrors.ServiceUnavailable("OIDC_PROVIDER_UNAVAILABLE", "Không kết nối được nhà cung cấp OIDC.")
 	}
 	encryptedVerifier, err := securevalue.Encrypt(
 		s.stateSecret,
@@ -272,7 +272,7 @@ func (s *OIDCService) Start(ctx context.Context, input OIDCStartInput) (OIDCStar
 		oidcVerifierAADPrefix+provider.ID,
 	)
 	if err != nil {
-		return OIDCStartResult{}, apperrors.Internal("Khong bao ve duoc PKCE verifier.")
+		return OIDCStartResult{}, apperrors.Internal("Không bảo vệ được mã xác minh PKCE.")
 	}
 	expiresAt := s.now().UTC().Add(oidcStateTTL)
 	if err := s.repo.CreateOIDCLoginState(ctx, CreateOIDCLoginStateParams{
@@ -299,11 +299,11 @@ func (s *OIDCService) Start(ctx context.Context, input OIDCStartInput) (OIDCStar
 
 func (s *OIDCService) Callback(ctx context.Context, input OIDCCallbackInput) (OIDCCallbackResult, error) {
 	if !s.Enabled() {
-		return OIDCCallbackResult{}, apperrors.ServiceUnavailable("OIDC_NOT_CONFIGURED", "OIDC SSO runtime chua duoc cau hinh.")
+		return OIDCCallbackResult{}, apperrors.ServiceUnavailable("OIDC_NOT_CONFIGURED", "Runtime OIDC SSO chưa được cấu hình.")
 	}
 	stateToken := strings.TrimSpace(input.State)
 	if stateToken == "" {
-		return OIDCCallbackResult{}, apperrors.BadRequest("INVALID_OIDC_STATE", "OIDC state khong hop le.")
+		return OIDCCallbackResult{}, apperrors.BadRequest("INVALID_OIDC_STATE", "Trạng thái OIDC không hợp lệ.")
 	}
 	state, err := s.repo.ConsumeOIDCLoginState(ctx, oidcTokenHash(stateToken), s.now().UTC())
 	if err != nil {
@@ -325,7 +325,7 @@ func (s *OIDCService) Callback(ctx context.Context, input OIDCCallbackInput) (OI
 		oidcVerifierAADPrefix+state.Provider.ID,
 	)
 	if err != nil {
-		return OIDCCallbackResult{}, apperrors.Unauthorized("OIDC state khong con hop le.")
+		return OIDCCallbackResult{}, apperrors.Unauthorized("Trạng thái OIDC không còn hợp lệ.")
 	}
 	clientSecret, err := s.resolveClientSecret(state.Provider.ClientSecretRef)
 	if err != nil {
@@ -352,11 +352,11 @@ func (s *OIDCService) Callback(ctx context.Context, input OIDCCallbackInput) (OI
 	}
 	encodedClaims, err := json.Marshal(claims)
 	if err != nil || len(encodedClaims) > 64*1024 {
-		return OIDCCallbackResult{}, apperrors.BadRequest("INVALID_OIDC_CLAIMS", "OIDC claims khong hop le.")
+		return OIDCCallbackResult{}, apperrors.BadRequest("INVALID_OIDC_CLAIMS", "Thông tin định danh OIDC không hợp lệ.")
 	}
 	loginCode, err := randomOIDCToken()
 	if err != nil {
-		return OIDCCallbackResult{}, apperrors.Internal("Khong tao duoc OIDC completion code.")
+		return OIDCCallbackResult{}, apperrors.Internal("Không tạo được mã hoàn tất OIDC.")
 	}
 	if err := s.repo.CreateOIDCLoginResult(ctx, CreateOIDCLoginResultParams{
 		CodeHash:   oidcTokenHash(loginCode),
@@ -378,7 +378,7 @@ func (s *OIDCService) Callback(ctx context.Context, input OIDCCallbackInput) (OI
 
 func (s *OIDCService) Complete(ctx context.Context, input OIDCCompleteInput) (AuthResult, error) {
 	if !s.Enabled() {
-		return AuthResult{}, apperrors.ServiceUnavailable("OIDC_NOT_CONFIGURED", "OIDC SSO runtime chua duoc cau hinh.")
+		return AuthResult{}, apperrors.ServiceUnavailable("OIDC_NOT_CONFIGURED", "Runtime OIDC SSO chưa được cấu hình.")
 	}
 	input.Code = strings.TrimSpace(input.Code)
 	input.Domain = normalizeOIDCDomain(input.Domain)
@@ -395,11 +395,11 @@ func (s *OIDCService) Complete(ctx context.Context, input OIDCCompleteInput) (Au
 	}
 	password, err := randomOIDCToken()
 	if err != nil {
-		return AuthResult{}, apperrors.Internal("Khong tao duoc tai khoan OIDC.")
+		return AuthResult{}, apperrors.Internal("Không tạo được tài khoản OIDC.")
 	}
 	passwordHash, err := sharedauth.HashPassword(password)
 	if err != nil {
-		return AuthResult{}, apperrors.Internal("Khong tao duoc tai khoan OIDC.")
+		return AuthResult{}, apperrors.Internal("Không tạo được tài khoản OIDC.")
 	}
 	deviceName := firstNonEmpty(strings.TrimSpace(input.DeviceName), result.DeviceName)
 	ipAddress := firstNonEmpty(strings.TrimSpace(input.IPAddress), result.IPAddress)
@@ -423,7 +423,7 @@ func (s *OIDCService) Complete(ctx context.Context, input OIDCCompleteInput) (Au
 		return AuthResult{}, mapOIDCError(err)
 	}
 	if user.Status != "active" {
-		return AuthResult{}, apperrors.Forbidden("Tai khoan chua san sang hoac da bi khoa.")
+		return AuthResult{}, apperrors.Forbidden("Tài khoản chưa sẵn sàng hoặc đã bị khóa.")
 	}
 	authResult, err := s.base.issueTokens(ctx, user, result.Target, deviceName, ipAddress, userAgent)
 	if err != nil {
@@ -467,14 +467,14 @@ func mappedOIDCProfile(provider tenancydomain.OIDCProvider, claims map[string]an
 		DisplayName: oidcClaimString(claims, mapping, "display_name", "name"),
 	}
 	if profile.Subject == "" || len(profile.Subject) > 1000 {
-		return oidcProfile{}, apperrors.BadRequest("INVALID_OIDC_CLAIMS", "OIDC subject khong hop le.")
+		return oidcProfile{}, apperrors.BadRequest("INVALID_OIDC_CLAIMS", "Định danh người dùng OIDC không hợp lệ.")
 	}
 	if _, err := mail.ParseAddress(profile.Email); err != nil {
-		return oidcProfile{}, apperrors.BadRequest("INVALID_OIDC_CLAIMS", "OIDC provider khong tra ve email hop le.")
+		return oidcProfile{}, apperrors.BadRequest("INVALID_OIDC_CLAIMS", "Nhà cung cấp OIDC không trả về email hợp lệ.")
 	}
 	profile.EmailVerified = oidcClaimBool(claims, mapping, "email_verified", "email_verified")
 	if provider.RequireVerifiedEmail && !profile.EmailVerified {
-		return oidcProfile{}, apperrors.Unauthorized("OIDC provider chua xac minh email.")
+		return oidcProfile{}, apperrors.Unauthorized("Nhà cung cấp OIDC chưa xác minh email.")
 	}
 	if profile.DisplayName == "" {
 		profile.DisplayName = strings.Split(profile.Email, "@")[0]
@@ -506,12 +506,12 @@ func (s *OIDCService) resolveClientSecret(ref *string) (string, error) {
 	}
 	value := strings.TrimSpace(*ref)
 	if !strings.HasPrefix(value, "env://") {
-		return "", apperrors.ServiceUnavailable("OIDC_SECRET_UNAVAILABLE", "OIDC client secret provider chua co runtime adapter.")
+		return "", apperrors.ServiceUnavailable("OIDC_SECRET_UNAVAILABLE", "Client secret OIDC chưa có runtime adapter.")
 	}
 	alias := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(value, "env://")))
 	secret := s.clientSecrets[alias]
 	if alias == "" || secret == "" {
-		return "", apperrors.ServiceUnavailable("OIDC_SECRET_UNAVAILABLE", "OIDC client secret alias khong nam trong allowlist.")
+		return "", apperrors.ServiceUnavailable("OIDC_SECRET_UNAVAILABLE", "Bí danh client secret OIDC không nằm trong danh sách cho phép.")
 	}
 	return secret, nil
 }
@@ -524,12 +524,12 @@ func normalizeOIDCReturnTo(value string, domain string) (string, error) {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.User != nil || !strings.HasPrefix(parsed.Path, "/") ||
 		strings.HasPrefix(parsed.Path, "//") {
-		return "", apperrors.BadRequest("INVALID_RETURN_TO", "return_to phai la relative path cung origin.")
+		return "", apperrors.BadRequest("INVALID_RETURN_TO", "return_to phải là đường dẫn tương đối cùng origin.")
 	}
 	if parsed.IsAbs() || parsed.Host != "" {
 		if !isLocalOIDCDomain(domain) || parsed.Scheme != "http" ||
 			!strings.EqualFold(parsed.Hostname(), domain) {
-			return "", apperrors.BadRequest("INVALID_RETURN_TO", "return_to phai la relative path cung origin.")
+			return "", apperrors.BadRequest("INVALID_RETURN_TO", "return_to phải là đường dẫn tương đối cùng origin.")
 		}
 	}
 	parsed.Fragment = ""
@@ -540,14 +540,14 @@ func validateOIDCRedirectURI(value string, domain string) error {
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" ||
 		parsed.Fragment != "" || parsed.Path != "/api/v1/auth/oidc/callback" {
-		return apperrors.BadRequest("INVALID_REDIRECT_URI", "OIDC redirect URI khong hop le.")
+		return apperrors.BadRequest("INVALID_REDIRECT_URI", "URI chuyển hướng OIDC không hợp lệ.")
 	}
 	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLocalOIDCDomain(domain)) {
-		return apperrors.BadRequest("INVALID_REDIRECT_URI", "OIDC redirect URI phai dung HTTPS.")
+		return apperrors.BadRequest("INVALID_REDIRECT_URI", "URI chuyển hướng OIDC phải dùng HTTPS.")
 	}
 	if subtle.ConstantTimeCompare([]byte(strings.ToLower(parsed.Hostname())), []byte(domain)) != 1 &&
 		!isLocalOIDCDomain(domain) {
-		return apperrors.BadRequest("INVALID_REDIRECT_URI", "OIDC redirect URI khong khop domain.")
+		return apperrors.BadRequest("INVALID_REDIRECT_URI", "URI chuyển hướng OIDC không khớp tên miền.")
 	}
 	return nil
 }
@@ -619,17 +619,17 @@ func mapOIDCError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, ErrOIDCStateNotFound):
-		return apperrors.BadRequest("INVALID_OIDC_STATE", "OIDC state da het han hoac da duoc su dung.")
+		return apperrors.BadRequest("INVALID_OIDC_STATE", "Trạng thái OIDC đã hết hạn hoặc đã được sử dụng.")
 	case errors.Is(err, ErrOIDCResultNotFound):
-		return apperrors.BadRequest("INVALID_OIDC_CODE", "OIDC completion code da het han hoac da duoc su dung.")
+		return apperrors.BadRequest("INVALID_OIDC_CODE", "Mã hoàn tất OIDC đã hết hạn hoặc đã được sử dụng.")
 	case errors.Is(err, ErrOIDCJITDisabled):
-		return apperrors.Forbidden("OIDC provider khong cho phep tao thanh vien moi.")
+		return apperrors.Forbidden("Nhà cung cấp OIDC không cho phép tạo thành viên mới.")
 	case errors.Is(err, ErrOIDCProviderNotReady), errors.Is(err, tenancydomain.ErrOIDCProviderNotFound):
-		return apperrors.NotFound("OIDC_PROVIDER_NOT_FOUND", "Khong tim thay OIDC provider san sang cho domain.")
+		return apperrors.NotFound("OIDC_PROVIDER_NOT_FOUND", "Không tìm thấy nhà cung cấp OIDC sẵn sàng cho tên miền.")
 	case errors.Is(err, authdomain.ErrUserAlreadyExists):
-		return apperrors.Conflict("OIDC_IDENTITY_CONFLICT", "OIDC identity xung dot voi tai khoan hien co.")
+		return apperrors.Conflict("OIDC_IDENTITY_CONFLICT", "Danh tính OIDC xung đột với tài khoản hiện có.")
 	case errors.Is(err, authdomain.ErrZoneAccessDenied):
-		return apperrors.Forbidden("Tai khoan khong co quyen truy cap zone nay.")
+		return apperrors.Forbidden("Tài khoản không có quyền truy cập vùng máy chủ này.")
 	default:
 		return err
 	}

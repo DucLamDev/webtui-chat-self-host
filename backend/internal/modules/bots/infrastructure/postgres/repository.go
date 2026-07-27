@@ -124,7 +124,28 @@ func (r *Repository) SendBotMessage(ctx context.Context, params botsapp.SendBotM
 		_ = tx.Rollback(ctx)
 	}()
 
-	metadata, err := mergeMetadata(params.Metadata, map[string]any{"bot_id": params.BotID})
+	var botName string
+	var botSlug string
+	err = tx.QueryRow(ctx, `
+SELECT name, slug::text
+FROM bots
+WHERE id = $1::uuid
+  AND workspace_id = $2::uuid
+  AND status = 'active'
+  AND deleted_at IS NULL
+`, params.BotID, params.WorkspaceID).Scan(&botName, &botSlug)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return botsdomain.BotMessage{}, botsdomain.ErrBotNotFound
+	}
+	if err != nil {
+		return botsdomain.BotMessage{}, err
+	}
+
+	metadata, err := mergeMetadata(params.Metadata, map[string]any{
+		"bot_id":   params.BotID,
+		"bot_name": botName,
+		"bot_slug": botSlug,
+	})
 	if err != nil {
 		return botsdomain.BotMessage{}, err
 	}
@@ -321,23 +342,20 @@ RETURNING id::text, workspace_id::text, bot_id::text, version, status, name, pro
 }
 
 func (r *Repository) TestFlow(ctx context.Context, params botsapp.TestFlowParams) (botsdomain.FlowRun, error) {
-	transcript, err := json.Marshal(map[string]any{
-		"message":    "Flow đã được nhận để kiểm thử. Runtime AI thật sẽ xử lý ở worker khi được cấu hình.",
-		"tool_calls": []any{},
-	})
-	if err != nil {
-		return botsdomain.FlowRun{}, err
+	status := params.Status
+	if status != "success" && status != "failed" {
+		status = "failed"
 	}
 	row := r.pool.QueryRow(ctx, `
-INSERT INTO bot_flow_runs (workspace_id, bot_id, flow_id, input, transcript, status, created_by)
-SELECT workspace_id, bot_id, id, $4::jsonb, $5::jsonb, 'success', $6::uuid
+INSERT INTO bot_flow_runs (workspace_id, bot_id, flow_id, input, transcript, status, error, created_by)
+SELECT workspace_id, bot_id, id, $4::jsonb, $5::jsonb, $6, NULLIF($7, ''), $8::uuid
 FROM bot_flows
 WHERE workspace_id = $1::uuid
   AND bot_id = $2::uuid
   AND id = $3::uuid
 RETURNING id::text, workspace_id::text, bot_id::text, flow_id::text, input::text, transcript::text,
           status, error, created_by::text, created_at
-`, params.WorkspaceID, params.BotID, params.FlowID, string(params.Input), string(transcript), params.ActorUserID)
+`, params.WorkspaceID, params.BotID, params.FlowID, string(params.Input), string(params.Transcript), status, params.Error, params.ActorUserID)
 	return scanFlowRun(row)
 }
 

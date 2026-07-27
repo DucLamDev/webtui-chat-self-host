@@ -39,8 +39,10 @@ func NewAPI(cfg *config.Config) (*API, error) {
 			context.Background(),
 			resources.Database.Pool(),
 			tenancypostgres.SelfHostedInstanceParams{
-				Domain: cfg.Deployment.InstanceDomain,
-				Name:   cfg.Deployment.InstanceName,
+				Domain:           cfg.Deployment.InstanceDomain,
+				Name:             cfg.Deployment.InstanceName,
+				LogoURL:          cfg.Deployment.InstanceLogoURL,
+				RegistrationMode: cfg.Deployment.InstanceRegistrationMode,
 			},
 		)
 		if bootstrapErr != nil {

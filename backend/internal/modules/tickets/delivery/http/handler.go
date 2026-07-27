@@ -61,7 +61,7 @@ func (h *Handler) List(c *gin.Context) {
 func (h *Handler) Create(c *gin.Context) {
 	var req createTicketRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	ticket, err := h.service.Create(c.Request.Context(), ticketsapp.CreateInput{
@@ -92,7 +92,7 @@ func (h *Handler) Get(c *gin.Context) {
 func (h *Handler) Update(c *gin.Context) {
 	var req updateTicketRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	ticket, err := h.service.Update(c.Request.Context(), ticketsapp.UpdateInput{

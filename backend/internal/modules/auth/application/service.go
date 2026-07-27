@@ -232,7 +232,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (AuthResult
 		return AuthResult{}, err
 	}
 	if target.ZoneStatus != "active" {
-		return AuthResult{}, apperrors.Forbidden("Zone dang tam dung va khong nhan dang ky moi.")
+		return AuthResult{}, apperrors.Forbidden("Máy chủ đang tạm dừng và không nhận đăng ký mới.")
 	}
 
 	passwordHash, err := sharedauth.HashPassword(normalized.Password)
@@ -253,13 +253,13 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (AuthResult
 	})
 	if err != nil {
 		if errors.Is(err, authdomain.ErrUserAlreadyExists) {
-			return AuthResult{}, apperrors.Conflict("USER_ALREADY_EXISTS", "Email hoặc username đã tồn tại.")
+			return AuthResult{}, apperrors.Conflict("USER_ALREADY_EXISTS", "Email hoặc tên đăng nhập đã tồn tại. Đăng xuất không xóa tài khoản; hãy đăng nhập lại hoặc dùng thông tin khác.")
 		}
 		if errors.Is(err, authdomain.ErrInviteRequired) {
-			return AuthResult{}, apperrors.Forbidden("Zone nay yeu cau invite token hop le de dang ky.")
+			return AuthResult{}, apperrors.Forbidden("Máy chủ chỉ nhận tài khoản có mã mời hợp lệ. Chủ sở hữu có thể đổi chế độ đăng ký trong phần Thương hiệu & truy cập.")
 		}
 		if errors.Is(err, authdomain.ErrRegistrationClosed) {
-			return AuthResult{}, apperrors.Forbidden("Zone nay dang dong dang ky tai khoan moi.")
+			return AuthResult{}, apperrors.Forbidden("Máy chủ đang đóng đăng ký tài khoản mới.")
 		}
 		return AuthResult{}, err
 	}
@@ -387,7 +387,7 @@ func (s *Service) LoginWithGoogle(ctx context.Context, input GoogleLoginInput) (
 	user, err := s.repo.FindUserByIdentifier(ctx, input.Email)
 	if errors.Is(err, authdomain.ErrUserNotFound) {
 		if target.ZoneStatus != "active" {
-			return AuthResult{}, apperrors.Forbidden("Zone dang tam dung va khong nhan tai khoan Google moi.")
+			return AuthResult{}, apperrors.Forbidden("Máy chủ đang tạm dừng và không nhận tài khoản Google mới.")
 		}
 		passwordBytes := make([]byte, 32)
 		if _, randomErr := rand.Read(passwordBytes); randomErr != nil {
@@ -471,15 +471,15 @@ func (s *Service) Refresh(ctx context.Context, input RefreshInput) (RefreshResul
 
 	target, err := s.resolveZoneAccess(ctx, session.Domain)
 	if err != nil {
-		return RefreshResult{}, apperrors.Unauthorized("Zone cua phien dang nhap khong con kha dung.")
+		return RefreshResult{}, apperrors.Unauthorized("Máy chủ của phiên đăng nhập không còn khả dụng.")
 	}
 	if target.ZoneID != session.ZoneID || target.WorkspaceID != session.WorkspaceID {
-		return RefreshResult{}, apperrors.Unauthorized("Phien dang nhap khong khop zone hien tai.")
+		return RefreshResult{}, apperrors.Unauthorized("Phiên đăng nhập không khớp với máy chủ hiện tại.")
 	}
 	if strings.TrimSpace(input.Domain) != "" {
 		requestedTarget, resolveErr := s.resolveZoneAccess(ctx, input.Domain)
 		if resolveErr != nil || requestedTarget.ZoneID != target.ZoneID {
-			return RefreshResult{}, apperrors.Forbidden("Refresh token khong thuoc domain hien tai.")
+			return RefreshResult{}, apperrors.Forbidden("Refresh token không thuộc domain hiện tại.")
 		}
 		target = requestedTarget
 	}
@@ -705,7 +705,7 @@ func normalizeRegister(input RegisterInput) (RegisterInput, error) {
 	}
 	domain, err := tenancyapp.NormalizeDomain(input.Domain)
 	if err != nil {
-		return input, apperrors.BadRequest("INVALID_DOMAIN", "Domain server khong dung dinh dang.")
+		return input, apperrors.BadRequest("INVALID_DOMAIN", "Domain máy chủ không đúng định dạng.")
 	}
 	input.Domain = domain
 	if len([]rune(input.Password)) < 8 {
@@ -827,17 +827,17 @@ func toSessionDTO(session authdomain.Session) SessionDTO {
 func (s *Service) resolveZoneAccess(ctx context.Context, rawDomain string) (ZoneAccess, error) {
 	domain, err := tenancyapp.NormalizeDomain(rawDomain)
 	if err != nil {
-		return ZoneAccess{}, apperrors.BadRequest("INVALID_DOMAIN", "Domain server khong dung dinh dang.")
+		return ZoneAccess{}, apperrors.BadRequest("INVALID_DOMAIN", "Domain máy chủ không đúng định dạng.")
 	}
 	target, err := s.repo.ResolveZoneAccess(ctx, domain)
 	if err != nil {
 		switch {
 		case errors.Is(err, authdomain.ErrZoneNotFound):
-			return ZoneAccess{}, apperrors.NotFound("ZONE_NOT_FOUND", "Domain chua san sang cho dang nhap.")
+			return ZoneAccess{}, apperrors.NotFound("ZONE_NOT_FOUND", "Domain chưa sẵn sàng để đăng nhập.")
 		case errors.Is(err, authdomain.ErrZoneAccessDenied):
-			return ZoneAccess{}, apperrors.Forbidden("Tai khoan khong co quyen truy cap zone nay.")
+			return ZoneAccess{}, apperrors.Forbidden("Tài khoản không có quyền truy cập máy chủ này.")
 		case errors.Is(err, authdomain.ErrRegistrationClosed):
-			return ZoneAccess{}, apperrors.Forbidden("Zone nay khong cho phep dang ky tai khoan moi.")
+			return ZoneAccess{}, apperrors.Forbidden("Máy chủ không cho phép đăng ký tài khoản mới.")
 		default:
 			return ZoneAccess{}, err
 		}
@@ -849,9 +849,9 @@ func (s *Service) ensureZoneWorkspaceAccess(ctx context.Context, userID string, 
 	err := s.repo.EnsureZoneWorkspaceAccess(ctx, userID, target)
 	switch {
 	case errors.Is(err, authdomain.ErrZoneAccessDenied):
-		return apperrors.Forbidden("Tai khoan khong phai thanh vien cua zone nay.")
+		return apperrors.Forbidden("Tài khoản không phải thành viên của máy chủ này.")
 	case errors.Is(err, authdomain.ErrZoneNotFound):
-		return apperrors.NotFound("ZONE_NOT_FOUND", "Zone hoac workspace khong con kha dung.")
+		return apperrors.NotFound("ZONE_NOT_FOUND", "Máy chủ hoặc workspace không còn khả dụng.")
 	default:
 		return err
 	}

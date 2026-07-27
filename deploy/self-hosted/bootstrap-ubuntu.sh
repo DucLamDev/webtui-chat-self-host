@@ -3,8 +3,10 @@ set -eu
 
 DOMAIN=""
 EMAIL=""
-INSTANCE_NAME="VPSTTT Chat"
-PORTAL_ORIGIN="https://chat.vpsttt.com"
+INSTANCE_NAME="Team Chat"
+INSTANCE_LOGO_URL=""
+INSTANCE_REGISTRATION_MODE="open"
+PORTAL_ORIGIN="https://download.vpsttt.com"
 EXTERNAL_IP=""
 REPO_URL=""
 INSTALL_DIR=""
@@ -12,7 +14,7 @@ SKIP_DNS_CHECK=0
 FORCE=0
 
 usage() {
-  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--repo-url https://github.com/org/repo.git] [--install-dir /opt/vpsttt-chat] [--portal-origin https://chat.vpsttt.com] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
+  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--repo-url https://github.com/org/repo.git] [--install-dir /opt/vpsttt-chat] [--portal-origin https://download.vpsttt.com] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -20,6 +22,8 @@ while [ "$#" -gt 0 ]; do
     --domain) DOMAIN=${2:-}; shift 2 ;;
     --email) EMAIL=${2:-}; shift 2 ;;
     --name) INSTANCE_NAME=${2:-}; shift 2 ;;
+    --logo-url) INSTANCE_LOGO_URL=${2:-}; shift 2 ;;
+    --registration-mode) INSTANCE_REGISTRATION_MODE=${2:-}; shift 2 ;;
     --repo-url) REPO_URL=${2:-}; shift 2 ;;
     --install-dir) INSTALL_DIR=${2:-}; shift 2 ;;
     --portal-origin) PORTAL_ORIGIN=${2:-}; shift 2 ;;
@@ -141,6 +145,8 @@ set -- \
   --domain "$DOMAIN" \
   --email "$EMAIL" \
   --name "$INSTANCE_NAME" \
+  --logo-url "$INSTANCE_LOGO_URL" \
+  --registration-mode "$INSTANCE_REGISTRATION_MODE" \
   --portal-origin "$PORTAL_ORIGIN"
 
 if [ -n "$EXTERNAL_IP" ]; then

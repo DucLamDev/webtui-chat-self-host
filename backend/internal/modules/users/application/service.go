@@ -224,14 +224,14 @@ func (s *Service) ensureWorkspaceUser(ctx context.Context, userID string, worksp
 		return err
 	}
 	if !belongs {
-		return apperrors.NotFound("USER_NOT_FOUND", "Khong tim thay nguoi dung trong workspace hien tai.")
+		return apperrors.NotFound("USER_NOT_FOUND", "Không tìm thấy người dùng trong workspace hiện tại.")
 	}
 	return nil
 }
 
 func mapUserError(err error) error {
 	if errors.Is(err, usersdomain.ErrUserNotFound) {
-		return apperrors.NotFound("USER_NOT_FOUND", "Khong tim thay nguoi dung.")
+		return apperrors.NotFound("USER_NOT_FOUND", "Không tìm thấy người dùng.")
 	}
 	return err
 }

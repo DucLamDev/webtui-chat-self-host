@@ -137,6 +137,8 @@ func TestLoadReadsSelfHostedDeployment(t *testing.T) {
 	t.Setenv("DEPLOYMENT_MODE", "self_hosted")
 	t.Setenv("INSTANCE_DOMAIN", "Chat.Company.Example")
 	t.Setenv("INSTANCE_NAME", "Company Chat")
+	t.Setenv("INSTANCE_LOGO_URL", "https://chat.company.example/logo.png")
+	t.Setenv("INSTANCE_REGISTRATION_MODE", "invite_only")
 
 	cfg, err := Load()
 	if err != nil {
@@ -150,6 +152,29 @@ func TestLoadReadsSelfHostedDeployment(t *testing.T) {
 	}
 	if cfg.Deployment.InstanceName != "Company Chat" {
 		t.Fatalf("Deployment.InstanceName = %q", cfg.Deployment.InstanceName)
+	}
+	if cfg.Deployment.InstanceLogoURL != "https://chat.company.example/logo.png" {
+		t.Fatalf("Deployment.InstanceLogoURL = %q", cfg.Deployment.InstanceLogoURL)
+	}
+	if cfg.Deployment.InstanceRegistrationMode != "invite_only" {
+		t.Fatalf("Deployment.InstanceRegistrationMode = %q", cfg.Deployment.InstanceRegistrationMode)
+	}
+}
+
+func TestValidateRejectsUnsafeSelfHostedBranding(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.Deployment = DeploymentConfig{
+		Mode:                     "self_hosted",
+		InstanceDomain:           "localhost",
+		InstanceName:             "Local Chat",
+		InstanceLogoURL:          "http://localhost/logo.png",
+		InstanceRegistrationMode: "unknown",
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "INSTANCE_LOGO_URL") ||
+		!strings.Contains(err.Error(), "INSTANCE_REGISTRATION_MODE") {
+		t.Fatalf("Validate() error = %v, muốn lỗi logo và chế độ đăng ký", err)
 	}
 }
 

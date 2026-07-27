@@ -6,6 +6,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestBrandingLogoTypeRejectsActiveContent(t *testing.T) {
+	contentType, extension := brandingLogoType([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`))
+	if contentType != "" || extension != "" {
+		t.Fatalf("brandingLogoType(svg) = %q, %q; want rejection", contentType, extension)
+	}
+
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0}
+	contentType, extension = brandingLogoType(png)
+	if contentType != "image/png" || extension != ".png" {
+		t.Fatalf("brandingLogoType(png) = %q, %q", contentType, extension)
+	}
+}
+
 func TestSelfHostedRoutesDoNotExposeSaaSProvisioning(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()

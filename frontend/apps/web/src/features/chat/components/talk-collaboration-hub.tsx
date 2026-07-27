@@ -56,7 +56,7 @@ type WhiteboardPoint = { x: number; y: number };
 type WhiteboardStroke = { color: string; points: WhiteboardPoint[] };
 
 const collaborationTabs = [
-  { id: "home", label: "Talk Home" },
+  { id: "home", label: "Tổng quan" },
   { id: "shared", label: "Đã chia sẻ" },
   { id: "meeting", label: "Phòng họp" },
   { id: "notes", label: "Biên bản" },
@@ -80,13 +80,19 @@ export function TalkCollaborationHub({
   workspaceId: string;
 }) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<CollaborationTab>("home");
+  const [activeTab, setActiveTab] = useState<CollaborationTab>(
+    channel.type === "direct" ? "home" : "meeting"
+  );
   const [meetingRoomKey, setMeetingRoomKey] = useState("");
   const [publicPassword, setPublicPassword] = useState("");
   const [publicRoomMode, setPublicRoomMode] = useState<"public" | "webinar">("public");
   const [publicUrl, setPublicUrl] = useState("");
   const [promoteName, setPromoteName] = useState(channel.name);
   const [departmentId, setDepartmentId] = useState("");
+
+  useEffect(() => {
+    setActiveTab(channel.type === "direct" ? "home" : "meeting");
+  }, [channel.id, channel.type]);
 
   const settingsQuery = useQuery({
     enabled: Boolean(workspaceId && channel.id),

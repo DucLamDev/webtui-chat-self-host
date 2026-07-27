@@ -144,7 +144,7 @@ func writePostgresError(c *gin.Context, err *pgconn.PgError) bool {
 		c.Header("Retry-After", "1")
 		Fail(c, http.StatusServiceUnavailable, "DATABASE_RETRY_REQUIRED", "Dữ liệu vừa được thay đổi đồng thời, vui lòng thử lại.", nil)
 	case "21000":
-		Fail(c, http.StatusConflict, "DATA_CONSISTENCY_CONFLICT", "Du lieu hoi thoai dang khong nhat quan, vui long tai lai trang va thu lai.", nil)
+		Fail(c, http.StatusConflict, "DATA_CONSISTENCY_CONFLICT", "Dữ liệu hội thoại đang không nhất quán. Vui lòng tải lại trang và thử lại.", nil)
 	case "57014":
 		c.Header("Retry-After", "1")
 		Fail(c, http.StatusGatewayTimeout, "DATABASE_TIMEOUT", "Truy vấn dữ liệu quá thời gian cho phép, vui lòng thử lại.", nil)
@@ -156,9 +156,9 @@ func writePostgresError(c *gin.Context, err *pgconn.PgError) bool {
 			c.Header("Retry-After", "2")
 			Fail(c, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "Cơ sở dữ liệu tạm thời không sẵn sàng, vui lòng thử lại sau vài giây.", nil)
 		} else if strings.HasPrefix(err.Code, "42") {
-			Fail(c, http.StatusInternalServerError, "DATABASE_SCHEMA_MISMATCH", "Co so du lieu chua duoc cap nhat dung phien ban. Vui long chay migration va thu lai.", nil)
+			Fail(c, http.StatusInternalServerError, "DATABASE_SCHEMA_MISMATCH", "Cơ sở dữ liệu chưa được cập nhật đúng phiên bản. Vui lòng chạy migration và thử lại.", nil)
 		} else {
-			Fail(c, http.StatusInternalServerError, "DATABASE_ERROR", "Co so du lieu tra ve loi khi xu ly yeu cau. Vui long kiem tra log theo ma request.", nil)
+			Fail(c, http.StatusInternalServerError, "DATABASE_ERROR", "Cơ sở dữ liệu trả về lỗi khi xử lý yêu cầu. Vui lòng kiểm tra log theo mã request.", nil)
 		}
 	}
 

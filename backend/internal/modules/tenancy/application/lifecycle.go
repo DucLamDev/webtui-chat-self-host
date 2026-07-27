@@ -106,14 +106,14 @@ func (s *Service) UpdateZoneSettings(
 	if input.Name != nil {
 		value := strings.TrimSpace(*input.Name)
 		if value == "" || len([]rune(value)) > 120 {
-			return ZoneAdminOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Ten zone phai dai tu 1 den 120 ky tu.")
+			return ZoneAdminOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Tên vùng máy chủ phải dài từ 1 đến 120 ký tự.")
 		}
 		input.Name = &value
 	}
 	if input.RegistrationMode != nil {
 		value := strings.ToLower(strings.TrimSpace(*input.RegistrationMode))
 		if value != "open" && value != "invite_only" && value != "closed" {
-			return ZoneAdminOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "registration_mode khong hop le.")
+			return ZoneAdminOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Chế độ đăng ký không hợp lệ.")
 		}
 		input.RegistrationMode = &value
 	}
@@ -159,10 +159,10 @@ func (s *Service) SetZoneLifecycle(ctx context.Context, input ZoneLifecycleInput
 	switch input.Action {
 	case "suspend", "resume", "archive":
 	default:
-		return apperrors.BadRequest("VALIDATION_ERROR", "action lifecycle khong hop le.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "Thao tác vòng đời không hợp lệ.")
 	}
 	if input.Action != "resume" && (input.Reason == "" || len([]rune(input.Reason)) > 500) {
-		return apperrors.BadRequest("VALIDATION_ERROR", "Ly do phai dai tu 1 den 500 ky tu.")
+		return apperrors.BadRequest("VALIDATION_ERROR", "Lý do phải dài từ 1 đến 500 ký tự.")
 	}
 	if err := s.repo.SetZoneLifecycle(ctx, SetZoneLifecycleParams{
 		ActorUserID: input.ActorUserID,
@@ -187,13 +187,13 @@ func (s *Service) CreateAdditionalDomain(
 	}
 	domain, err := NormalizeDomain(input.Domain)
 	if err != nil || !fqdnPattern.MatchString(domain) {
-		return DomainClaimDTO{}, apperrors.BadRequest("INVALID_DOMAIN", "Chi ho tro domain cong khai hop le.")
+		return DomainClaimDTO{}, apperrors.BadRequest("INVALID_DOMAIN", "Chỉ hỗ trợ tên miền công khai hợp lệ.")
 	}
 	if input.Kind == "" {
 		input.Kind = "alias"
 	}
 	if input.Kind != "alias" && input.Kind != "api" && input.Kind != "web" {
-		return DomainClaimDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "kind domain phu khong hop le.")
+		return DomainClaimDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Loại tên miền phụ không hợp lệ.")
 	}
 	claim, err := s.repo.CreateAdditionalDomainClaim(ctx, CreateAdditionalDomainClaimParams{
 		ActorUserID: input.ActorUserID,
@@ -204,7 +204,7 @@ func (s *Service) CreateAdditionalDomain(
 	})
 	if err != nil {
 		if errors.Is(err, tenancydomain.ErrDomainAlreadyClaimed) {
-			return DomainClaimDTO{}, apperrors.Conflict("DOMAIN_ALREADY_CLAIMED", "Domain da duoc claim boi mot zone.")
+			return DomainClaimDTO{}, apperrors.Conflict("DOMAIN_ALREADY_CLAIMED", "Tên miền đã được một vùng máy chủ xác nhận quyền sở hữu.")
 		}
 		return DomainClaimDTO{}, mapClaimError(err)
 	}
@@ -286,15 +286,15 @@ func (s *Service) CreateDeploymentRequest(
 	switch input.RequestedMode {
 	case "shared", "dedicated_compose", "dedicated_k8s":
 	default:
-		return DeploymentRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "requested_mode khong hop le.")
+		return DeploymentRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Chế độ triển khai được yêu cầu không hợp lệ.")
 	}
 	switch input.RequestedDatabaseMode {
 	case "shared_schema", "dedicated_schema", "dedicated_database":
 	default:
-		return DeploymentRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "requested_database_mode khong hop le.")
+		return DeploymentRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Chế độ cơ sở dữ liệu được yêu cầu không hợp lệ.")
 	}
 	if input.IdempotencyKey == "" || len(input.IdempotencyKey) > 120 {
-		return DeploymentRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Idempotency-Key phai dai tu 1 den 120 ky tu.")
+		return DeploymentRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Idempotency-Key phải dài từ 1 đến 120 ký tự.")
 	}
 	request, err := s.repo.CreateDeploymentRequest(ctx, CreateDeploymentRequestParams{
 		ActorUserID:           input.ActorUserID,
@@ -304,7 +304,7 @@ func (s *Service) CreateDeploymentRequest(
 		IdempotencyKey:        input.IdempotencyKey,
 	})
 	if errors.Is(err, tenancydomain.ErrDeploymentRequestConflict) {
-		return DeploymentRequestDTO{}, apperrors.Conflict("DEPLOYMENT_REQUEST_CONFLICT", "Idempotency-Key da duoc dung voi payload khac.")
+		return DeploymentRequestDTO{}, apperrors.Conflict("DEPLOYMENT_REQUEST_CONFLICT", "Idempotency-Key đã được dùng với payload khác.")
 	}
 	if err != nil {
 		return DeploymentRequestDTO{}, err

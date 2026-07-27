@@ -316,11 +316,11 @@ func (s *Service) UpdateIncoming(ctx context.Context, input UpdateIncomingInput)
 	}
 	name := cleanStringPtr(input.Name)
 	if name != nil && (*name == "" || len([]rune(*name)) > 120) {
-		return IncomingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Ten incoming webhook phai dai tu 1 den 120 ky tu.")
+		return IncomingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Tên incoming webhook phải dài từ 1 đến 120 ký tự.")
 	}
 	status := cleanStringPtr(input.Status)
 	if status != nil && !validWebhookStatus(*status) {
-		return IncomingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Trang thai incoming webhook khong hop le.")
+		return IncomingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Trạng thái incoming webhook không hợp lệ.")
 	}
 	webhook, err := s.repo.UpdateIncoming(ctx, UpdateIncomingParams{
 		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
@@ -399,15 +399,15 @@ func (s *Service) UpdateOutgoing(ctx context.Context, input UpdateOutgoingInput)
 	}
 	name := cleanStringPtr(input.Name)
 	if name != nil && (*name == "" || len([]rune(*name)) > 120) {
-		return OutgoingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Ten outgoing webhook phai dai tu 1 den 120 ky tu.")
+		return OutgoingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Tên outgoing webhook phải dài từ 1 đến 120 ký tự.")
 	}
 	targetURL := cleanStringPtr(input.TargetURL)
 	if targetURL != nil && !validHTTPURL(*targetURL) {
-		return OutgoingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Target URL cua outgoing webhook khong hop le.")
+		return OutgoingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "URL đích của outgoing webhook không hợp lệ.")
 	}
 	status := cleanStringPtr(input.Status)
 	if status != nil && !validWebhookStatus(*status) {
-		return OutgoingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Trang thai outgoing webhook khong hop le.")
+		return OutgoingWebhookDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Trạng thái outgoing webhook không hợp lệ.")
 	}
 	eventTypes := input.EventTypes
 	if eventTypes != nil {
@@ -460,7 +460,7 @@ func (s *Service) TestOutgoing(ctx context.Context, input TestOutgoingInput) (De
 	if eventType == "" {
 		eventType = "webhook.test"
 	}
-	requestBody, err := normalizeJSON(input.Payload, "Payload test webhook khong phai JSON hop le.")
+	requestBody, err := normalizeJSON(input.Payload, "Payload kiểm thử webhook không phải JSON hợp lệ.")
 	if err != nil {
 		return DeliveryDTO{}, err
 	}
@@ -510,7 +510,7 @@ func (s *Service) TestOutgoing(ctx context.Context, input TestOutgoingInput) (De
 func (s *Service) DispatchIncoming(ctx context.Context, input IncomingMessageInput) (IntegrationMessageDTO, error) {
 	input.ExpectedZoneID = strings.TrimSpace(input.ExpectedZoneID)
 	if input.ExpectedZoneID == "" {
-		return IntegrationMessageDTO{}, apperrors.NotFound("ZONE_NOT_FOUND", "Domain hien tai khong thuoc zone chat dang hoat dong.")
+		return IntegrationMessageDTO{}, apperrors.NotFound("ZONE_NOT_FOUND", "Tên miền hiện tại không thuộc vùng chat đang hoạt động.")
 	}
 	body := strings.TrimSpace(input.Body)
 	if body == "" || len([]rune(body)) > 8000 {
@@ -537,7 +537,7 @@ func (s *Service) DispatchIncoming(ctx context.Context, input IncomingMessageInp
 func (s *Service) SendTokenMessage(ctx context.Context, input TokenMessageInput) (IntegrationMessageDTO, error) {
 	input.ExpectedZoneID = strings.TrimSpace(input.ExpectedZoneID)
 	if input.ExpectedZoneID == "" {
-		return IntegrationMessageDTO{}, apperrors.NotFound("ZONE_NOT_FOUND", "Domain hien tai khong thuoc zone chat dang hoat dong.")
+		return IntegrationMessageDTO{}, apperrors.NotFound("ZONE_NOT_FOUND", "Tên miền hiện tại không thuộc vùng chat đang hoạt động.")
 	}
 	if s.tokenAuth == nil {
 		return IntegrationMessageDTO{}, apperrors.Unauthorized("API token chưa được cấu hình.")
@@ -547,7 +547,7 @@ func (s *Service) SendTokenMessage(ctx context.Context, input TokenMessageInput)
 		return IntegrationMessageDTO{}, err
 	}
 	if authenticated.ZoneID == "" || authenticated.ZoneID != input.ExpectedZoneID {
-		return IntegrationMessageDTO{}, apperrors.Forbidden("API token khong thuoc domain/zone hien tai.")
+		return IntegrationMessageDTO{}, apperrors.Forbidden("API token không thuộc tên miền hoặc vùng máy chủ hiện tại.")
 	}
 	body := strings.TrimSpace(input.Body)
 	if body == "" || len([]rune(body)) > 8000 {
@@ -711,7 +711,7 @@ func stringPtr(value string) *string {
 
 func mapWebhookError(err error) error {
 	if errors.Is(err, webhooksdomain.ErrWebhookQuotaExceeded) {
-		return apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Zone da dat gioi han webhook.")
+		return apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Vùng máy chủ đã đạt giới hạn webhook.")
 	}
 	if errors.Is(err, webhooksdomain.ErrIncomingWebhookNotFound) {
 		return apperrors.NotFound("INCOMING_WEBHOOK_NOT_FOUND", "Không tìm thấy incoming webhook hoặc secret không hợp lệ.")

@@ -6,7 +6,7 @@ import { Button, Skeleton } from "@webtui/ui";
 import { LockKeyhole, Send, ShieldCheck } from "@webtui/icons";
 import type { AuthUser, LoginInput, OIDCProviderSummary } from "@webtui/types";
 import { queryKeys } from "@webtui/api-client";
-import { api } from "@/lib/api";
+import { api, runtimeEnvironment } from "@/lib/api";
 import { useAuthStore } from "./auth-store";
 
 type AuthContextValue = {
@@ -29,6 +29,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [isCompletingOIDC, setIsCompletingOIDC] = useState(false);
   const oidcCompletionStarted = useRef(false);
+  const discoveryQuery = useQuery({
+    enabled: hydrated && !accessToken,
+    queryFn: () => api.tenancy.discover(browserDomain()),
+    queryKey: queryKeys.tenancy.discovery(browserDomain()),
+    retry: false
+  });
+  const organizationName = discoveryQuery.data?.runtime.app_name || runtimeEnvironment.appName || "Tổ chức";
+  const organizationLogo = discoveryQuery.data?.runtime.logo_url || discoveryQuery.data?.zone.logo_url;
 
   useEffect(() => {
     let mounted = true;
@@ -66,7 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsCompletingOIDC(true);
     api.auth.oidcComplete({
       code,
-      device_name: "VPSTTT Admin Panel",
+      device_name: `${organizationName} Admin Panel`,
       domain: browserDomain()
     })
       .then((result) => {
@@ -77,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setFormError(error instanceof Error ? error.message : "Đăng nhập SSO không thành công.");
       })
       .finally(() => setIsCompletingOIDC(false));
-  }, [accessToken, hydrated, queryClient, setSession]);
+  }, [accessToken, hydrated, organizationName, queryClient, setSession]);
 
   const meQuery = useQuery({
     enabled: hydrated && Boolean(accessToken),
@@ -169,11 +177,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       <AdminLoginScreen
         error={formError}
         isPending={loginMutation.isPending || isCompletingOIDC}
+        organizationLogo={organizationLogo}
+        organizationName={organizationName}
         onOIDCDiscover={() => api.auth.oidcProviders(browserDomain())}
         onOIDCStart={async (providerId) => {
           setFormError(null);
           const result = await api.auth.oidcStart({
-            device_name: "VPSTTT Admin Panel",
+            device_name: `${organizationName} Admin Panel`,
             domain: browserDomain(),
             provider_id: providerId,
             return_to: browserOIDCReturnTo()
@@ -181,7 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           window.location.assign(result.authorization_url);
         }}
         onSubmit={(identifier, password) => loginMutation.mutate({
-          device_name: "VPSTTT Admin Panel",
+          device_name: `${organizationName} Admin Panel`,
           domain: browserDomain(),
           identifier,
           password
@@ -233,13 +243,17 @@ function AdminLoginScreen({
   isPending,
   onOIDCDiscover,
   onOIDCStart,
-  onSubmit
+  onSubmit,
+  organizationLogo,
+  organizationName
 }: {
   error: string | null;
   isPending: boolean;
   onOIDCDiscover: () => Promise<OIDCProviderSummary[]>;
   onOIDCStart: (providerId: string) => Promise<void>;
   onSubmit: (identifier: string, password: string) => void;
+  organizationLogo?: string;
+  organizationName: string;
 }) {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -282,8 +296,10 @@ function AdminLoginScreen({
   return (
     <main className="admin-login-shell">
       <section className="admin-login-brand">
-        <div className="admin-login-brand__mark"><ShieldCheck size={34} /></div>
-        <span className="admin-login-brand__eyebrow">VPSTTT · CONTROL CENTER</span>
+        <div className="admin-login-brand__mark">
+          {organizationLogo ? <img alt="" src={organizationLogo} /> : <span>{organizationName.slice(0, 1).toUpperCase()}</span>}
+        </div>
+        <span className="admin-login-brand__eyebrow">{organizationName} · TRUNG TÂM QUẢN TRỊ</span>
         <h1>Quản trị vận hành<br />tập trung và an toàn.</h1>
         <p>Không gian riêng dành cho quản trị viên theo dõi người dùng, phân quyền, bot và tự động hóa.</p>
         <div className="admin-login-brand__features">
@@ -305,7 +321,7 @@ function AdminLoginScreen({
               autoComplete="username"
               autoFocus
               onChange={(event) => setIdentifier(event.target.value)}
-              placeholder="admin@vpsttt.com"
+              placeholder="admin@company.com"
               required
               value={identifier}
             />

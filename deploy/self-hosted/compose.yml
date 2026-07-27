@@ -191,18 +191,35 @@ services:
     expose: ["3001"]
     networks: [backend]
 
+  portal:
+    build:
+      context: ../../../webtui-chat-portal
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL: ${DESKTOP_DOWNLOAD_URL:-https://download.vpsttt.com/download/}
+        NEXT_PUBLIC_DOCUMENTATION_URL: ${DOCUMENTATION_URL:-https://download.vpsttt.com/#self-host}
+        NEXT_PUBLIC_MOBILE_DOWNLOAD_URL: ${MOBILE_DOWNLOAD_URL:-https://download.vpsttt.com/download/}
+        NEXT_PUBLIC_PORTAL_BASE_PATH: ""
+    image: vpsttt-chat-portal:${PORTAL_VERSION:-self-hosted}
+    restart: unless-stopped
+    expose: ["3002"]
+    networks: [backend]
+
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
     environment:
       INSTANCE_DOMAIN: ${INSTANCE_DOMAIN}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:-download.vpsttt.com}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../../webtui-chat-portal/download:/srv/portal-download:ro
+      - storage_data:/srv/vpsttt-storage:ro
       - caddy_data:/data
       - caddy_config:/config
     networks: [backend]
@@ -212,6 +229,8 @@ services:
       web:
         condition: service_started
       admin:
+        condition: service_started
+      portal:
         condition: service_started
 
   coturn:

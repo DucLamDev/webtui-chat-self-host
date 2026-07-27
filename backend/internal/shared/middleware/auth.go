@@ -64,12 +64,12 @@ func authWithZonePolicy(
 
 		resolvedZoneID := contextString(c, constants.ContextResolvedZoneID)
 		if resolvedZoneID != "" && claims.ZoneID == "" {
-			response.Fail(c, http.StatusUnauthorized, "TOKEN_ZONE_REQUIRED", "Phien dang nhap cu khong co zone. Vui long dang nhap lai.", nil)
+			response.Fail(c, http.StatusUnauthorized, "TOKEN_ZONE_REQUIRED", "Phiên đăng nhập cũ không có vùng máy chủ. Vui lòng đăng nhập lại.", nil)
 			c.Abort()
 			return
 		}
 		if resolvedZoneID != "" && claims.ZoneID != resolvedZoneID {
-			response.Fail(c, http.StatusForbidden, "ZONE_TOKEN_MISMATCH", "Phien dang nhap khong thuoc domain hien tai.", nil)
+			response.Fail(c, http.StatusForbidden, "ZONE_TOKEN_MISMATCH", "Phiên đăng nhập không thuộc tên miền hiện tại.", nil)
 			c.Abort()
 			return
 		}
@@ -101,7 +101,7 @@ func authWithZonePolicy(
 					c,
 					http.StatusForbidden,
 					"ZONE_DOMAIN_MISMATCH",
-					"Domain hien tai khong hoat dong trong zone cua phien dang nhap.",
+					"Tên miền hiện tại không hoạt động trong vùng máy chủ của phiên đăng nhập.",
 					nil,
 				)
 				c.Abort()
@@ -120,7 +120,7 @@ func authWithZonePolicy(
 				return
 			}
 			if !matches {
-				response.Fail(c, http.StatusForbidden, "WORKSPACE_ZONE_MISMATCH", "Workspace khong thuoc zone cua phien dang nhap.", nil)
+				response.Fail(c, http.StatusForbidden, "WORKSPACE_ZONE_MISMATCH", "Workspace không thuộc vùng máy chủ của phiên đăng nhập.", nil)
 				c.Abort()
 				return
 			}

@@ -83,7 +83,7 @@ export function useApiStatus(): ApiStatusState {
 
 export function useDesktopVersionStatus(): DesktopVersionStatus {
   const [state, setState] = useState<DesktopVersionStatus>({
-    label: "Dang kiem tra phien ban",
+    label: "Đang kiểm tra phiên bản",
     status: "checking"
   });
 
@@ -102,7 +102,7 @@ export function useDesktopVersionStatus(): DesktopVersionStatus {
     if (!services.lifecycle.isDesktop) {
       setState({
         detail: `Web ${env.appVersion}`,
-        label: "Ban web khong can updater desktop",
+        label: "Bản web không cần trình cập nhật desktop",
         status: "current"
       });
       return;
@@ -129,8 +129,8 @@ export function useDesktopVersionStatus(): DesktopVersionStatus {
 
         if (minimum && compareVersions(env.appVersion, minimum) < 0) {
           setState({
-            detail: `Dang dung ${clientLabel}, toi thieu can ${minimum}.`,
-            label: "Can cap nhat de tiep tuc tuong thich",
+            detail: `Đang dùng ${clientLabel}, tối thiểu cần ${minimum}.`,
+            label: "Cần cập nhật để tiếp tục tương thích",
             status: "unsupported",
             updateUrl,
             version
@@ -140,7 +140,7 @@ export function useDesktopVersionStatus(): DesktopVersionStatus {
 
         if (recommended && compareVersions(env.appVersion, recommended) < 0) {
           setState({
-            detail: `Dang dung ${clientLabel}, khuyen nghi ${recommended}.`,
+            detail: `Đang dùng ${clientLabel}, khuyến nghị ${recommended}.`,
             label: "Co ban cap nhat desktop",
             status: "update_available",
             updateUrl,
@@ -150,8 +150,8 @@ export function useDesktopVersionStatus(): DesktopVersionStatus {
         }
 
         setState({
-          detail: `Dang dung ${clientLabel}. Backend ${version.version}.`,
-          label: "Phien ban desktop dang tuong thich",
+          detail: `Đang dùng ${clientLabel}. Backend ${version.version}.`,
+          label: "Phiên bản desktop đang tương thích",
           status: "current",
           updateUrl,
           version
@@ -163,7 +163,7 @@ export function useDesktopVersionStatus(): DesktopVersionStatus {
         }
         setState({
           detail: env.apiBaseUrl,
-          label: "Khong kiem tra duoc phien ban backend",
+          label: "Không kiểm tra được phiên bản backend",
           status: "offline"
         });
       });

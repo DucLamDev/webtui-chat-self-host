@@ -180,3 +180,27 @@ func TestCreateFlowRejectsInvalidJSONBeforeRepository(t *testing.T) {
 		t.Fatal("CreateFlow() không được gọi repository khi validation lỗi")
 	}
 }
+
+func TestBotFlowMatchesOrganizationTriggers(t *testing.T) {
+	bot := botsdomain.Bot{Slug: "tro-ly-nhan-su", Name: "Trợ lý nhân sự"}
+	tests := []struct {
+		name    string
+		trigger string
+		body    string
+		want    bool
+	}{
+		{name: "mention", trigger: `{"type":"mention"}`, body: "@tro-ly-nhan-su cho tôi hỏi", want: true},
+		{name: "keyword", trigger: `{"type":"keyword","keywords":["nghỉ phép"]}`, body: "Quy trình nghỉ phép thế nào?", want: true},
+		{name: "command", trigger: `{"type":"command","prefix":"/hr"}`, body: "/hr chính sách", want: true},
+		{name: "all", trigger: `{"type":"all"}`, body: "Bất kỳ tin nhắn nào", want: true},
+		{name: "unmatched", trigger: `{"type":"mention"}`, body: "Không gọi bot", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			flow := botsdomain.Flow{TriggerConfig: []byte(test.trigger)}
+			if got := botFlowMatches(flow, bot, test.body); got != test.want {
+				t.Fatalf("botFlowMatches() = %v, muốn %v", got, test.want)
+			}
+		})
+	}
+}

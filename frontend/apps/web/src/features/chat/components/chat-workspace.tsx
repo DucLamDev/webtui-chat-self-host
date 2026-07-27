@@ -3133,6 +3133,10 @@ export function ChatWorkspace() {
               }
               onBack={handleMobileBackToList}
               onMarkUnread={() => handleMarkUnread(selectedChatChannel.id)}
+              onOpenCollaboration={() => {
+                setDetailTab("workspace");
+                setIsDetailPanelOpen(true);
+              }}
               onStartAudioCall={selectedChatChannel.type === "direct" ? () => void callControls.startCall("audio") : undefined}
               onStartVideoCall={selectedChatChannel.type === "direct" ? () => void callControls.startCall("video") : undefined}
               onToggleDetailPanel={() => setIsDetailPanelOpen((current) => !current)}
@@ -4792,18 +4796,37 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+function parseBotJSON(value: string, label: string) {
+  try {
+    return JSON.parse(value || "{}");
+  } catch {
+    throw new Error(`${label} phải là JSON hợp lệ.`);
+  }
+}
+
+function botTriggerConfig(triggerType: string, slug: string): Record<string, string> {
+  switch (triggerType) {
+    case "all":
+      return { type: "all" };
+    case "command":
+      return { prefix: `/${slug}`, type: "command" };
+    default:
+      return { type: "mention" };
+  }
+}
+
 const legacyTicketStatusOptions: Array<{ label: string; value: TicketStatus }> = [
-  { label: "Má»Ÿ", value: "open" },
-  { label: "Äang chá»", value: "pending" },
-  { label: "ÄÃ£ xá»­ lÃ½", value: "resolved" },
-  { label: "ÄÃ£ Ä‘Ã³ng", value: "closed" }
+  { label: "Mở", value: "open" },
+  { label: "Đang chờ", value: "pending" },
+  { label: "Đã xử lý", value: "resolved" },
+  { label: "Đã đóng", value: "closed" }
 ];
 
 const legacyTicketPriorityOptions: Array<{ label: string; value: TicketPriority }> = [
-  { label: "Tháº¥p", value: "low" },
-  { label: "BÃ¬nh thÆ°á»ng", value: "normal" },
+  { label: "Thấp", value: "low" },
+  { label: "Bình thường", value: "normal" },
   { label: "Cao", value: "high" },
-  { label: "Kháº©n cáº¥p", value: "urgent" }
+  { label: "Khẩn cấp", value: "urgent" }
 ];
 
 const ticketStatusText: Record<TicketStatus, string> = {
@@ -5184,19 +5207,78 @@ function SettingsPage({
   const { logout } = useAuth();
   const queryClient = useQueryClient();
   const currentSessionId = useAuthStore((state) => state.sessionId);
+  const zoneDomain = useAuthStore((state) => state.zoneDomain);
+  const zoneRuntime = useAuthStore((state) => state.zoneRuntime);
+  const setZoneRuntime = useAuthStore((state) => state.setZoneRuntime);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const brandLogoInputRef = useRef<HTMLInputElement>(null);
   const [avatarValue, setAvatarValue] = useState(currentUser.avatarUrl ?? "");
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
+  const [brandName, setBrandName] = useState(zoneRuntime?.app_name ?? "");
+  const [brandLogoURL, setBrandLogoURL] = useState(zoneRuntime?.logo_url ?? "");
+  const [brandLogoFile, setBrandLogoFile] = useState<File | null>(null);
+  const [brandLogoPreviewURL, setBrandLogoPreviewURL] = useState(zoneRuntime?.logo_url ?? "");
+  const [registrationMode, setRegistrationMode] = useState<"open" | "invite_only" | "closed">("open");
+  const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
   const hasDesktopUpdateNotice =
     desktopVersionStatus.status === "update_available" || desktopVersionStatus.status === "unsupported";
   const recommendedDesktopVersion = desktopVersionStatus.version?.clients?.desktop?.recommended_version;
 
   useEffect(() => setAvatarValue(currentUser.avatarUrl ?? ""), [currentUser.avatarUrl]);
+  useEffect(() => {
+    if (!brandLogoFile) {
+      setBrandLogoPreviewURL(brandLogoURL);
+      return;
+    }
+    const objectURL = URL.createObjectURL(brandLogoFile);
+    setBrandLogoPreviewURL(objectURL);
+    return () => URL.revokeObjectURL(objectURL);
+  }, [brandLogoFile, brandLogoURL]);
 
   const sessionsQuery = useQuery({
     queryFn: () => api.auth.sessions(),
     queryKey: queryKeys.auth.sessions
+  });
+  const currentZoneQuery = useQuery({
+    enabled: canOpenAdmin,
+    queryFn: () => api.tenancy.currentZone(),
+    queryKey: ["tenancy", "current-zone", "settings"]
+  });
+  useEffect(() => {
+    const zone = currentZoneQuery.data?.zone;
+    if (!zone) return;
+    setBrandName(zone.name);
+    setBrandLogoURL(zone.logo_url ?? "");
+    if (zone.registration_mode === "open" || zone.registration_mode === "invite_only" || zone.registration_mode === "closed") {
+      setRegistrationMode(zone.registration_mode);
+    }
+  }, [currentZoneQuery.data]);
+  const updateBrandingMutation = useMutation({
+    mutationFn: async () => {
+      let logoURL = brandLogoURL.trim();
+      if (brandLogoFile) {
+        const uploaded = await api.tenancy.uploadCurrentZoneLogo(brandLogoFile);
+        logoURL = uploaded.logo_path;
+      }
+      return api.tenancy.updateCurrentZone({
+        logo_url: logoURL,
+        name: brandName.trim(),
+        registration_mode: registrationMode
+      });
+    },
+    onError: (error) => setBrandingFeedback(error instanceof Error ? error.message : "Không lưu được thương hiệu tổ chức."),
+    onSuccess: async (overview) => {
+      const nextName = overview.zone.name;
+      const nextLogo = overview.zone.logo_url || undefined;
+      setBrandLogoFile(null);
+      setBrandLogoURL(nextLogo ?? "");
+      if (zoneDomain && zoneRuntime) {
+        setZoneRuntime(zoneDomain, { ...zoneRuntime, app_name: nextName, logo_url: nextLogo });
+      }
+      setBrandingFeedback("Đã cập nhật tên, logo và chính sách đăng ký cho toàn bộ ứng dụng.");
+      await queryClient.invalidateQueries({ queryKey: ["tenancy", "current-zone", "settings"] });
+    }
   });
   const revokeSessionMutation = useMutation({
     mutationFn: (sessionId: string) => api.auth.revokeSession(sessionId),
@@ -5247,6 +5329,22 @@ function SettingsPage({
     } catch {
       setAvatarError("Không đọc được ảnh đã chọn.");
     }
+  }
+
+  function handleBrandLogoFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setBrandingFeedback("Chỉ hỗ trợ logo PNG, JPEG hoặc WebP.");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setBrandingFeedback("Logo không được vượt quá 4 MB.");
+      return;
+    }
+    setBrandLogoFile(file);
+    setBrandingFeedback(null);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -5304,14 +5402,83 @@ function SettingsPage({
           </form>
         </section>
         {canOpenAdmin ? (
+          <section className="settings-card settings-card--branding">
+            <div className="settings-card__heading">
+              <div>
+                <h2>Thương hiệu & truy cập</h2>
+                <p>Thiết lập này thay thế tên và logo mặc định trên web, desktop và mobile.</p>
+              </div>
+            </div>
+            <form
+              className="organization-branding-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setBrandingFeedback(null);
+                updateBrandingMutation.mutate();
+              }}
+            >
+              <div className="organization-branding-form__preview">
+                {brandLogoPreviewURL ? <img alt="" src={brandLogoPreviewURL} /> : <span>{(brandName || "T").slice(0, 1).toUpperCase()}</span>}
+                <div><strong>{brandName || "Tên tổ chức"}</strong><small>Xem trước thương hiệu</small></div>
+              </div>
+              <label>
+                Tên tổ chức
+                <input maxLength={120} onChange={(event) => setBrandName(event.target.value)} required value={brandName} />
+              </label>
+              <div className="organization-branding-form__upload">
+                <span>Logo tổ chức</span>
+                <div>
+                  <Button onClick={() => brandLogoInputRef.current?.click()} size="sm" type="button" variant="secondary">
+                    <ImageIcon size={16} /> {brandLogoFile || brandLogoURL ? "Thay logo" : "Chọn logo từ máy"}
+                  </Button>
+                  {brandLogoFile || brandLogoURL ? (
+                    <Button
+                      onClick={() => {
+                        setBrandLogoFile(null);
+                        setBrandLogoURL("");
+                        setBrandingFeedback(null);
+                      }}
+                      size="sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <Trash2 size={15} /> Xóa logo
+                    </Button>
+                  ) : null}
+                </div>
+                <input
+                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                  className="visually-hidden"
+                  onChange={handleBrandLogoFile}
+                  ref={brandLogoInputRef}
+                  type="file"
+                />
+                <small>PNG, JPEG hoặc WebP, tối đa 4 MB. File được lưu trên server và dùng ở màn hình đăng nhập.</small>
+              </div>
+              <label>
+                Đăng ký tài khoản
+                <select onChange={(event) => setRegistrationMode(event.target.value as typeof registrationMode)} value={registrationMode}>
+                  <option value="open">Mở — người dùng có thể tự đăng ký</option>
+                  <option value="invite_only">Chỉ mã mời — owner tạo lời mời trước</option>
+                  <option value="closed">Đóng — không nhận tài khoản mới</option>
+                </select>
+              </label>
+              <Button disabled={!brandName.trim() || updateBrandingMutation.isPending} size="sm" type="submit">
+                {updateBrandingMutation.isPending ? "Đang lưu..." : "Lưu thương hiệu"}
+              </Button>
+              {brandingFeedback ? <small className="organization-branding-form__feedback" role="status">{brandingFeedback}</small> : null}
+            </form>
+          </section>
+        ) : null}
+        {canOpenAdmin ? (
           <section className="settings-card settings-card--admin-link">
             <div>
               <Monitor size={22} />
               <h2>Admin Panel</h2>
             </div>
-            <p>Mo bang quan tri day du tren trinh duyet ngoai.</p>
+            <p>Mở bảng quản trị đầy đủ trong một cửa sổ trình duyệt riêng.</p>
             <Button onClick={handleOpenAdminPanel} size="sm" type="button" variant="secondary">
-              <Share2 size={15} /> Mo Admin Panel
+              <Share2 size={15} /> Mở bảng quản trị
             </Button>
           </section>
         ) : null}
@@ -5615,8 +5782,26 @@ function BotsPage({
   const [createName, setCreateName] = useState("");
   const [createSlug, setCreateSlug] = useState("");
   const [createDescription, setCreateDescription] = useState("");
+  const [createProvider, setCreateProvider] = useState("ollama");
+  const [createModel, setCreateModel] = useState("qwen2.5:7b");
+  const [createEndpoint, setCreateEndpoint] = useState("http://ollama:11434");
+  const [createAPIKey, setCreateAPIKey] = useState("");
+  const [createSecretRef, setCreateSecretRef] = useState("");
+  const [createPrompt, setCreatePrompt] = useState("");
+  const [createTriggerType, setCreateTriggerType] = useState("mention");
   const [targetChannelId, setTargetChannelId] = useState("");
   const [testMessage, setTestMessage] = useState("");
+  const [aiProvider, setAIProvider] = useState("ollama");
+  const [aiModel, setAIModel] = useState("");
+  const [aiAPIKey, setAIAPIKey] = useState("");
+  const [aiSecretRef, setAISecretRef] = useState("");
+  const [aiSettingsJSON, setAISettingsJSON] = useState('{"base_url":"http://ollama:11434"}');
+  const [flowName, setFlowName] = useState("");
+  const [flowPrompt, setFlowPrompt] = useState("");
+  const [flowTriggerJSON, setFlowTriggerJSON] = useState('{"type":"mention"}');
+  const [flowToolsJSON, setFlowToolsJSON] = useState("{}");
+  const [flowKnowledgeJSON, setFlowKnowledgeJSON] = useState("{}");
+  const [flowTestJSON, setFlowTestJSON] = useState('{"message":"Xin chào"}');
   const [orderEmail, setOrderEmail] = useState("");
   const [orderUserId, setOrderUserId] = useState("");
   const [orderDepositAmount, setOrderDepositAmount] = useState("200000");
@@ -5669,8 +5854,65 @@ function BotsPage({
     queryFn: () => api.bots.installations(workspaceId as string, selectedBot?.id ?? ""),
     queryKey: queryKeys.integrations.botInstallations(workspaceId ?? "", selectedBot?.id ?? "")
   });
+  const aiConfigQuery = useQuery({
+    enabled: Boolean(workspaceId && canManage && selectedBot?.id),
+    queryFn: () => api.bots.aiConfig(workspaceId as string, selectedBot?.id ?? ""),
+    queryKey: queryKeys.integrations.botAIConfig(workspaceId ?? "", selectedBot?.id ?? ""),
+    retry: false
+  });
+  const flowsQuery = useQuery({
+    enabled: Boolean(workspaceId && canManage && selectedBot?.id),
+    queryFn: () => api.bots.flows(workspaceId as string, selectedBot?.id ?? ""),
+    queryKey: queryKeys.integrations.botFlows(workspaceId ?? "", selectedBot?.id ?? "")
+  });
+  useEffect(() => {
+    const config = aiConfigQuery.data;
+    if (!config) return;
+    setAIProvider(config.provider);
+    setAIModel(config.model);
+    setAISecretRef(config.secret_ref ?? "");
+    setAISettingsJSON(JSON.stringify(config.settings ?? {}, null, 2));
+  }, [aiConfigQuery.data]);
   const createBotMutation = useMutation({
-    mutationFn: (input: { description?: string; name: string; slug: string }) => api.bots.create(workspaceId as string, input),
+    mutationFn: async (input: {
+      apiKey?: string;
+      channelId: string;
+      description?: string;
+      endpoint: string;
+      model: string;
+      name: string;
+      prompt: string;
+      provider: string;
+      secretRef?: string;
+      slug: string;
+      triggerType: string;
+    }) => {
+      const bot = await api.bots.create(workspaceId as string, {
+        description: input.description,
+        name: input.name,
+        slug: input.slug
+      });
+      await api.bots.saveAIConfig(workspaceId as string, bot.id, {
+        api_key: input.apiKey,
+        model: input.model,
+        provider: input.provider,
+        secret_ref: input.secretRef,
+        settings: { base_url: input.endpoint, temperature: 0.2 }
+      });
+      const flow = await api.bots.createFlow(workspaceId as string, bot.id, {
+        knowledge_config: {},
+        name: "Nghiệp vụ chính",
+        prompt: input.prompt,
+        tool_config: {},
+        trigger_config: botTriggerConfig(input.triggerType, input.slug)
+      });
+      await api.bots.publishFlow(workspaceId as string, bot.id, flow.id);
+      await api.bots.install(workspaceId as string, bot.id, {
+        channel_id: input.channelId,
+        config: {}
+      });
+      return bot;
+    },
     onError: (error) => setFeedback({ message: errorMessage(error, "Không tạo được bot."), tone: "error" }),
     onSuccess: async (bot) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.integrations.bots(workspaceId ?? "") });
@@ -5678,8 +5920,11 @@ function BotsPage({
       setCreateName("");
       setCreateSlug("");
       setCreateDescription("");
+      setCreateAPIKey("");
+      setCreateSecretRef("");
+      setCreatePrompt("");
       setIsCreateOpen(false);
-      setFeedback({ message: `Đã tạo ${bot.name}.`, tone: "success" });
+      setFeedback({ message: `Đã tạo, cấu hình và kết nối ${bot.name} vào kênh.`, tone: "success" });
     }
   });
   const installBotMutation = useMutation({
@@ -5707,6 +5952,64 @@ function BotsPage({
       setTestMessage("");
       setFeedback({ message: "Bot đã gửi tin nhắn thử nghiệm.", tone: "success" });
     }
+  });
+  const saveAIConfigMutation = useMutation({
+    mutationFn: () => {
+      if (!selectedBot) throw new Error("Chưa chọn bot.");
+      return api.bots.saveAIConfig(workspaceId as string, selectedBot.id, {
+        api_key: aiAPIKey.trim() || undefined,
+        model: aiModel.trim(),
+        provider: aiProvider.trim(),
+        secret_ref: aiSecretRef.trim() || undefined,
+        settings: parseBotJSON(aiSettingsJSON, "Cấu hình AI")
+      });
+    },
+    onError: (error) => setFeedback({ message: errorMessage(error, "Không lưu được cấu hình AI."), tone: "error" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.integrations.botAIConfig(workspaceId ?? "", selectedBot?.id ?? "") });
+      setAIAPIKey("");
+      setFeedback({ message: "Đã lưu provider và model cho bot.", tone: "success" });
+    }
+  });
+  const createFlowMutation = useMutation({
+    mutationFn: () => {
+      if (!selectedBot) throw new Error("Chưa chọn bot.");
+      return api.bots.createFlow(workspaceId as string, selectedBot.id, {
+        knowledge_config: parseBotJSON(flowKnowledgeJSON, "Nguồn kiến thức"),
+        name: flowName.trim(),
+        prompt: flowPrompt.trim(),
+        tool_config: parseBotJSON(flowToolsJSON, "Công cụ"),
+        trigger_config: parseBotJSON(flowTriggerJSON, "Điều kiện kích hoạt")
+      });
+    },
+    onError: (error) => setFeedback({ message: errorMessage(error, "Không tạo được nghiệp vụ bot."), tone: "error" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.integrations.botFlows(workspaceId ?? "", selectedBot?.id ?? "") });
+      setFlowName("");
+      setFlowPrompt("");
+      setFeedback({ message: "Đã tạo nghiệp vụ bot ở trạng thái bản nháp.", tone: "success" });
+    }
+  });
+  const publishFlowMutation = useMutation({
+    mutationFn: (flowId: string) => api.bots.publishFlow(workspaceId as string, selectedBot?.id ?? "", flowId),
+    onError: (error) => setFeedback({ message: errorMessage(error, "Không xuất bản được nghiệp vụ bot."), tone: "error" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.integrations.botFlows(workspaceId ?? "", selectedBot?.id ?? "") });
+      setFeedback({ message: "Đã xuất bản nghiệp vụ bot.", tone: "success" });
+    }
+  });
+  const testFlowMutation = useMutation({
+    mutationFn: (flowId: string) => api.bots.testFlow(
+      workspaceId as string,
+      selectedBot?.id ?? "",
+      flowId,
+      parseBotJSON(flowTestJSON, "Dữ liệu thử")
+    ),
+    onError: (error) => setFeedback({ message: errorMessage(error, "Không chạy thử được nghiệp vụ bot."), tone: "error" }),
+    onSuccess: (run) => setFeedback({
+      message: run.status === "success" ? "Nghiệp vụ bot đã gọi mô hình AI thành công." : (run.error || `Kết quả chạy thử: ${run.status}.`),
+      tone: run.status === "success" ? "success" : "error"
+    })
   });
 
   const orderWalletMutation = useMutation({
@@ -5779,11 +6082,23 @@ function BotsPage({
     event.preventDefault();
     const name = createName.trim();
     const slug = slugify(createSlug || createName);
-    if (!name || slug.length < 3 || !workspaceId) {
-      setFeedback({ message: "Tên bot và slug từ 3 ký tự là bắt buộc.", tone: "error" });
+    if (!name || slug.length < 3 || !workspaceId || !createModel.trim() || !createEndpoint.trim() || !createPrompt.trim() || !targetChannelId) {
+      setFeedback({ message: "Hãy nhập đủ tên, model, endpoint, prompt và chọn kênh sử dụng bot.", tone: "error" });
       return;
     }
-    createBotMutation.mutate({ description: createDescription.trim() || undefined, name, slug });
+    createBotMutation.mutate({
+      apiKey: createAPIKey.trim() || undefined,
+      channelId: targetChannelId,
+      description: createDescription.trim() || undefined,
+      endpoint: createEndpoint.trim(),
+      model: createModel.trim(),
+      name,
+      prompt: createPrompt.trim(),
+      provider: createProvider,
+      secretRef: createSecretRef.trim() || undefined,
+      slug,
+      triggerType: createTriggerType
+    });
   }
 
   const activeBots = bots.filter((bot) => bot.status === "active").length;
@@ -5808,7 +6123,7 @@ function BotsPage({
       <section className="bot-hero">
         <div className="bot-hero__copy">
           <Badge tone="blue"><Sparkles size={13} /> Bot workspace</Badge>
-          <h2>Tự động hóa thông báo, cảnh báo và chăm sóc nội bộ</h2>
+          <h2>Tạo trợ lý theo đúng dữ liệu và quy trình của tổ chức</h2>
           <div className="bot-hero__stats">
             <span><strong>{bots.length}</strong> tổng bot</span>
             <span><strong>{activeBots}</strong> đang hoạt động</span>
@@ -5840,16 +6155,73 @@ function BotsPage({
         <form className="bot-create-form" onSubmit={handleCreateBot}>
           <header>
             <span><Bot size={20} /></span>
-            <div><strong>Tạo bot mới</strong><small>Bot sẽ sẵn sàng để kết nối với kênh sau khi tạo.</small></div>
+            <div><strong>Tạo bot có thể sử dụng ngay</strong><small>Khai báo mô hình, API key, nghiệp vụ và kênh trong một lần.</small></div>
           </header>
           <label>Tên bot<input autoFocus onChange={(event) => {
             setCreateName(event.target.value);
             setCreateSlug((current) => current || slugify(event.target.value));
-          }} placeholder="Ví dụ: Server Alert Bot" value={createName} /></label>
-          <label>Slug<input onChange={(event) => setCreateSlug(slugify(event.target.value))} placeholder="server-alert-bot" value={createSlug} /></label>
-          <label className="bot-create-form__description">Mô tả<textarea onChange={(event) => setCreateDescription(event.target.value)} placeholder="Bot dùng để làm gì?" value={createDescription} /></label>
-          <Button disabled={createBotMutation.isPending} size="sm" type="submit">
-            {createBotMutation.isPending ? "Đang tạo..." : "Tạo bot"}
+          }} placeholder="Ví dụ: Trợ lý nhân sự" value={createName} /></label>
+          <label>Slug<input onChange={(event) => setCreateSlug(slugify(event.target.value))} placeholder="tro-ly-nhan-su" value={createSlug} /></label>
+          <label>
+            Provider
+            <select
+              onChange={(event) => {
+                const provider = event.target.value;
+                setCreateProvider(provider);
+                if (provider === "ollama") {
+                  setCreateEndpoint("http://ollama:11434");
+                  setCreateModel("qwen2.5:7b");
+                } else if (provider === "localai") {
+                  setCreateEndpoint("http://local-ai:8080");
+                  setCreateModel("gpt-4");
+                } else {
+                  setCreateEndpoint("https://api.openai.com");
+                  setCreateModel("gpt-4o-mini");
+                }
+              }}
+              value={createProvider}
+            >
+              <option value="ollama">Ollama self-host</option>
+              <option value="localai">LocalAI self-host</option>
+              <option value="openai_compatible">OpenAI-compatible API</option>
+              <option value="webhook">Webhook AI riêng</option>
+            </select>
+          </label>
+          <label>Model<input onChange={(event) => setCreateModel(event.target.value)} placeholder="qwen2.5:7b" value={createModel} /></label>
+          <label className="bot-create-form__endpoint">Base URL / API endpoint<input onChange={(event) => setCreateEndpoint(event.target.value)} placeholder="http://ollama:11434" value={createEndpoint} /></label>
+          <label>
+            API key
+            <input
+              autoComplete="new-password"
+              onChange={(event) => setCreateAPIKey(event.target.value)}
+              placeholder={createProvider === "ollama" ? "Không bắt buộc với Ollama nội bộ" : "Nhập API key (được mã hóa khi lưu)"}
+              type="password"
+              value={createAPIKey}
+            />
+          </label>
+          <label>
+            Hoặc secret reference
+            <input onChange={(event) => setCreateSecretRef(event.target.value)} placeholder="env://BOT_AI_OPENAI_KEY" value={createSecretRef} />
+          </label>
+          <label>
+            Kênh sử dụng
+            <select onChange={(event) => setTargetChannelId(event.target.value)} value={targetChannelId}>
+              {availableChannels.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Kích hoạt khi
+            <select onChange={(event) => setCreateTriggerType(event.target.value)} value={createTriggerType}>
+              <option value="mention">Nhắc @bot</option>
+              <option value="command">Gõ lệnh /slug-bot</option>
+              <option value="all">Mọi tin nhắn trong kênh</option>
+            </select>
+          </label>
+          <label className="bot-create-form__prompt">System prompt<textarea onChange={(event) => setCreatePrompt(event.target.value)} placeholder="Vai trò của bot, dữ liệu được phép dùng, nguyên tắc trả lời và trường hợp cần chuyển cho con người..." value={createPrompt} /></label>
+          <label className="bot-create-form__description">Mô tả<textarea onChange={(event) => setCreateDescription(event.target.value)} placeholder="Mục đích của bot trong tổ chức" value={createDescription} /></label>
+          <small className="bot-create-form__security"><ShieldCheck size={14} /> API key được mã hóa trên server và không được trả lại qua API. Với endpoint public, thêm hostname vào BOT_AI_ALLOWED_HOSTS.</small>
+          <Button className="bot-create-form__submit" disabled={createBotMutation.isPending || !availableChannels.length} size="sm" type="submit">
+            {createBotMutation.isPending ? "Đang tạo và cấu hình..." : "Tạo, xuất bản và kết nối bot"}
           </Button>
         </form>
       ) : null}
@@ -5861,11 +6233,11 @@ function BotsPage({
         </div>
       ) : null}
 
-      {canUseOrder ? (
+      {canUseOrder && orderConfigured ? (
         <section className="order-bot-panel">
           <header>
             <div>
-              <Badge tone={orderConfigured ? "blue" : "red"}>{orderConfigured ? "Đã khai báo API" : "Thiếu API key"}</Badge>
+              <Badge tone="blue">Module tùy chọn đã bật</Badge>
               <h2>VPSTTT Order CSKH</h2>
               <p>Tra ví, tạo QR nạp ví và kiểm tra dịch vụ sắp hết hạn từ hệ thống order.</p>
               {orderConfigured ? <small>Trạng thái này chỉ xác nhận URL và API key đã được nhập; kết nối thật được kiểm tra khi thực hiện tra cứu.</small> : null}
@@ -5941,7 +6313,7 @@ function BotsPage({
                 ))}
               </div>
             ) : (
-              <EmptyState action={<Button onClick={() => setIsCreateOpen(true)} size="sm"><Plus size={15} />Tạo bot đầu tiên</Button>} description="Tạo Ticket Bot, Server Alert Bot hoặc Gia Hạn Bot để bắt đầu." title="Chưa có bot" />
+              <EmptyState action={<Button onClick={() => setIsCreateOpen(true)} size="sm"><Plus size={15} />Tạo bot đầu tiên</Button>} description="Tạo bot theo nghiệp vụ, dữ liệu và cách vận hành của tổ chức." title="Chưa có bot" />
             )}
           </section>
 
@@ -5952,6 +6324,69 @@ function BotsPage({
                   <span className="bot-control-panel__avatar">{selectedBot.avatar_url ? <img alt="" src={selectedBot.avatar_url} /> : <Bot size={26} />}</span>
                   <div><h2>{selectedBot.name}</h2><p>Cập nhật {formatSessionDate(selectedBot.updated_at)}</p></div>
                 </header>
+                <details className="bot-config-section" open>
+                  <summary><Sparkles size={16} /><span><strong>Mô hình AI</strong><small>Ollama, LocalAI hoặc endpoint tương thích OpenAI</small></span></summary>
+                  <form
+                    className="bot-config-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      saveAIConfigMutation.mutate();
+                    }}
+                  >
+                    <label>
+                      Provider
+                      <select onChange={(event) => setAIProvider(event.target.value)} value={aiProvider}>
+                        <option value="ollama">Ollama</option>
+                        <option value="localai">LocalAI</option>
+                        <option value="openai_compatible">OpenAI-compatible</option>
+                        <option value="webhook">Webhook riêng</option>
+                      </select>
+                    </label>
+                    <label>Model<input onChange={(event) => setAIModel(event.target.value)} placeholder="qwen2.5:7b" value={aiModel} /></label>
+                    <label>API key mới<input autoComplete="new-password" onChange={(event) => setAIAPIKey(event.target.value)} placeholder="Để trống để giữ API key đang lưu" type="password" value={aiAPIKey} /></label>
+                    <label>Secret reference<input onChange={(event) => setAISecretRef(event.target.value)} placeholder="env://BOT_AI_OPENAI_KEY" value={aiSecretRef} /></label>
+                    <label>Cấu hình JSON<textarea onChange={(event) => setAISettingsJSON(event.target.value)} value={aiSettingsJSON} /></label>
+                    <Button disabled={!aiProvider.trim() || !aiModel.trim() || saveAIConfigMutation.isPending} size="sm" type="submit">
+                      {saveAIConfigMutation.isPending ? "Đang lưu..." : "Lưu mô hình"}
+                    </Button>
+                    {aiConfigQuery.isError ? <small>Bot chưa có cấu hình AI. Nhập thông tin phía trên để khởi tạo.</small> : null}
+                  </form>
+                </details>
+                <details className="bot-config-section" open>
+                  <summary><Workflow size={16} /><span><strong>Nghiệp vụ & prompt</strong><small>Mỗi flow là một quy trình độc lập do tổ chức tự định nghĩa</small></span></summary>
+                  <form
+                    className="bot-config-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      createFlowMutation.mutate();
+                    }}
+                  >
+                    <label>Tên nghiệp vụ<input onChange={(event) => setFlowName(event.target.value)} placeholder="Tiếp nhận yêu cầu nghỉ phép" value={flowName} /></label>
+                    <label>System prompt<textarea onChange={(event) => setFlowPrompt(event.target.value)} placeholder="Vai trò, quy tắc, dữ liệu được phép dùng và định dạng kết quả..." value={flowPrompt} /></label>
+                    <div className="bot-config-form__json-grid">
+                      <label>Trigger JSON<textarea onChange={(event) => setFlowTriggerJSON(event.target.value)} value={flowTriggerJSON} /></label>
+                      <label>Tools JSON<textarea onChange={(event) => setFlowToolsJSON(event.target.value)} value={flowToolsJSON} /></label>
+                      <label>Knowledge JSON<textarea onChange={(event) => setFlowKnowledgeJSON(event.target.value)} value={flowKnowledgeJSON} /></label>
+                    </div>
+                    <Button disabled={!flowName.trim() || !flowPrompt.trim() || createFlowMutation.isPending} size="sm" type="submit">
+                      {createFlowMutation.isPending ? "Đang tạo..." : "Tạo bản nháp"}
+                    </Button>
+                  </form>
+                  <div className="bot-flow-list">
+                    {(flowsQuery.data ?? []).map((flow) => (
+                      <article key={flow.id}>
+                        <span><strong>{flow.name}</strong><small>v{flow.version} · {flow.status === "published" ? "Đã xuất bản" : "Bản nháp"}</small></span>
+                        <div>
+                          {flow.status !== "published" ? <Button disabled={publishFlowMutation.isPending} onClick={() => publishFlowMutation.mutate(flow.id)} size="sm" variant="secondary">Xuất bản</Button> : null}
+                          <Button disabled={testFlowMutation.isPending} onClick={() => testFlowMutation.mutate(flow.id)} size="sm" variant="ghost">Chạy thử</Button>
+                        </div>
+                      </article>
+                    ))}
+                    {(flowsQuery.data ?? []).length ? (
+                      <label className="bot-flow-test-input">Dữ liệu chạy thử JSON<textarea onChange={(event) => setFlowTestJSON(event.target.value)} value={flowTestJSON} /></label>
+                    ) : <small>Chưa có nghiệp vụ nào cho bot này.</small>}
+                  </div>
+                </details>
                 <section>
                   <div className="bot-section-title"><span><Zap size={16} /></span><div><strong>Kết nối kênh</strong><small>{installations.length} cài đặt hiện có</small></div></div>
                   <div className="bot-channel-action">
@@ -6258,6 +6693,7 @@ function ChatHeader({
   mobileFeatureMenu,
   onBack,
   onMarkUnread,
+  onOpenCollaboration,
   onStartAudioCall,
   onStartVideoCall,
   onToggleDetailPanel,
@@ -6274,6 +6710,7 @@ function ChatHeader({
   mobileFeatureMenu?: ReactNode;
   onBack?: () => void;
   onMarkUnread?: () => void;
+  onOpenCollaboration?: () => void;
   onStartAudioCall?: () => void;
   onStartVideoCall?: () => void;
   onToggleDetailPanel?: () => void;
@@ -6305,6 +6742,22 @@ function ChatHeader({
         </div>
       </div>
       <div className="chat-actions">
+        <Tooltip className="chat-collaboration-action-wrap" label={channel.type === "direct" ? "Mở công cụ cộng tác" : "Mở phòng họp nhóm, link khách và breakout room"}>
+          <Button
+            aria-label="Cộng tác và họp"
+            className="chat-collaboration-action"
+            onClick={() => {
+              setOpenPopover(null);
+              onOpenCollaboration?.();
+            }}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {channel.type === "direct" ? <Sparkles size={17} /> : <Video size={17} />}
+            <span>{channel.type === "direct" ? "Cộng tác" : "Họp nhóm"}</span>
+          </Button>
+        </Tooltip>
         <div className="chat-header-control">
           <Tooltip label="Thành viên">
             <Button
@@ -6390,20 +6843,6 @@ function ChatHeader({
             </Tooltip>
           </>
         ) : null}
-        <Tooltip className="chat-detail-action" label={isDetailPanelOpen ? "Ẩn thông tin cuộc trò chuyện" : "Hiện thông tin cuộc trò chuyện"}>
-          <Button
-            aria-label={isDetailPanelOpen ? "Ẩn thông tin cuộc trò chuyện" : "Hiện thông tin cuộc trò chuyện"}
-            className={isDetailPanelOpen ? "chat-action-active" : undefined}
-            disabled={!onToggleDetailPanel}
-            onClick={() => {
-              setOpenPopover(null);
-              onToggleDetailPanel?.();
-            }}
-            variant="icon"
-          >
-            <Info size={19} />
-          </Button>
-        </Tooltip>
         <div className="chat-header-control">
           <Tooltip label="Tùy chọn khác">
             <Button
@@ -6426,6 +6865,16 @@ function ChatHeader({
                   type="button"
                 >
                   <Info size={17} /> {isDetailPanelOpen ? "Ẩn thông tin" : "Thông tin cuộc trò chuyện"}
+                </button>
+              ) : null}
+              {onOpenCollaboration ? (
+                <button
+                  onClick={() => { onOpenCollaboration(); setOpenPopover(null); }}
+                  role="menuitem"
+                  type="button"
+                >
+                  {channel.type === "direct" ? <Sparkles size={17} /> : <Video size={17} />}
+                  {channel.type === "direct" ? "Cộng tác" : "Họp nhóm & hội thảo"}
                 </button>
               ) : null}
               <button onClick={() => { onToggleFavorite?.(); setOpenPopover(null); }} role="menuitem" type="button">
@@ -9258,7 +9707,6 @@ function RightDetailPanel({
       await queryClient.invalidateQueries({ queryKey: threadDetailsKey });
     }
   });
-
   useEffect(() => {
     setThreadDraft("");
     setThreadTitle("");
@@ -10043,21 +10491,28 @@ function shouldOpenExternally(link: HTMLAnchorElement): boolean {
 }
 
 function BrandedQRCode({ alt, className = "", src }: { alt: string; className?: string; src: string }) {
+  const organizationLogo = useAuthStore((state) => state.zoneRuntime?.logo_url);
   return (
     <span className={`branded-qr${className ? ` ${className}` : ""}`}>
       <img alt={alt} className="branded-qr__image" src={src} />
-      <span className="branded-qr__logo" aria-hidden="true">
-        <img alt="" src="/brand/vpsttt-logo.png" />
-      </span>
+      {organizationLogo ? (
+        <span className="branded-qr__logo" aria-hidden="true">
+          <img alt="" src={organizationLogo} />
+        </span>
+      ) : null}
     </span>
   );
 }
 
 function adminPanelUrl(): string {
+  const configuredAdminURL = useAuthStore.getState().zoneRuntime?.admin_base_url;
+  if (configuredAdminURL) {
+    return configuredAdminURL;
+  }
   try {
     return `${new URL(runtimeEnvironment.apiBaseUrl).origin}/admin`;
   } catch {
-    return "https://chat.vpsttt.com/admin";
+    return "/admin";
   }
 }
 

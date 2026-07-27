@@ -25,6 +25,7 @@ import (
 	backupspostgres "github.com/duclamdev/application-chat/backend/internal/modules/backups/infrastructure/postgres"
 	botsapp "github.com/duclamdev/application-chat/backend/internal/modules/bots/application"
 	botshttp "github.com/duclamdev/application-chat/backend/internal/modules/bots/delivery/http"
+	botsai "github.com/duclamdev/application-chat/backend/internal/modules/bots/infrastructure/ai"
 	botspostgres "github.com/duclamdev/application-chat/backend/internal/modules/bots/infrastructure/postgres"
 	callsapp "github.com/duclamdev/application-chat/backend/internal/modules/calls/application"
 	callshttp "github.com/duclamdev/application-chat/backend/internal/modules/calls/delivery/http"
@@ -163,6 +164,9 @@ func (a *API) registerAPIV1() {
 	zoneRecoveryAuthMiddleware := middleware.AuthForZoneRecovery(tokenManager, tenancyService)
 	tenancyHandler := tenancyhttp.NewHandler(tenancyService, a.cfg.Security.CaddyAskSecret)
 	tenancyHandler.SetSaaSProvisioningEnabled(!a.cfg.Deployment.IsSelfHosted())
+	if strings.EqualFold(a.cfg.Storage.Provider, "local") {
+		tenancyHandler.SetBrandingStoragePath(a.cfg.Storage.LocalPath)
+	}
 	tenancyHandler.RegisterRoutes(a.engine, v1, authMiddleware, zoneRecoveryAuthMiddleware)
 
 	authRepo := authpostgres.NewRepository(pool, a.cfg.Registration.DefaultWorkspaceID)
@@ -278,6 +282,11 @@ func (a *API) registerAPIV1() {
 
 	botsRepo := botspostgres.NewRepository(pool)
 	botsService := botsapp.NewService(botsRepo, rbacService)
+	botsService.SetSecretMasterKey(a.cfg.Security.BotAISecretKey)
+	botsService.SetFlowRuntime(botsai.NewClient(
+		strings.Split(os.Getenv("BOT_AI_ALLOWED_HOSTS"), ","),
+		a.cfg.Security.BotAISecretKey,
+	))
 	botsHandler := botshttp.NewHandler(botsService)
 	botsHandler.RegisterRoutes(v1, authMiddleware)
 
@@ -335,7 +344,7 @@ func (a *API) registerAPIV1() {
 		realtimePublisher = messagesws.NewPublisher(a.resources.WebSocket)
 	}
 	messagesService := messagesapp.NewService(messagesRepo, rbacService, realtimePublisher)
-	messagesService.SetAutoResponders(orderService)
+	messagesService.SetAutoResponders(botsService, orderService)
 	messagesHandler := messageshttp.NewHandler(messagesService)
 	messagesHandler.RegisterRoutes(v1, authMiddleware)
 }

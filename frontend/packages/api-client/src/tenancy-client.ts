@@ -91,6 +91,12 @@ export function createTenancyClient(http: HttpClient) {
       const data = await http.patch<unknown>("/api/v1/zones/current", input);
       return requiredItem<ZoneAdminOverview>(data, "zone");
     },
+    async uploadCurrentZoneLogo(file: File) {
+      const form = new FormData();
+      form.append("logo", file, file.name);
+      const data = await http.post<unknown>("/api/v1/zones/current/logo", form);
+      return requiredItem<{ content_type: string; logo_path: string; size: number }>(data, "logo");
+    },
     async setZoneLifecycle(
       action: "suspend" | "resume" | "archive",
       reason?: string,

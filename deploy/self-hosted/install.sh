@@ -6,15 +6,17 @@ COMPOSE_FILE="$SCRIPT_DIR/compose.yml"
 ENV_FILE="$SCRIPT_DIR/.env"
 DOMAIN=""
 EMAIL=""
-INSTANCE_NAME="VPSTTT Chat"
+INSTANCE_NAME="Team Chat"
+INSTANCE_LOGO_URL=""
+INSTANCE_REGISTRATION_MODE="open"
 TURN_EXTERNAL_IP=""
-PORTAL_ORIGIN="https://chat.vpsttt.com"
-PORTAL_PATH="/portal"
+PORTAL_ORIGIN="https://download.vpsttt.com"
+PORTAL_DOMAIN="download.vpsttt.com"
 FORCE=0
 SKIP_DNS_CHECK=0
 
 usage() {
-  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--portal-origin https://chat.vpsttt.com] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
+  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--portal-origin https://download.vpsttt.com] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -22,6 +24,8 @@ while [ "$#" -gt 0 ]; do
     --domain) DOMAIN=${2:-}; shift 2 ;;
     --email) EMAIL=${2:-}; shift 2 ;;
     --name) INSTANCE_NAME=${2:-}; shift 2 ;;
+    --logo-url) INSTANCE_LOGO_URL=${2:-}; shift 2 ;;
+    --registration-mode) INSTANCE_REGISTRATION_MODE=${2:-}; shift 2 ;;
     --portal-origin) PORTAL_ORIGIN=${2:-}; shift 2 ;;
     --external-ip) TURN_EXTERNAL_IP=${2:-}; shift 2 ;;
     --skip-dns-check) SKIP_DNS_CHECK=1; shift ;;
@@ -49,10 +53,20 @@ if [ -z "$INSTANCE_NAME" ] ||
   echo "Instance name must not be empty or contain #, =, or control characters." >&2
   exit 1
 fi
+if [ -n "$INSTANCE_LOGO_URL" ] &&
+  ! printf '%s' "$INSTANCE_LOGO_URL" | grep -Eq '^https://[^/@[:space:]]+(/[^[:space:]]*)?$'; then
+  echo "Logo URL must be a public HTTPS URL without embedded credentials." >&2
+  exit 1
+fi
+case "$INSTANCE_REGISTRATION_MODE" in
+  open|invite_only|closed) ;;
+  *) echo "Registration mode must be open, invite_only or closed." >&2; exit 1 ;;
+esac
 if ! printf '%s' "$PORTAL_ORIGIN" | grep -Eq '^https://([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}(:[0-9]{1,5})?$'; then
   echo "Portal origin must be an HTTPS origin without a path." >&2
   exit 1
 fi
+PORTAL_DOMAIN=$(printf '%s' "$PORTAL_ORIGIN" | sed -E 's#^https://##; s#:[0-9]+$##' | tr '[:upper:]' '[:lower:]')
 for command_name in docker openssl curl; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Missing required command: $command_name" >&2
@@ -112,6 +126,7 @@ RABBITMQ_PASSWORD=$(openssl rand -hex 24)
 JWT_ACCESS_SECRET=$(openssl rand -hex 48)
 JWT_REFRESH_SECRET=$(openssl rand -hex 48)
 WEBHOOK_SIGNING_SECRET=$(openssl rand -hex 48)
+BOT_AI_SECRET_KEY=$(openssl rand -hex 48)
 OIDC_STATE_SECRET=$(openssl rand -hex 48)
 TURN_PASSWORD=$(openssl rand -hex 24)
 TURN_USERNAME=vpsttt-turn
@@ -121,6 +136,8 @@ cat > "$ENV_FILE" <<EOF
 DEPLOYMENT_MODE=self_hosted
 INSTANCE_DOMAIN=$DOMAIN
 INSTANCE_NAME=$INSTANCE_NAME
+INSTANCE_LOGO_URL=$INSTANCE_LOGO_URL
+INSTANCE_REGISTRATION_MODE=$INSTANCE_REGISTRATION_MODE
 APP_ENV=production
 APP_NAME=$INSTANCE_NAME
 APP_URL=https://$DOMAIN
@@ -131,6 +148,11 @@ API_HTTP_HOST=0.0.0.0
 API_HTTP_PORT=8080
 TRUSTED_PROXIES=172.16.0.0/12,127.0.0.1
 PORTAL_ORIGIN=$PORTAL_ORIGIN
+PORTAL_DOMAIN=$PORTAL_DOMAIN
+PORTAL_VERSION=self-hosted
+DESKTOP_DOWNLOAD_URL=$PORTAL_ORIGIN/download/
+MOBILE_DOWNLOAD_URL=$PORTAL_ORIGIN/download/
+DOCUMENTATION_URL=$PORTAL_ORIGIN/#self-host
 CORS_ALLOWED_ORIGINS=https://$DOMAIN,$PORTAL_ORIGIN,http://tauri.localhost,https://tauri.localhost,tauri://localhost
 SECURE_HEADERS_ENABLED=true
 RATE_LIMIT_ENABLED=true
@@ -157,6 +179,7 @@ BACKUP_TIMEOUT=30m
 JWT_ACCESS_SECRET=$JWT_ACCESS_SECRET
 JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET
 WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
+BOT_AI_SECRET_KEY=$BOT_AI_SECRET_KEY
 OIDC_STATE_SECRET=$OIDC_STATE_SECRET
 OIDC_CLIENT_SECRETS=
 GOOGLE_CLIENT_ID=
@@ -193,5 +216,6 @@ until curl -fsS --max-time 10 "https://$DOMAIN/ready" >/dev/null 2>&1; do
 done
 
 echo "VPSTTT Chat is ready at https://$DOMAIN"
-echo "Register or sign in through $PORTAL_ORIGIN$PORTAL_PATH with domain $DOMAIN"
+echo "Download portal is ready at $PORTAL_ORIGIN"
+echo "Register or sign in through $PORTAL_ORIGIN with domain $DOMAIN"
 echo "The first account registered on this domain becomes workspace owner."

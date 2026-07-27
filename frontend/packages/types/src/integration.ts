@@ -88,6 +88,66 @@ export type SendBotMessageInput = {
   metadata?: JsonValue;
 };
 
+export type BotAIConfig = {
+  workspace_id: Id;
+  bot_id: Id;
+  provider: string;
+  model: string;
+  secret_ref?: string | null;
+  settings?: JsonValue;
+  created_by?: Id | null;
+  updated_by?: Id | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+};
+
+export type SaveBotAIConfigInput = {
+  provider: string;
+  model: string;
+  api_key?: string;
+  secret_ref?: string;
+  settings?: JsonValue;
+};
+
+export type BotFlow = {
+  id: Id;
+  workspace_id: Id;
+  bot_id: Id;
+  version: number;
+  status: "draft" | "published" | string;
+  name: string;
+  prompt: string;
+  trigger_config?: JsonValue;
+  tool_config?: JsonValue;
+  knowledge_config?: JsonValue;
+  created_by?: Id | null;
+  updated_by?: Id | null;
+  published_at?: ISODateTime | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+};
+
+export type SaveBotFlowInput = {
+  name: string;
+  prompt: string;
+  trigger_config?: JsonValue;
+  tool_config?: JsonValue;
+  knowledge_config?: JsonValue;
+};
+
+export type BotFlowRun = {
+  id: Id;
+  workspace_id: Id;
+  bot_id: Id;
+  flow_id: Id;
+  input?: JsonValue;
+  transcript?: JsonValue;
+  status: string;
+  error?: string | null;
+  created_by?: Id | null;
+  created_at: ISODateTime;
+};
+
 export type OrderBotStatus = {
   configured: boolean;
   quick_order_configured?: boolean;

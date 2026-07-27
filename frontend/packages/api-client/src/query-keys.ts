@@ -83,6 +83,8 @@ export const queryKeys = {
     botInstallations: (workspaceId: string, botId: string) =>
       ["integrations", "bots", workspaceId, botId, "installations"] as const,
     bots: (workspaceId: string) => ["integrations", "bots", workspaceId] as const,
+    botAIConfig: (workspaceId: string, botId: string) => ["integrations", "bots", workspaceId, botId, "ai-config"] as const,
+    botFlows: (workspaceId: string, botId: string) => ["integrations", "bots", workspaceId, botId, "flows"] as const,
     incomingWebhooks: (workspaceId: string) => ["integrations", "incoming-webhooks", workspaceId] as const,
     outgoingWebhooks: (workspaceId: string) => ["integrations", "outgoing-webhooks", workspaceId] as const,
     webhookDeliveries: (workspaceId: string, webhookId: string) =>

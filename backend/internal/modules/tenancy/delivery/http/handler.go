@@ -1,8 +1,14 @@
 package http
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"io"
 	nethttp "net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	tenancyapp "github.com/duclamdev/application-chat/backend/internal/modules/tenancy/application"
@@ -12,10 +18,15 @@ import (
 )
 
 type Handler struct {
+	brandingStoragePath     string
 	service                 *tenancyapp.Service
 	caddyAskSecret          string
 	saasProvisioningEnabled bool
 }
+
+const maxBrandingLogoBytes = 4 << 20
+
+var safeBrandingPathSegment = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 func NewHandler(service *tenancyapp.Service, caddyAskSecrets ...string) *Handler {
 	handler := &Handler{
@@ -30,6 +41,10 @@ func NewHandler(service *tenancyapp.Service, caddyAskSecrets ...string) *Handler
 
 func (h *Handler) SetSaaSProvisioningEnabled(enabled bool) {
 	h.saasProvisioningEnabled = enabled
+}
+
+func (h *Handler) SetBrandingStoragePath(path string) {
+	h.brandingStoragePath = strings.TrimSpace(path)
 }
 
 type createDomainClaimRequest struct {
@@ -125,6 +140,7 @@ func (h *Handler) RegisterRoutes(
 	private.Use(authMiddleware)
 	private.GET("/current", h.GetCurrentZone)
 	private.PATCH("/current", h.UpdateCurrentZone)
+	private.POST("/current/logo", h.UploadCurrentZoneLogo)
 	private.GET("/current/quota", h.GetZoneQuota)
 	private.PUT("/current/quota", h.UpdateZoneQuota)
 	private.GET("/current/oidc-providers", h.ListOIDCProviders)
@@ -154,6 +170,110 @@ func (h *Handler) RegisterRoutes(
 	recovery := v1.Group("/zones")
 	recovery.Use(recoveryAuth)
 	recovery.POST("/current/lifecycle", h.SetCurrentZoneLifecycle)
+}
+
+func (h *Handler) UploadCurrentZoneLogo(c *gin.Context) {
+	zoneID := strings.TrimSpace(middleware.CurrentZoneID(c))
+	if h.brandingStoragePath == "" {
+		response.Fail(c, nethttp.StatusServiceUnavailable, "BRANDING_STORAGE_UNAVAILABLE", "Máy chủ chưa bật storage local cho logo.", nil)
+		return
+	}
+	if !safeBrandingPathSegment.MatchString(zoneID) {
+		response.Fail(c, nethttp.StatusBadRequest, "ZONE_REQUIRED", "Không xác định được vùng máy chủ hiện tại.", nil)
+		return
+	}
+	if _, err := h.service.GetZoneAdminOverview(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		zoneID,
+	); err != nil {
+		response.Error(c, err)
+		return
+	}
+
+	c.Request.Body = nethttp.MaxBytesReader(c.Writer, c.Request.Body, maxBrandingLogoBytes+(512<<10))
+	header, err := c.FormFile("logo")
+	if err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "LOGO_FILE_REQUIRED", "Hãy chọn một file logo PNG, JPEG hoặc WebP.", nil)
+		return
+	}
+	if header.Size <= 0 || header.Size > maxBrandingLogoBytes {
+		response.Fail(c, nethttp.StatusRequestEntityTooLarge, "LOGO_TOO_LARGE", "Logo không được vượt quá 4 MB.", nil)
+		return
+	}
+	source, err := header.Open()
+	if err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "LOGO_READ_FAILED", "Không đọc được file logo đã chọn.", nil)
+		return
+	}
+	defer source.Close()
+	content, err := io.ReadAll(io.LimitReader(source, maxBrandingLogoBytes+1))
+	if err != nil || len(content) == 0 {
+		response.Fail(c, nethttp.StatusBadRequest, "LOGO_READ_FAILED", "Không đọc được file logo đã chọn.", nil)
+		return
+	}
+	if len(content) > maxBrandingLogoBytes {
+		response.Fail(c, nethttp.StatusRequestEntityTooLarge, "LOGO_TOO_LARGE", "Logo không được vượt quá 4 MB.", nil)
+		return
+	}
+	contentType, extension := brandingLogoType(content)
+	if extension == "" {
+		response.Fail(c, nethttp.StatusUnsupportedMediaType, "LOGO_TYPE_UNSUPPORTED", "Chỉ hỗ trợ logo PNG, JPEG hoặc WebP.", nil)
+		return
+	}
+
+	sum := sha256.Sum256(content)
+	fileName := "logo-" + hex.EncodeToString(sum[:6]) + extension
+	targetDir := filepath.Join(h.brandingStoragePath, "public", "branding", zoneID)
+	if err := os.MkdirAll(targetDir, 0o750); err != nil {
+		response.Fail(c, nethttp.StatusInternalServerError, "LOGO_STORE_FAILED", "Không tạo được thư mục lưu logo.", nil)
+		return
+	}
+	tempFile, err := os.CreateTemp(targetDir, ".logo-upload-*")
+	if err != nil {
+		response.Fail(c, nethttp.StatusInternalServerError, "LOGO_STORE_FAILED", "Không lưu được logo.", nil)
+		return
+	}
+	tempName := tempFile.Name()
+	defer os.Remove(tempName)
+	if err := tempFile.Chmod(0o644); err != nil {
+		tempFile.Close()
+		response.Fail(c, nethttp.StatusInternalServerError, "LOGO_STORE_FAILED", "Không thiết lập được quyền đọc logo.", nil)
+		return
+	}
+	if _, err := tempFile.Write(content); err != nil {
+		tempFile.Close()
+		response.Fail(c, nethttp.StatusInternalServerError, "LOGO_STORE_FAILED", "Không ghi được file logo.", nil)
+		return
+	}
+	if err := tempFile.Close(); err != nil {
+		response.Fail(c, nethttp.StatusInternalServerError, "LOGO_STORE_FAILED", "Không hoàn tất được file logo.", nil)
+		return
+	}
+	targetPath := filepath.Join(targetDir, fileName)
+	if err := os.Rename(tempName, targetPath); err != nil && !os.IsExist(err) {
+		response.Fail(c, nethttp.StatusInternalServerError, "LOGO_STORE_FAILED", "Không hoàn tất được file logo.", nil)
+		return
+	}
+
+	response.Created(c, gin.H{"logo": gin.H{
+		"content_type": contentType,
+		"logo_path":    "/branding/" + zoneID + "/" + fileName,
+		"size":         len(content),
+	}})
+}
+
+func brandingLogoType(content []byte) (string, string) {
+	switch nethttp.DetectContentType(content) {
+	case "image/png":
+		return "image/png", ".png"
+	case "image/jpeg":
+		return "image/jpeg", ".jpg"
+	case "image/webp":
+		return "image/webp", ".webp"
+	default:
+		return "", ""
+	}
 }
 
 func (h *Handler) CaddyAsk(c *gin.Context) {
@@ -205,7 +325,7 @@ func (h *Handler) Capabilities(c *gin.Context) {
 func (h *Handler) CreateDomainClaim(c *gin.Context) {
 	var req createDomainClaimRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	claim, err := h.service.CreateDomainClaim(c.Request.Context(), tenancyapp.CreateDomainClaimInput{
@@ -263,7 +383,7 @@ func (h *Handler) GetCurrentZone(c *gin.Context) {
 func (h *Handler) UpdateCurrentZone(c *gin.Context) {
 	var req updateZoneSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	overview, err := h.service.UpdateZoneSettings(c.Request.Context(), tenancyapp.UpdateZoneSettingsInput{
@@ -283,7 +403,7 @@ func (h *Handler) UpdateCurrentZone(c *gin.Context) {
 func (h *Handler) SetCurrentZoneLifecycle(c *gin.Context) {
 	var req zoneLifecycleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	err := h.service.SetZoneLifecycle(c.Request.Context(), tenancyapp.ZoneLifecycleInput{
@@ -302,7 +422,7 @@ func (h *Handler) SetCurrentZoneLifecycle(c *gin.Context) {
 func (h *Handler) CreateAdditionalDomain(c *gin.Context) {
 	var req createAdditionalDomainRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	claim, err := h.service.CreateAdditionalDomain(c.Request.Context(), tenancyapp.CreateAdditionalDomainInput{
@@ -360,7 +480,7 @@ func (h *Handler) ListDeploymentRequests(c *gin.Context) {
 func (h *Handler) CreateDeploymentRequest(c *gin.Context) {
 	var req createDeploymentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	request, err := h.service.CreateDeploymentRequest(c.Request.Context(), tenancyapp.CreateDeploymentRequestInput{
@@ -393,7 +513,7 @@ func (h *Handler) GetZoneQuota(c *gin.Context) {
 func (h *Handler) UpdateZoneQuota(c *gin.Context) {
 	var req updateZoneQuotaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	quota, err := h.service.UpdateZoneQuota(c.Request.Context(), tenancyapp.UpdateZoneQuotaInput{
@@ -429,7 +549,7 @@ func (h *Handler) ListOIDCProviders(c *gin.Context) {
 func (h *Handler) CreateOIDCProvider(c *gin.Context) {
 	var req createOIDCProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	provider, err := h.service.CreateOIDCProvider(c.Request.Context(), tenancyapp.CreateOIDCProviderInput{
@@ -455,7 +575,7 @@ func (h *Handler) CreateOIDCProvider(c *gin.Context) {
 func (h *Handler) UpdateOIDCProvider(c *gin.Context) {
 	var req updateOIDCProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	provider, err := h.service.UpdateOIDCProvider(c.Request.Context(), tenancyapp.UpdateOIDCProviderInput{
@@ -522,7 +642,7 @@ func (h *Handler) ListAutomationInstallations(c *gin.Context) {
 func (h *Handler) CreateAutomationInstallation(c *gin.Context) {
 	var req createAutomationInstallationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	installation, err := h.service.CreateAutomationInstallation(
@@ -548,7 +668,7 @@ func (h *Handler) CreateAutomationInstallation(c *gin.Context) {
 func (h *Handler) UpdateAutomationInstallation(c *gin.Context) {
 	var req updateAutomationInstallationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON khong hop le.", nil)
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Nội dung JSON không hợp lệ.", nil)
 		return
 	}
 	installation, err := h.service.UpdateAutomationInstallation(

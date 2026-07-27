@@ -37,6 +37,7 @@ type aiConfigRequest struct {
 	Provider  string          `json:"provider"`
 	Model     string          `json:"model"`
 	SecretRef string          `json:"secret_ref"`
+	APIKey    string          `json:"api_key"`
 	Settings  json.RawMessage `json:"settings"`
 }
 
@@ -176,6 +177,7 @@ func (h *Handler) UpsertAIConfig(c *gin.Context) {
 		Provider:    req.Provider,
 		Model:       req.Model,
 		SecretRef:   req.SecretRef,
+		APIKey:      req.APIKey,
 		Settings:    req.Settings,
 	})
 	if err != nil {

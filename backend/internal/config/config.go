@@ -138,6 +138,7 @@ type SecurityConfig struct {
 	JWTAccessSecret      string
 	JWTRefreshSecret     string
 	WebhookSigningSecret string
+	BotAISecretKey       string
 	GoogleClientID       string
 	CaddyAskSecret       string
 	OIDCStateSecret      string
@@ -166,9 +167,11 @@ type APNSConfig struct {
 }
 
 type DeploymentConfig struct {
-	Mode           string
-	InstanceDomain string
-	InstanceName   string
+	Mode                     string
+	InstanceDomain           string
+	InstanceName             string
+	InstanceLogoURL          string
+	InstanceRegistrationMode string
 }
 
 func (c DeploymentConfig) IsSelfHosted() bool {
@@ -277,6 +280,7 @@ func Load() (*Config, error) {
 			JWTAccessSecret:      getEnv("JWT_ACCESS_SECRET", "dev_access_secret_local_only_do_not_use_in_production"),
 			JWTRefreshSecret:     getEnv("JWT_REFRESH_SECRET", "dev_refresh_secret_local_only_do_not_use_in_production"),
 			WebhookSigningSecret: getEnv("WEBHOOK_SIGNING_SECRET", ""),
+			BotAISecretKey:       getEnv("BOT_AI_SECRET_KEY", ""),
 			GoogleClientID:       getEnv("GOOGLE_CLIENT_ID", ""),
 			CaddyAskSecret:       getEnv("CADDY_ASK_SECRET", ""),
 			OIDCStateSecret:      getEnv("OIDC_STATE_SECRET", ""),
@@ -307,9 +311,11 @@ func Load() (*Config, error) {
 			Sandbox:          getEnvBool("APNS_SANDBOX", false),
 		},
 		Deployment: DeploymentConfig{
-			Mode:           deploymentMode,
-			InstanceDomain: strings.ToLower(strings.TrimSpace(getEnv("INSTANCE_DOMAIN", instanceDomainFallback))),
-			InstanceName:   strings.TrimSpace(getEnv("INSTANCE_NAME", "VPSTTT Chat")),
+			Mode:                     deploymentMode,
+			InstanceDomain:           strings.ToLower(strings.TrimSpace(getEnv("INSTANCE_DOMAIN", instanceDomainFallback))),
+			InstanceName:             strings.TrimSpace(getEnv("INSTANCE_NAME", "WebTui Chat")),
+			InstanceLogoURL:          strings.TrimSpace(getEnv("INSTANCE_LOGO_URL", "")),
+			InstanceRegistrationMode: strings.ToLower(strings.TrimSpace(getEnv("INSTANCE_REGISTRATION_MODE", "open"))),
 		},
 		Registration: RegistrationConfig{
 			DefaultWorkspaceID:    getEnv("REGISTRATION_DEFAULT_WORKSPACE_ID", ""),
@@ -402,6 +408,17 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(c.Deployment.InstanceName) == "" {
 			problems = append(problems, "INSTANCE_NAME must not be empty when DEPLOYMENT_MODE=self_hosted")
 		}
+		if logoURL := strings.TrimSpace(c.Deployment.InstanceLogoURL); logoURL != "" {
+			parsed, err := url.Parse(logoURL)
+			if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+				problems = append(problems, "INSTANCE_LOGO_URL must be a public HTTPS URL without embedded credentials")
+			}
+		}
+		switch strings.ToLower(strings.TrimSpace(c.Deployment.InstanceRegistrationMode)) {
+		case "", "open", "invite_only", "closed":
+		default:
+			problems = append(problems, "INSTANCE_REGISTRATION_MODE only supports open, invite_only or closed")
+		}
 	default:
 		problems = append(problems, "DEPLOYMENT_MODE only supports saas or self_hosted")
 	}
@@ -465,16 +482,19 @@ func (c *Config) Validate() error {
 		if isWeakSecret(c.Security.WebhookSigningSecret) {
 			problems = append(problems, "WEBHOOK_SIGNING_SECRET chưa an toàn")
 		}
+		if isWeakSecret(c.Security.BotAISecretKey) {
+			problems = append(problems, "BOT_AI_SECRET_KEY chưa an toàn")
+		}
 	}
 	if c.Security.OIDCStateSecret != "" && isWeakSecret(c.Security.OIDCStateSecret) {
-		problems = append(problems, "OIDC_STATE_SECRET chua an toan")
+		problems = append(problems, "OIDC_STATE_SECRET chưa an toàn")
 	}
 	if len(c.Security.OIDCClientSecrets) > 0 && strings.TrimSpace(c.Security.OIDCStateSecret) == "" {
-		problems = append(problems, "OIDC_STATE_SECRET bat buoc khi OIDC_CLIENT_SECRETS duoc cau hinh")
+		problems = append(problems, "OIDC_STATE_SECRET bắt buộc khi OIDC_CLIENT_SECRETS được cấu hình")
 	}
 	for alias := range c.Security.OIDCClientSecrets {
 		if !oidcSecretAliasPattern.MatchString(strings.ToLower(strings.TrimSpace(alias))) {
-			problems = append(problems, "OIDC_CLIENT_SECRETS chua alias khong hop le")
+			problems = append(problems, "OIDC_CLIENT_SECRETS chứa alias không hợp lệ")
 			break
 		}
 	}

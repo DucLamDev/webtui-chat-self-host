@@ -370,7 +370,7 @@ function JobEditPanel({
       }}
     >
       <label>Tên quy trình<input onChange={(event) => setName(event.target.value)} required value={name} /></label>
-      <label>Lịch cron<input onChange={(event) => setSchedule(event.target.value)} required value={schedule} /></label>
+      <CronScheduleBuilder onChange={setSchedule} value={schedule} />
       <label>
         Runner
         <select onChange={(event) => setRunner(event.target.value)} value={runner}>
@@ -404,7 +404,123 @@ function JobCreateForm({ isPending, onSubmit }: { isPending: boolean; onSubmit: 
   const [payload, setPayload] = useState('{"task":"cleanup_expired_sessions","older_than":"168h"}');
   const [error, setError] = useState("");
   function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); try { const parsed = JSON.parse(payload) as JsonObject; if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error(); setError(""); onSubmit({ description: description.trim() || undefined, name: name.trim(), payload: parsed, runner, schedule: schedule.trim(), status: "active" }); } catch { setError("Payload phải là một JSON object hợp lệ."); } }
-  return <form className="automation-create-form" onSubmit={submit}><label>Tên quy trình<input autoFocus onChange={(event) => setName(event.target.value)} placeholder="Dọn phiên đăng nhập cũ" required value={name} /></label><label>Lịch cron<input onChange={(event) => setSchedule(event.target.value)} required value={schedule} /></label><label>Runner<select onChange={(event) => { const value = event.target.value; setRunner(value); setPayload(value === "http" ? '{"method":"POST","url":"https://example.com/hook","body":{}}' : '{"task":"cleanup_expired_sessions","older_than":"168h"}'); }} value={runner}><option value="builtin_cleanup">Dọn dữ liệu</option><option value="http">HTTP request</option><option value="worker">Worker cleanup</option><option value="script">Script allowlist</option></select></label><label>Mô tả<input onChange={(event) => setDescription(event.target.value)} placeholder="Mục đích của quy trình" value={description} /></label><label className="automation-create-form__payload">Payload JSON<textarea onChange={(event) => setPayload(event.target.value)} value={payload} /></label>{error ? <p>{error}</p> : null}<Button disabled={isPending || !name.trim()} size="sm" type="submit">{isPending ? "Đang tạo..." : "Lưu quy trình"}</Button></form>;
+  return <form className="automation-create-form" onSubmit={submit}><label>Tên quy trình<input autoFocus onChange={(event) => setName(event.target.value)} placeholder="Dọn phiên đăng nhập cũ" required value={name} /></label><CronScheduleBuilder onChange={setSchedule} value={schedule} /><label>Runner<select onChange={(event) => { const value = event.target.value; setRunner(value); setPayload(value === "http" ? '{"method":"POST","url":"https://example.com/hook","body":{}}' : '{"task":"cleanup_expired_sessions","older_than":"168h"}'); }} value={runner}><option value="builtin_cleanup">Dọn dữ liệu</option><option value="http">HTTP request</option><option value="worker">Worker cleanup</option><option value="script">Script allowlist</option></select></label><label>Mô tả<input onChange={(event) => setDescription(event.target.value)} placeholder="Mục đích của quy trình" value={description} /></label><label className="automation-create-form__payload">Payload JSON<textarea onChange={(event) => setPayload(event.target.value)} value={payload} /></label>{error ? <p>{error}</p> : null}<Button disabled={isPending || !name.trim()} size="sm" type="submit">{isPending ? "Đang tạo..." : "Lưu quy trình"}</Button></form>;
+}
+
+const cronPresets = [
+  { label: "Mỗi 5 phút", value: "*/5 * * * *" },
+  { label: "Mỗi 15 phút", value: "*/15 * * * *" },
+  { label: "Mỗi 30 phút", value: "*/30 * * * *" },
+  { label: "Mỗi giờ", value: "0 * * * *" },
+  { label: "Hằng ngày lúc 00:00", value: "0 0 * * *" },
+  { label: "Hằng ngày lúc 08:00", value: "0 8 * * *" },
+  { label: "Thứ Hai lúc 08:00", value: "0 8 * * 1" },
+  { label: "Ngày 1 hằng tháng", value: "0 0 1 * *" }
+] as const;
+
+const cronMonthLabels = ["Tháng 1", "Tháng 2", "Tháng 3", "Tháng 4", "Tháng 5", "Tháng 6", "Tháng 7", "Tháng 8", "Tháng 9", "Tháng 10", "Tháng 11", "Tháng 12"];
+const cronWeekdayLabels = ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
+
+function CronScheduleBuilder({ onChange, value }: { onChange: (value: string) => void; value: string }) {
+  const parts = parseCronSchedule(value);
+  const preset = cronPresets.find((item) => item.value === value.trim())?.value ?? "custom";
+  const updatePart = (index: number, next: string) => {
+    const updated = [...parts];
+    updated[index] = next;
+    onChange(updated.join(" "));
+  };
+  return (
+    <fieldset className="cron-builder">
+      <legend>Lịch chạy cron</legend>
+      <label className="cron-builder__preset">
+        Thiết lập phổ biến
+        <select
+          onChange={(event) => {
+            if (event.target.value !== "custom") onChange(event.target.value);
+          }}
+          value={preset}
+        >
+          {cronPresets.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          <option value="custom">Tùy chỉnh từng trường</option>
+        </select>
+      </label>
+      <div className="cron-builder__fields">
+        <CronPartSelect label="Phút" onChange={(next) => updatePart(0, next)} options={cronMinuteOptions()} value={parts[0]} />
+        <CronPartSelect label="Giờ" onChange={(next) => updatePart(1, next)} options={cronHourOptions()} value={parts[1]} />
+        <CronPartSelect label="Ngày" onChange={(next) => updatePart(2, next)} options={cronNumberOptions(1, 31, "Mỗi ngày")} value={parts[2]} />
+        <CronPartSelect label="Tháng" onChange={(next) => updatePart(3, next)} options={[{ label: "Mỗi tháng", value: "*" }, ...cronMonthLabels.map((label, index) => ({ label, value: String(index + 1) }))]} value={parts[3]} />
+        <CronPartSelect label="Thứ" onChange={(next) => updatePart(4, next)} options={[{ label: "Mọi ngày", value: "*" }, ...cronWeekdayLabels.map((label, index) => ({ label, value: String(index) }))]} value={parts[4]} />
+      </div>
+      <div className="cron-builder__result">
+        <Clock3 size={15} />
+        <span><strong>{cronDescription(value)}</strong><code>{value}</code></span>
+      </div>
+      <details>
+        <summary>Nhập biểu thức nâng cao</summary>
+        <input aria-label="Biểu thức cron nâng cao" onChange={(event) => onChange(event.target.value)} required value={value} />
+        <small>Định dạng 5 trường: phút, giờ, ngày, tháng, thứ. Ví dụ <code>*/15 * * * *</code>.</small>
+      </details>
+    </fieldset>
+  );
+}
+
+function CronPartSelect({ label, onChange, options, value }: {
+  label: string;
+  onChange: (value: string) => void;
+  options: Array<{ label: string; value: string }>;
+  value: string;
+}) {
+  const known = options.some((option) => option.value === value);
+  return (
+    <label>
+      {label}
+      <select onChange={(event) => onChange(event.target.value)} value={value}>
+        {!known ? <option value={value}>{value}</option> : null}
+        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function parseCronSchedule(value: string) {
+  const parts = value.trim().split(/\s+/);
+  return parts.length === 5 ? parts : ["*/15", "*", "*", "*", "*"];
+}
+
+function cronMinuteOptions() {
+  return [
+    { label: "Mỗi phút", value: "*" },
+    { label: "Mỗi 5 phút", value: "*/5" },
+    { label: "Mỗi 10 phút", value: "*/10" },
+    { label: "Mỗi 15 phút", value: "*/15" },
+    { label: "Mỗi 30 phút", value: "*/30" },
+    ...Array.from({ length: 60 }, (_, value) => ({ label: `Phút ${String(value).padStart(2, "0")}`, value: String(value) }))
+  ];
+}
+
+function cronHourOptions() {
+  return [
+    { label: "Mỗi giờ", value: "*" },
+    { label: "Mỗi 2 giờ", value: "*/2" },
+    { label: "Mỗi 4 giờ", value: "*/4" },
+    { label: "Mỗi 6 giờ", value: "*/6" },
+    { label: "Mỗi 12 giờ", value: "*/12" },
+    ...Array.from({ length: 24 }, (_, value) => ({ label: `${String(value).padStart(2, "0")}:00`, value: String(value) }))
+  ];
+}
+
+function cronNumberOptions(from: number, to: number, everyLabel: string) {
+  return [
+    { label: everyLabel, value: "*" },
+    ...Array.from({ length: to - from + 1 }, (_, index) => {
+      const value = String(from + index);
+      return { label: value, value };
+    })
+  ];
+}
+
+function cronDescription(value: string) {
+  return cronPresets.find((item) => item.value === value.trim())?.label ?? "Lịch tùy chỉnh";
 }
 
 export function LegacyWebhooksView({ channelOptions, createIncomingMutation, createOutgoingMutation, deliveries, incoming, incomingQuery, isCreateOpen, onCreateOpen, onSelectOutgoing, outgoing, outgoingQuery, selectedOutgoing }: {

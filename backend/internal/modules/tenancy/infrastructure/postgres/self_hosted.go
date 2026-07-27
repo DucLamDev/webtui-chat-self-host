@@ -14,8 +14,10 @@ import (
 var selfHostedSlugSanitizer = regexp.MustCompile(`[^a-z0-9]+`)
 
 type SelfHostedInstanceParams struct {
-	Domain string
-	Name   string
+	Domain           string
+	Name             string
+	LogoURL          string
+	RegistrationMode string
 }
 
 // EnsureSelfHostedInstance converts the bootstrap zone created by migrations
@@ -27,8 +29,15 @@ func EnsureSelfHostedInstance(
 ) (string, error) {
 	domain := strings.ToLower(strings.TrimSpace(params.Domain))
 	name := strings.TrimSpace(params.Name)
+	logoURL := strings.TrimSpace(params.LogoURL)
+	registrationMode := strings.ToLower(strings.TrimSpace(params.RegistrationMode))
 	if domain == "" || name == "" {
 		return "", errors.New("self-hosted instance domain and name are required")
+	}
+	switch registrationMode {
+	case "open", "invite_only", "closed":
+	default:
+		registrationMode = "open"
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -58,12 +67,14 @@ WHERE deleted_at IS NULL
 	var workspaceID string
 	var hasOwner bool
 	var alreadySelfHosted bool
+	var instanceProfileInitialized bool
 	err = tx.QueryRow(ctx, `
 SELECT
     zone.id::text,
     workspace.id::text,
     workspace.owner_id IS NOT NULL,
-    COALESCE(zone.metadata->>'deployment_model' = 'self_hosted', false)
+    COALESCE(zone.metadata->>'deployment_model' = 'self_hosted', false),
+    COALESCE((zone.metadata->>'instance_profile_initialized')::boolean, false)
 FROM zones zone
 JOIN workspaces workspace
   ON workspace.id = zone.primary_workspace_id
@@ -75,31 +86,35 @@ WHERE zone.deleted_at IS NULL
       OR zone.kind = 'vpsttt_internal'
   )
 FOR UPDATE OF zone, workspace
-`).Scan(&zoneID, &workspaceID, &hasOwner, &alreadySelfHosted)
+`).Scan(&zoneID, &workspaceID, &hasOwner, &alreadySelfHosted, &instanceProfileInitialized)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", errors.New("self-hosted bootstrap zone is unavailable; run all database migrations first")
 	}
 	if err != nil {
 		return "", fmt.Errorf("lock self-hosted bootstrap zone: %w", err)
 	}
-
-	registrationMode := "open"
-	if hasOwner {
-		registrationMode = "invite_only"
+	// A fresh instance must always allow the first registration so it can claim
+	// ownership. After that, the owner-managed database value is preserved.
+	if !hasOwner {
+		registrationMode = "open"
 	}
+
 	slug := selfHostedSlug(domain)
 	baseURL := "https://" + domain
 
 	if _, err := tx.Exec(ctx, `
 UPDATE zones
 SET slug = $2,
-    name = $3,
+    name = CASE WHEN $6 THEN name ELSE $3 END,
     kind = 'customer_dedicated',
     status = 'active',
-    registration_mode = $4,
+    registration_mode = CASE WHEN $6 AND $7 THEN registration_mode ELSE $4 END,
     metadata = (COALESCE(metadata, '{}'::jsonb) - 'template_key') || jsonb_build_object(
         'deployment_model', 'self_hosted',
         'managed_by', 'customer',
+        'instance_profile_initialized', true,
+        'branding', COALESCE(metadata -> 'branding', '{}'::jsonb) ||
+            CASE WHEN NOT $6 AND $5 <> '' THEN jsonb_build_object('logo_url', $5::text) ELSE '{}'::jsonb END,
         'capabilities', jsonb_build_object(
             'chat', true,
             'files', true,
@@ -112,18 +127,21 @@ SET slug = $2,
         )
     )
 WHERE id = $1::uuid
-`, zoneID, slug, name, registrationMode); err != nil {
+`, zoneID, slug, name, registrationMode, logoURL, instanceProfileInitialized, hasOwner); err != nil {
 		return "", fmt.Errorf("configure self-hosted zone: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `
 UPDATE workspaces
-SET name = $2,
-    description = 'Primary workspace of the self-hosted instance ' || $3,
+SET name = CASE WHEN $4 THEN name ELSE $2 END,
+    description = CASE
+        WHEN $4 THEN description
+        ELSE 'Primary workspace of the self-hosted instance ' || $3
+    END,
     plan = 'self_hosted',
     status = 'active'
 WHERE id = $1::uuid
-`, workspaceID, name, domain); err != nil {
+`, workspaceID, name, domain, instanceProfileInitialized); err != nil {
 		return "", fmt.Errorf("configure self-hosted workspace: %w", err)
 	}
 
@@ -156,10 +174,10 @@ SELECT
     '{"system_default":true,"template_key":"customer_standard"}'::jsonb
 FROM (
     VALUES
-        ('general', 'General', 'Trao doi chung cua workspace'),
-        ('announcements', 'Announcements', 'Thong bao cua workspace'),
-        ('random', 'Random', 'Trao doi ngoai cong viec'),
-        ('automation', 'Automation', 'Su kien tu bot, webhook va automation')
+        ('general', 'Chung', 'Trao đổi chung của workspace'),
+        ('announcements', 'Thông báo', 'Thông báo của workspace'),
+        ('random', 'Trò chuyện', 'Trao đổi ngoài công việc'),
+        ('automation', 'Tự động hóa', 'Sự kiện từ bot, webhook và automation')
 ) AS definition(slug, name, description)
 ON CONFLICT (workspace_id, slug)
     WHERE slug IS NOT NULL AND deleted_at IS NULL
