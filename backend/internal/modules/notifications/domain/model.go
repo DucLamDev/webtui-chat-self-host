@@ -46,6 +46,11 @@ type ChannelPreference struct {
 	ChannelID   string
 	Mode        string
 	MutedUntil  *time.Time
+	Sensitive   bool
+	Important   bool
+	Compact     bool
+	Tags        []string
+	ArchivedAt  *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

@@ -37,3 +37,30 @@ export type NotificationPreferenceInput = {
   quiet_start: string;
   quiet_end: string;
 };
+
+export type ChannelNotificationPreference = {
+  user_id: Id;
+  workspace_id: Id;
+  channel_id: Id;
+  mode: NotificationPreferenceMode;
+  muted_until?: ISODateTime | null;
+  sensitive: boolean;
+  important: boolean;
+  compact: boolean;
+  tags: string[];
+  archived_at?: ISODateTime | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+};
+
+export type ChannelNotificationPreferenceInput = {
+  workspace_id: Id;
+  channel_id?: Id;
+  mode: NotificationPreferenceMode;
+  muted_until?: ISODateTime | null;
+  sensitive?: boolean;
+  important?: boolean;
+  compact?: boolean;
+  tags?: string[];
+  archived?: boolean;
+};

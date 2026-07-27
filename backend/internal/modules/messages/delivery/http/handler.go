@@ -24,6 +24,7 @@ type sendMessageRequest struct {
 	Body             string          `json:"body"`
 	Metadata         json.RawMessage `json:"metadata"`
 	MentionedUserIDs []string        `json:"mentioned_user_ids"`
+	Silent           bool            `json:"silent"`
 }
 
 type updateMessageRequest struct {
@@ -47,6 +48,12 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.Use(authMiddleware)
 
 	private.GET("/messages/search", h.Search)
+	private.GET("/messages/scheduled", h.ListScheduledMessages)
+	private.POST("/messages/scheduled", h.ScheduleMessage)
+	private.DELETE("/messages/scheduled/:scheduled_message_id", h.CancelScheduledMessage)
+	private.GET("/messages/reminders", h.ListReminders)
+	private.DELETE("/messages/reminders/:reminder_id", h.CancelReminder)
+	private.GET("/threads", h.ListThreadDetails)
 	private.GET("/channels/:channel_id/messages", h.List)
 	private.POST("/channels/:channel_id/messages", h.Send)
 	private.GET("/channels/:channel_id/pins", h.ListPins)
@@ -57,6 +64,11 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.POST("/channels/:channel_id/messages/:message_id/pin", h.Pin)
 	private.DELETE("/channels/:channel_id/messages/:message_id/pin", h.Unpin)
 	private.GET("/channels/:channel_id/messages/:message_id/thread", h.ListThread)
+	private.GET("/channels/:channel_id/messages/:message_id/thread/details", h.GetThreadDetails)
+	private.PUT("/channels/:channel_id/messages/:message_id/thread/details", h.UpsertThreadDetails)
+	private.PUT("/channels/:channel_id/messages/:message_id/thread/subscription", h.SetThreadSubscription)
+	private.PUT("/channels/:channel_id/messages/:message_id/thread/read", h.MarkThreadRead)
+	private.POST("/channels/:channel_id/messages/:message_id/reminders", h.CreateReminder)
 	private.POST("/channels/:channel_id/messages/:message_id/reactions", h.AddReaction)
 	private.DELETE("/channels/:channel_id/messages/:message_id/reactions/:emoji", h.RemoveReaction)
 }
@@ -108,6 +120,7 @@ func (h *Handler) Send(c *gin.Context) {
 		Body:             req.Body,
 		Metadata:         req.Metadata,
 		MentionedUserIDs: req.MentionedUserIDs,
+		Silent:           req.Silent,
 	})
 	if err != nil {
 		slog.Warn("Gui tin nhan that bai",

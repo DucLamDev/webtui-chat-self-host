@@ -28,10 +28,15 @@ type preferenceRequest struct {
 }
 
 type channelPreferenceRequest struct {
-	WorkspaceID string `json:"workspace_id"`
-	ChannelID   string `json:"channel_id"`
-	Mode        string `json:"mode"`
-	MutedUntil  string `json:"muted_until"`
+	WorkspaceID string   `json:"workspace_id"`
+	ChannelID   string   `json:"channel_id"`
+	Mode        string   `json:"mode"`
+	MutedUntil  string   `json:"muted_until"`
+	Sensitive   *bool    `json:"sensitive"`
+	Important   *bool    `json:"important"`
+	Compact     *bool    `json:"compact"`
+	Tags        []string `json:"tags"`
+	Archived    *bool    `json:"archived"`
 }
 
 func NewHandler(service *notificationsapp.Service) *Handler {
@@ -132,6 +137,11 @@ func (h *Handler) UpsertChannelPreference(c *gin.Context) {
 		ChannelID:   channelID,
 		Mode:        req.Mode,
 		MutedUntil:  req.MutedUntil,
+		Sensitive:   req.Sensitive,
+		Important:   req.Important,
+		Compact:     req.Compact,
+		Tags:        req.Tags,
+		Archived:    req.Archived,
 	})
 	if err != nil {
 		response.Error(c, err)

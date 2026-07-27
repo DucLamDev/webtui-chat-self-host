@@ -1,8 +1,8 @@
 "use client";
 
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, type FormEvent, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AuthScreen, Skeleton } from "@webtui/ui";
+import { AuthScreen, Button, Input, Skeleton } from "@webtui/ui";
 import type {
   AuthUser,
   GoogleLoginInput,
@@ -40,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const user = useAuthStore((state) => state.user);
   const zoneDomain = useAuthStore((state) => state.zoneDomain);
   const zoneRuntime = useAuthStore((state) => state.zoneRuntime);
+  const clearZoneRuntime = useAuthStore((state) => state.clearZoneRuntime);
   const clearSession = useAuthStore((state) => state.clearSession);
   const setSession = useAuthStore((state) => state.setSession);
   const setRememberLogin = useAuthStore((state) => state.setRememberLogin);
@@ -47,9 +48,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setZoneRuntime = useAuthStore((state) => state.setZoneRuntime);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [formError, setFormError] = useState<string | null>(null);
+  const [initialInviteToken, setInitialInviteToken] = useState("");
   const [isCompletingOIDC, setIsCompletingOIDC] = useState(false);
   const oidcCompletionStarted = useRef(false);
   const supportsBrowserOIDC = !getPlatformServices().lifecycle.isDesktop;
+  const isDesktop = getPlatformServices().lifecycle.isDesktop;
 
   useEffect(() => {
     let mounted = true;
@@ -69,11 +72,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (typeof window === "undefined") {
       return;
     }
-    const requestedMode = new URL(window.location.href).searchParams.get("auth");
+    const params = new URL(window.location.href).searchParams;
+    const requestedMode = params.get("auth");
+    const inviteToken = params.get("invite_token") || params.get("inviteToken") || "";
+    if (inviteToken) {
+      setInitialInviteToken(inviteToken);
+      setMode("register");
+      return;
+    }
     if (requestedMode === "register" || requestedMode === "login") {
       setMode(requestedMode);
     }
   }, []);
+
+  useEffect(() => {
+    const name = zoneRuntime?.app_name?.trim();
+    if (typeof document === "undefined" || !name) {
+      return;
+    }
+    document.title = name;
+    const logo = resolveBrandLogoURL(
+      zoneRuntime?.logo_url,
+      zoneRuntime?.api_base_url
+    ) ?? organizationInitialFavicon(name);
+    let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!icon) {
+      icon = document.createElement("link");
+      icon.rel = "icon";
+      document.head.append(icon);
+    }
+    icon.href = logo;
+  }, [zoneRuntime?.api_base_url, zoneRuntime?.app_name, zoneRuntime?.logo_url]);
 
   useEffect(() => {
     if (!hydrated || accessToken || oidcCompletionStarted.current || typeof window === "undefined") {
@@ -257,6 +286,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   });
 
+  const connectServerMutation = useMutation({
+    mutationFn: (domain: string) => selectZone(domain, setZoneRuntime),
+    onError: (error) => {
+      setFormError(error instanceof Error ? error.message : "Không thể kết nối tới máy chủ.");
+    },
+    onMutate: () => setFormError(null)
+  });
+
   const value = useMemo<AuthContextValue>(
     () => ({
       isAuthenticated: Boolean(accessToken),
@@ -271,13 +308,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   if (!accessToken) {
+    if (isDesktop && (!zoneDomain || !zoneRuntime)) {
+      return (
+        <ServerConnectScreen
+          error={formError}
+          initialDomain={zoneDomain ?? ""}
+          isPending={connectServerMutation.isPending}
+          onConnect={(domain) => connectServerMutation.mutate(domain)}
+        />
+      );
+    }
+    const organizationName = zoneRuntime?.app_name ?? runtimeEnvironment.appName;
+    const organizationLogo = resolveBrandLogoURL(
+      zoneRuntime?.logo_url,
+      zoneRuntime?.api_base_url
+    );
     return (
       <AuthScreen
-        brandLogoAlt="WebTui Chat"
-        brandLogoSrc="/brand/logo_webtui.png"
+        brandLogoAlt={organizationName}
+        brandLogoSrc={organizationLogo}
         error={formError}
         googleClientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID}
         initialDomain={zoneDomain ?? browserDomain()}
+        initialInviteToken={initialInviteToken}
         isPending={loginMutation.isPending || registerMutation.isPending || googleMutation.isPending || isCompletingOIDC}
         mode={mode}
         onGoogleCredential={(credential, domain) =>
@@ -298,6 +351,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             });
           }
         }
+        onChangeServer={isDesktop ? () => {
+          setFormError(null);
+          clearZoneRuntime();
+        } : undefined}
         onModeChange={setMode}
         onOIDCDiscover={supportsBrowserOIDC ? async (domain) => {
           const selectedDomain = await selectZone(domain, setZoneRuntime);
@@ -324,10 +381,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             username: values.username
           })
         }
-        panelLogoAlt="WebTui Chat"
-        panelLogoSrc="/brand/logo_webtui.png"
-        showServerField={getPlatformServices().lifecycle.isDesktop}
-        title={zoneRuntime?.app_name ?? runtimeEnvironment.appName}
+        panelLogoAlt={organizationName}
+        panelLogoSrc={organizationLogo}
+        showServerField={false}
+        title={organizationName}
       />
     );
   }
@@ -337,6 +394,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+function ServerConnectScreen({
+  error,
+  initialDomain,
+  isPending,
+  onConnect
+}: {
+  error?: string | null;
+  initialDomain: string;
+  isPending: boolean;
+  onConnect: (domain: string) => void;
+}) {
+  const [domain, setDomain] = useState(initialDomain);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (domain.trim()) {
+      onConnect(domain.trim());
+    }
+  }
+
+  return (
+    <main className="server-connect-screen" aria-label="Chọn máy chủ">
+      <section className="server-connect-card">
+        <div className="server-connect-card__mark" aria-hidden="true">W</div>
+        <header>
+          <h1>Kết nối tới máy chủ</h1>
+          <p>Nhập domain của tổ chức. Ứng dụng sẽ xác minh máy chủ trước khi hiển thị trang đăng nhập.</p>
+        </header>
+        <form onSubmit={submit}>
+          <label>
+            Địa chỉ máy chủ
+            <Input
+              autoCapitalize="none"
+              autoComplete="url"
+              autoFocus
+              onChange={(event) => setDomain(event.target.value)}
+              placeholder="chat.example.com"
+              required
+              spellCheck={false}
+              value={domain}
+            />
+          </label>
+          {error ? <p className="auth-error">{error}</p> : null}
+          <Button disabled={isPending || !domain.trim()} type="submit">
+            {isPending ? "Đang kiểm tra..." : "Kết nối"}
+          </Button>
+        </form>
+        <small>Có thể nhập domain hoặc URL HTTPS đầy đủ.</small>
+      </section>
+    </main>
+  );
 }
 
 function browserDeviceName() {
@@ -392,12 +502,44 @@ async function selectZone(
   });
   const discoveryDomain = new URL(serverBaseUrl).hostname;
   const discovery = await discoveryApi.tenancy.discover(discoveryDomain);
-  const runtime = runtimeForCurrentBrowser(discovery.runtime);
+  const discoveredRuntime = runtimeForCurrentBrowser(discovery.runtime);
+  const runtime = {
+    ...discoveredRuntime,
+    logo_url: resolveBrandLogoURL(
+      discoveredRuntime.logo_url ?? discovery.zone.logo_url,
+      discoveredRuntime.api_base_url
+    )
+  };
   setZoneRuntime(discovery.domain, runtime);
   if (navigateToWeb && navigateToZoneWeb(runtime.web_base_url)) {
     throw new ZoneNavigationStartedError();
   }
   return discovery.domain;
+}
+
+function resolveBrandLogoURL(value?: string, apiBaseURL?: string): string | undefined {
+  const logo = value?.trim();
+  if (!logo) {
+    return undefined;
+  }
+  try {
+    const resolved = apiBaseURL ? new URL(logo, apiBaseURL) : new URL(logo);
+    if (resolved.protocol !== "https:" && !isLocalHostname(resolved.hostname)) {
+      return undefined;
+    }
+    if (resolved.username || resolved.password) {
+      return undefined;
+    }
+    return resolved.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function organizationInitialFavicon(name: string): string {
+  const initial = name.trim().slice(0, 1).toUpperCase() || "O";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#2563eb"/><text x="32" y="43" text-anchor="middle" font-family="Arial,sans-serif" font-size="34" font-weight="700" fill="white">${initial}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 function runtimeForCurrentBrowser(runtime: ZoneRuntime): ZoneRuntime {

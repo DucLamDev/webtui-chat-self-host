@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	mentionPattern = regexp.MustCompile(`<@([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})>`)
-	uuidPattern    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	mentionPattern      = regexp.MustCompile(`<@([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})>`)
+	groupMentionPattern = regexp.MustCompile(`(?i)(^|[\s(])@(group|all|everyone)\b`)
+	uuidPattern         = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 )
 
 type PermissionChecker interface {
@@ -41,6 +42,10 @@ type Repository interface {
 	RemoveReaction(ctx context.Context, params ReactionParams) (messagesdomain.Message, error)
 }
 
+type ChannelMemberLister interface {
+	ListActiveChannelMemberIDs(ctx context.Context, workspaceID string, channelID string) ([]string, error)
+}
+
 type Service struct {
 	repo           Repository
 	checker        PermissionChecker
@@ -58,6 +63,7 @@ type SendInput struct {
 	Body             string
 	Metadata         json.RawMessage
 	MentionedUserIDs []string
+	Silent           bool
 }
 
 type SendParams struct {
@@ -304,12 +310,35 @@ func (s *Service) Send(ctx context.Context, input SendInput) (MessageDTO, error)
 	if err != nil {
 		return MessageDTO{}, err
 	}
+	if err := validateStructuredMessage(kind, body, metadata); err != nil {
+		return MessageDTO{}, err
+	}
+	if input.Silent {
+		metadata, err = withMetadataValue(metadata, "silent", true)
+		if err != nil {
+			return MessageDTO{}, err
+		}
+	}
 	clientMessageID := normalizeClientMessageID(input.ClientMessageID)
 	if clientMessageID != "" {
 		metadata, err = withClientMessageID(metadata, clientMessageID)
 		if err != nil {
 			return MessageDTO{}, err
 		}
+	}
+
+	mentionedUserIDs := normalizeMentions(body, input.MentionedUserIDs)
+	if groupMentionPattern.MatchString(body) {
+		memberLister, ok := s.repo.(ChannelMemberLister)
+		if !ok {
+			return MessageDTO{}, apperrors.Internal("Khong the tai danh sach thanh vien de nhac ca nhom.")
+		}
+		memberIDs, err := memberLister.ListActiveChannelMemberIDs(ctx, strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ChannelID))
+		if err != nil {
+			slog.Error("Message service khong tai duoc thanh vien cho @group", "error", err)
+			return MessageDTO{}, apperrors.Internal("Khong the tai danh sach thanh vien de nhac ca nhom.")
+		}
+		mentionedUserIDs = normalizeMentions(body, append(mentionedUserIDs, memberIDs...))
 	}
 
 	sendStartedAt := time.Now().UTC()
@@ -322,7 +351,7 @@ func (s *Service) Send(ctx context.Context, input SendInput) (MessageDTO, error)
 		Kind:             kind,
 		Body:             body,
 		Metadata:         metadata,
-		MentionedUserIDs: normalizeMentions(body, input.MentionedUserIDs),
+		MentionedUserIDs: mentionedUserIDs,
 	})
 	if err != nil {
 		return MessageDTO{}, mapMessageError(err)
@@ -785,6 +814,84 @@ func normalizeMetadata(value json.RawMessage) ([]byte, error) {
 	return []byte(value), nil
 }
 
+type pollMetadata struct {
+	Question string               `json:"question"`
+	Options  []pollOptionMetadata `json:"options"`
+}
+
+type pollOptionMetadata struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Reaction string `json:"reaction"`
+}
+
+func validateStructuredMessage(kind string, body string, metadata []byte) error {
+	if kind != "event" {
+		return nil
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return apperrors.BadRequest("VALIDATION_ERROR", "Metadata của tin sự kiện phải là một JSON object.")
+	}
+
+	var messageType string
+	if raw, ok := payload["message_type"]; ok {
+		if err := json.Unmarshal(raw, &messageType); err != nil {
+			return apperrors.BadRequest("VALIDATION_ERROR", "message_type của tin sự kiện không hợp lệ.")
+		}
+	}
+	if strings.ToLower(strings.TrimSpace(messageType)) != "poll" {
+		return nil
+	}
+
+	rawPoll, ok := payload["poll"]
+	if !ok {
+		return apperrors.BadRequest("VALIDATION_ERROR", "Bình chọn cần có cấu hình poll.")
+	}
+	var poll pollMetadata
+	if err := json.Unmarshal(rawPoll, &poll); err != nil {
+		return apperrors.BadRequest("VALIDATION_ERROR", "Cấu hình bình chọn không hợp lệ.")
+	}
+
+	question := strings.TrimSpace(poll.Question)
+	if question == "" {
+		question = strings.TrimSpace(body)
+	}
+	if question == "" || len([]rune(question)) > 500 {
+		return apperrors.BadRequest("VALIDATION_ERROR", "Câu hỏi bình chọn phải dài từ 1 đến 500 ký tự.")
+	}
+	if len(poll.Options) < 2 || len(poll.Options) > 10 {
+		return apperrors.BadRequest("VALIDATION_ERROR", "Bình chọn phải có từ 2 đến 10 lựa chọn.")
+	}
+
+	seenIDs := make(map[string]struct{}, len(poll.Options))
+	seenReactions := make(map[string]struct{}, len(poll.Options))
+	for _, option := range poll.Options {
+		id := strings.TrimSpace(option.ID)
+		label := strings.TrimSpace(option.Label)
+		reaction := strings.TrimSpace(option.Reaction)
+		if id == "" || len([]rune(id)) > 64 {
+			return apperrors.BadRequest("VALIDATION_ERROR", "Mỗi lựa chọn bình chọn cần có id hợp lệ.")
+		}
+		if label == "" || len([]rune(label)) > 200 {
+			return apperrors.BadRequest("VALIDATION_ERROR", "Nội dung mỗi lựa chọn phải dài từ 1 đến 200 ký tự.")
+		}
+		if reaction == "" || len([]rune(reaction)) > 32 {
+			return apperrors.BadRequest("VALIDATION_ERROR", "Mỗi lựa chọn bình chọn cần có reaction hợp lệ.")
+		}
+		if _, exists := seenIDs[id]; exists {
+			return apperrors.BadRequest("VALIDATION_ERROR", "Các lựa chọn bình chọn không được trùng id.")
+		}
+		if _, exists := seenReactions[reaction]; exists {
+			return apperrors.BadRequest("VALIDATION_ERROR", "Các lựa chọn bình chọn không được trùng reaction.")
+		}
+		seenIDs[id] = struct{}{}
+		seenReactions[reaction] = struct{}{}
+	}
+	return nil
+}
+
 func normalizeClientMessageID(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) > 128 {
@@ -794,6 +901,10 @@ func normalizeClientMessageID(value string) string {
 }
 
 func withClientMessageID(metadata []byte, clientMessageID string) ([]byte, error) {
+	return withMetadataValue(metadata, "client_message_id", clientMessageID)
+}
+
+func withMetadataValue(metadata []byte, key string, value any) ([]byte, error) {
 	var payload map[string]any
 	if len(metadata) == 0 {
 		payload = map[string]any{}
@@ -803,7 +914,7 @@ func withClientMessageID(metadata []byte, clientMessageID string) ([]byte, error
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	payload["client_message_id"] = clientMessageID
+	payload[key] = value
 	return json.Marshal(payload)
 }
 

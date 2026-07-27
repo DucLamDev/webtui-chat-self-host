@@ -18,6 +18,7 @@ type PermissionChecker interface {
 type Repository interface {
 	Create(ctx context.Context, params CreateParams) (callsdomain.Call, error)
 	Get(ctx context.Context, workspaceID string, callID string) (callsdomain.Call, error)
+	FindIncomingRinging(ctx context.Context, workspaceID string, targetUserID string) (callsdomain.Call, error)
 	UpdateStatus(ctx context.Context, params StatusParams) (callsdomain.Call, error)
 	ExpireRingingCall(ctx context.Context, workspaceID string, callID string, before time.Time) (callsdomain.Call, error)
 	ExpireRinging(ctx context.Context, before time.Time, limit int) ([]callsdomain.Call, error)
@@ -210,6 +211,30 @@ func (s *Service) Get(ctx context.Context, actorUserID string, workspaceID strin
 		return CallDTO{}, apperrors.Forbidden("Bạn không thuộc cuộc gọi này.")
 	}
 	return toCallDTO(call), nil
+}
+
+func (s *Service) FindIncomingRinging(
+	ctx context.Context,
+	actorUserID string,
+	workspaceID string,
+) (*CallDTO, error) {
+	userID := strings.TrimSpace(actorUserID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if userID == "" {
+		return nil, apperrors.Unauthorized("Bạn cần đăng nhập để nhận cuộc gọi.")
+	}
+	if workspaceID == "" {
+		return nil, apperrors.BadRequest("WORKSPACE_REQUIRED", "workspace_id là bắt buộc.")
+	}
+	call, err := s.repo.FindIncomingRinging(ctx, workspaceID, userID)
+	if errors.Is(err, callsdomain.ErrCallNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, mapCallError(err)
+	}
+	dto := toCallDTO(call)
+	return &dto, nil
 }
 
 func (s *Service) ChangeStatus(ctx context.Context, input StatusInput) (CallDTO, error) {

@@ -126,6 +126,7 @@ type UpdateZoneSettingsParams struct {
 	ZoneID           string
 	Name             *string
 	RegistrationMode *string
+	LogoURL          *string
 }
 
 type SetZoneLifecycleParams struct {
@@ -242,6 +243,7 @@ type ZoneDTO struct {
 	ID               string `json:"id"`
 	Slug             string `json:"slug"`
 	Name             string `json:"name"`
+	LogoURL          string `json:"logo_url,omitempty"`
 	Kind             string `json:"kind"`
 	Status           string `json:"status"`
 	RegistrationMode string `json:"registration_mode"`
@@ -255,6 +257,7 @@ type WorkspaceRefDTO struct {
 
 type RuntimeDTO struct {
 	AppName        string           `json:"app_name"`
+	LogoURL        string           `json:"logo_url,omitempty"`
 	AppVersion     string           `json:"app_version"`
 	ReleaseChannel string           `json:"release_channel"`
 	Locale         string           `json:"locale"`
@@ -349,7 +352,7 @@ type CreatedAutomationInstallationDTO struct {
 
 func NewService(repo Repository, options Options) *Service {
 	if strings.TrimSpace(options.AppName) == "" {
-		options.AppName = "WebTui Chat"
+		options.AppName = "Ứng dụng chat"
 	}
 	if strings.TrimSpace(options.AppVersion) == "" {
 		options.AppVersion = "dev"
@@ -859,6 +862,7 @@ func (s *Service) toDiscovery(
 	if name := strings.TrimSpace(resolved.Zone.Name); name != "" {
 		runtime.AppName = name
 	}
+	runtime.LogoURL = brandingLogoURL(resolved.Zone.Metadata)
 	capabilities := capabilitiesFromMetadata(resolved.Zone.Metadata)
 	// Federation remains fail-closed until its runtime protocol is deployed.
 	capabilities.Federation = false
@@ -895,6 +899,7 @@ func (s *Service) toDiscovery(
 			ID:               resolved.Zone.ID,
 			Slug:             resolved.Zone.Slug,
 			Name:             resolved.Zone.Name,
+			LogoURL:          runtime.LogoURL,
 			Kind:             resolved.Zone.Kind,
 			Status:           resolved.Zone.Status,
 			RegistrationMode: resolved.Zone.RegistrationMode,
@@ -1072,12 +1077,19 @@ func toDomainClaimDTO(claim tenancydomain.DomainClaim, options Options) DomainCl
 			ID:               claim.Zone.ID,
 			Slug:             claim.Zone.Slug,
 			Name:             claim.Zone.Name,
+			LogoURL:          brandingLogoURL(claim.Zone.Metadata),
 			Kind:             claim.Zone.Kind,
 			Status:           claim.Zone.Status,
 			RegistrationMode: claim.Zone.RegistrationMode,
 		},
 		Workspace: workspace,
 	}
+}
+
+func brandingLogoURL(metadata map[string]any) string {
+	branding, _ := metadata["branding"].(map[string]any)
+	value, _ := branding["logo_url"].(string)
+	return strings.TrimSpace(value)
 }
 
 func routingDNSName(domain string, options Options) string {

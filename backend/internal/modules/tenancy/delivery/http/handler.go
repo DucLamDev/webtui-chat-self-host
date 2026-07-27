@@ -57,6 +57,7 @@ type updateAutomationInstallationRequest struct {
 type updateZoneSettingsRequest struct {
 	Name             *string `json:"name"`
 	RegistrationMode *string `json:"registration_mode"`
+	LogoURL          *string `json:"logo_url"`
 }
 
 type zoneLifecycleRequest struct {
@@ -270,6 +271,7 @@ func (h *Handler) UpdateCurrentZone(c *gin.Context) {
 		ZoneID:           middleware.CurrentZoneID(c),
 		Name:             req.Name,
 		RegistrationMode: req.RegistrationMode,
+		LogoURL:          req.LogoURL,
 	})
 	if err != nil {
 		response.Error(c, err)

@@ -24,8 +24,10 @@ import {
   Archive,
   Bell,
   Bot,
+  CalendarClock,
   CheckCircle2,
   ChevronLeft,
+  ClipboardCheck,
   Clock3,
   Cloud,
   Edit3,
@@ -36,9 +38,11 @@ import {
   Image as ImageIcon,
   Info,
   Laugh,
+  LockKeyhole,
   LogOut,
   MessageCircle,
   Mic,
+  MicOff,
   Monitor,
   Minimize2,
   MoreVertical,
@@ -71,6 +75,7 @@ import {
   Trash2,
   Users,
   Video,
+  VideoOff,
   Workflow,
   X,
   Zap
@@ -85,7 +90,7 @@ import {
   type CreateDepartmentPayload,
   useChatWorkspaceData
 } from "../hooks/use-chat-workspace-data";
-import { useWebRtcCall, type WebRtcCallOutcome, type WebRtcCallState } from "../hooks/use-webrtc-call";
+import { useWebRtcCall, type WebRtcCallState } from "../hooks/use-webrtc-call";
 import type {
   ChannelFilter,
   ChatChannel,
@@ -104,6 +109,20 @@ import { getCachedMediaUrl, resolveCachedMediaUrl } from "../model/media-cache";
 import { readDraft, writeDraft } from "../model/offline-cache";
 import { buildChatTargets } from "../model/chat-targets";
 import { buildDepartmentRows, departmentDescendantIds } from "../model/department-tree";
+import {
+  collaborationDisplayStorageKey,
+  collaborationPreferencesStorageKey,
+  defaultCallJoinPreferences,
+  defaultConversationPreference,
+  normalizeConversationPreference,
+  normalizeConversationTags,
+  parseCollaborationDisplay,
+  parseConversationPreferences,
+  type CallJoinPreferences,
+  type ConversationPreference,
+  type ConversationPreferenceMap
+} from "../model/collaboration-preferences";
+import type { CreatePollPayload } from "../hooks/use-message-timeline";
 import type {
   AuthSession,
   AuthUser,
@@ -125,6 +144,7 @@ import type {
   WorkspaceMember
 } from "@webtui/types";
 import { AutomationPage } from "./automation-page";
+import { TalkCollaborationHub } from "./talk-collaboration-hub";
 import { parseChatRoute } from "@/lib/chat-route";
 
 const railItems = [
@@ -153,6 +173,12 @@ type ChannelHashStyle = CSSProperties & {
   "--channel-hash-dark-text": string;
   "--channel-hash-shadow": string;
   "--channel-hash-text": string;
+};
+
+type CallMediaStyle = CSSProperties & {
+  "--call-pan-x": string;
+  "--call-pan-y": string;
+  "--call-zoom": string;
 };
 
 const channelHashPalettes = [
@@ -244,10 +270,12 @@ type ContactResult = {
 const channelFilters: Array<{ label: string; value: ChannelFilter }> = [
   { label: "Tất cả", value: "all" },
   { label: "Chưa đọc", value: "unread" },
-  { label: "Yêu thích", value: "favorite" }
+  { label: "Yêu thích", value: "favorite" },
+  { label: "Quan trọng", value: "important" }
 ];
 
 const detailTabs: Array<{ label: string; value: DetailTab }> = [
+  { label: "Workspace", value: "workspace" },
   { label: "Đã ghim", value: "pinned" },
   { label: "Ảnh", value: "media" },
   { label: "File", value: "files" }
@@ -272,6 +300,11 @@ const uploadAcceptList = [
   "audio/mpeg",
   "audio/wav",
   "audio/x-m4a",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-m4v",
+  "video/x-matroska",
   "application/ogg",
   "application/pdf",
   "application/json",
@@ -493,6 +526,8 @@ function MobileNotificationButton({
 
 export function ChatWorkspace() {
   const { logout, user } = useAuth();
+  const queryClient = useQueryClient();
+  const zoneRuntime = useAuthStore((state) => state.zoneRuntime);
   const { theme, toggleTheme } = useTheme();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -501,10 +536,12 @@ export function ChatWorkspace() {
   const [activeRailItem, setActiveRailItem] = useState<RailItemId>(routedRailItem);
   const [messageSidebarTab, setMessageSidebarTab] = useState<MessageSidebarTab>(routedMessageSidebarTab);
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
-  const [detailTab, setDetailTab] = useState<DetailTab>("pinned");
+  const [detailTab, setDetailTab] = useState<DetailTab>("workspace");
   const [searchQuery, setSearchQuery] = useState("");
   const [friendSearchQuery, setFriendSearchQuery] = useState("");
   const [draft, setDraft] = useState("");
+  const [isSilentMessage, setIsSilentMessage] = useState(false);
+  const [scheduledFor, setScheduledFor] = useState("");
   const [toast, setToastNotice] = useState<ChatToastNotice | null>(null);
   const [messageNotice, setMessageNotice] = useState<NotificationItem | null>(null);
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
@@ -527,6 +564,7 @@ export function ChatWorkspace() {
   const [forwardingMessageId, setForwardingMessageId] = useState<string | null>(null);
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
   const [isComposerMoreOpen, setIsComposerMoreOpen] = useState(false);
+  const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
   const [isDetailPanelOpen, setIsDetailPanelOpen] = useState(false);
   const [isChannelPanelCollapsed, setIsChannelPanelCollapsed] = useState(false);
   const [favoriteChatIds, setFavoriteChatIds] = useState<Set<string>>(() => new Set());
@@ -534,6 +572,10 @@ export function ChatWorkspace() {
   const [manuallyUnreadChatIds, setManuallyUnreadChatIds] = useState<Set<string>>(() => new Set());
   const [locallyReadChatIds, setLocallyReadChatIds] = useState<Set<string>>(() => new Set());
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences);
+  const [conversationPreferences, setConversationPreferences] = useState<ConversationPreferenceMap>({});
+  const [compactMode, setCompactMode] = useState(false);
+  const [callJoinPreferences, setCallJoinPreferences] =
+    useState<CallJoinPreferences>(defaultCallJoinPreferences);
   const [isAutoStartEnabled, setIsAutoStartEnabled] = useState(false);
   const [isAutoStartLoading, setIsAutoStartLoading] = useState(false);
   const [isDesktopUpdateInstalling, setIsDesktopUpdateInstalling] = useState(false);
@@ -706,6 +748,14 @@ export function ChatWorkspace() {
   const isFavoriteChat = (chatId: string, serverFavorite = false) =>
     !unfavoriteChatIds.has(chatId) && (serverFavorite || favoriteChatIds.has(chatId));
 
+  const conversationPreferenceFor = useCallback(
+    (conversationId?: string | null) =>
+      conversationId
+        ? normalizeConversationPreference(conversationPreferences[conversationId])
+        : defaultConversationPreference,
+    [conversationPreferences]
+  );
+
   const sidebarChannels = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
@@ -714,35 +764,43 @@ export function ChatWorkspace() {
         return false;
       }
 
+      const preference = conversationPreferenceFor(channel.id);
       const matchesFilter =
         channelFilter === "all" ||
         (channelFilter === "unread" && effectiveUnreadCount(channel.id, channel.unreadCount) > 0) ||
-        (channelFilter === "favorite" && isFavoriteChat(channel.id, channel.isFavorite));
+        (channelFilter === "favorite" && isFavoriteChat(channel.id, channel.isFavorite)) ||
+        (channelFilter === "important" && preference.important);
+      const searchableDescription = preference.sensitive ? "" : channel.description;
+      const searchableTags = preference.tags.join(" ");
 
       return (
         matchesFilter &&
         (!normalizedQuery ||
           channel.name.toLowerCase().includes(normalizedQuery) ||
-          channel.description.toLowerCase().includes(normalizedQuery))
+          searchableDescription.toLowerCase().includes(normalizedQuery) ||
+          searchableTags.toLowerCase().includes(normalizedQuery))
       );
     });
-  }, [channelFilter, data.channels, favoriteChatIds, locallyReadChatIds, manuallyUnreadChatIds, searchQuery, unfavoriteChatIds]);
+  }, [channelFilter, conversationPreferenceFor, data.channels, favoriteChatIds, locallyReadChatIds, manuallyUnreadChatIds, searchQuery, unfavoriteChatIds]);
 
   const filteredConversations = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
     return data.directConversations.filter((conversation) => {
+      const preference = conversationPreferenceFor(conversation.id);
       const matchesFilter =
         channelFilter === "all" ||
         (channelFilter === "unread" && effectiveUnreadCount(conversation.id, conversation.unreadCount) > 0) ||
-        (channelFilter === "favorite" && isFavoriteChat(conversation.id));
+        (channelFilter === "favorite" && isFavoriteChat(conversation.id)) ||
+        (channelFilter === "important" && preference.important);
       const matchesQuery =
         !normalizedQuery ||
         conversation.user.name.toLowerCase().includes(normalizedQuery) ||
-        conversation.lastMessage.toLowerCase().includes(normalizedQuery);
+        (!preference.sensitive && conversation.lastMessage.toLowerCase().includes(normalizedQuery)) ||
+        preference.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery));
       return matchesFilter && matchesQuery;
     });
-  }, [channelFilter, data.directConversations, favoriteChatIds, locallyReadChatIds, manuallyUnreadChatIds, searchQuery, unfavoriteChatIds]);
+  }, [channelFilter, conversationPreferenceFor, data.directConversations, favoriteChatIds, locallyReadChatIds, manuallyUnreadChatIds, searchQuery, unfavoriteChatIds]);
 
   const sidebarBots = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -832,6 +890,16 @@ export function ChatWorkspace() {
     () => buildMentionSuggestions(mentionMembers, currentUser.id, activeMentionToken?.query ?? ""),
     [activeMentionToken?.query, currentUser.id, mentionMembers]
   );
+  const canMentionGroup =
+    !data.directConversations.some((conversation) => conversation.id === data.selectedChannelId) &&
+    mentionMembers.length > 1;
+  const showGroupMentionSuggestion = Boolean(
+    canMentionGroup &&
+    activeMentionToken &&
+    ["", "group", "all", "everyone", "nhom"].some((value) =>
+      value.startsWith(activeMentionToken.query.trim().toLowerCase())
+    )
+  );
   const pinnedMessageIds = useMemo(
     () => new Set(data.pinnedMessages.map((message) => message.id)),
     [data.pinnedMessages]
@@ -890,15 +958,27 @@ export function ChatWorkspace() {
       return;
     }
 
+    const conversationPreference = conversationPreferenceFor(newest.channelId);
     const isActiveMessageOpen = activeRailItem === "messages" && newest.channelId === data.selectedChannelId;
-    if (isMessageNotification(newest) && !isActiveMessageOpen && shouldShowDesktopNotification(newest, notificationPreferences)) {
-      setMessageNotice(newest);
+    if (
+      isMessageNotification(newest) &&
+      !isActiveMessageOpen &&
+      shouldShowDesktopNotification(newest, notificationPreferences, conversationPreference)
+    ) {
+      setMessageNotice(
+        conversationPreference.sensitive
+          ? { ...newest, body: "Nội dung nhạy cảm đã được ẩn." }
+          : newest
+      );
     }
 
     const notifications = getPlatformServices().notifications;
-    if (shouldShowDesktopNotification(newest, notificationPreferences)) {
+    if (shouldShowDesktopNotification(newest, notificationPreferences, conversationPreference)) {
       const payload = {
-        body: notificationPreferences.preview ? newest.body : "Bạn có thông báo mới.",
+        body:
+          notificationPreferences.preview && !conversationPreference.sensitive
+            ? newest.body
+            : "Bạn có thông báo mới.",
         data: nativeNotificationData(newest, data.workspaceId),
         tag: newest.id,
         title: newest.title
@@ -915,7 +995,14 @@ export function ChatWorkspace() {
         });
       }
     }
-  }, [activeRailItem, data.notifications, data.selectedChannelId, data.workspaceId, notificationPreferences]);
+  }, [
+    activeRailItem,
+    conversationPreferenceFor,
+    data.notifications,
+    data.selectedChannelId,
+    data.workspaceId,
+    notificationPreferences
+  ]);
 
   useEffect(() => {
     if (!data.workspaceId || typeof window === "undefined") {
@@ -1009,6 +1096,143 @@ export function ChatWorkspace() {
   }, [data.workspaceId]);
 
   useEffect(() => {
+    if (!data.workspaceId || typeof window === "undefined") {
+      setConversationPreferences({});
+      setCompactMode(false);
+      setCallJoinPreferences(defaultCallJoinPreferences);
+      return;
+    }
+
+    let active = true;
+    const storage = getPlatformServices().storage;
+    const load = async () => {
+      try {
+        const [rawPreferences, rawDisplay] = await Promise.all([
+          Promise.resolve(storage.getItem(collaborationPreferencesStorageKey(data.workspaceId))),
+          Promise.resolve(storage.getItem(collaborationDisplayStorageKey(data.workspaceId)))
+        ]);
+        if (!active) {
+          return;
+        }
+        const display = parseCollaborationDisplay(rawDisplay);
+        setConversationPreferences(parseConversationPreferences(rawPreferences));
+        setCompactMode(display.compactMode);
+        setCallJoinPreferences(display.callJoin);
+      } catch {
+        if (active) {
+          setConversationPreferences({});
+          setCompactMode(false);
+          setCallJoinPreferences(defaultCallJoinPreferences);
+        }
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [data.workspaceId]);
+
+  useEffect(() => {
+    if (!data.workspaceId || !data.selectedChannelId) {
+      return;
+    }
+    let active = true;
+    void api.notifications
+      .getChannelPreference(data.workspaceId, data.selectedChannelId)
+      .then((preference) => {
+        if (!active) return;
+        setConversationPreferences((current) => ({
+          ...current,
+          [data.selectedChannelId]: normalizeConversationPreference({
+            important: preference.important,
+            sensitive: preference.sensitive,
+            tags: preference.tags
+          })
+        }));
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [data.selectedChannelId, data.workspaceId]);
+
+  const updateConversationPreference = useCallback(
+    (conversationId: string, preference: ConversationPreference) => {
+      const normalized = normalizeConversationPreference(preference);
+      setConversationPreferences((current) => {
+        const next = { ...current, [conversationId]: normalized };
+        if (data.workspaceId) {
+          try {
+            void getPlatformServices().storage.setItem(
+              collaborationPreferencesStorageKey(data.workspaceId),
+              JSON.stringify(next),
+              "persistent"
+            );
+          } catch {
+            // The preference remains active for the current session.
+          }
+        }
+        return next;
+      });
+      if (data.workspaceId) {
+        void api.notifications
+          .getChannelPreference(data.workspaceId, conversationId)
+          .catch(() => ({
+            archived_at: null,
+            channel_id: conversationId,
+            compact: compactMode,
+            created_at: new Date().toISOString(),
+            important: false,
+            mode: "all" as const,
+            muted_until: null,
+            sensitive: false,
+            tags: [],
+            updated_at: new Date().toISOString(),
+            user_id: "",
+            workspace_id: data.workspaceId
+          }))
+          .then((current) =>
+            api.notifications.updateChannelPreference(conversationId, {
+              channel_id: conversationId,
+              compact: compactMode,
+              important: normalized.important,
+              mode: current.mode,
+              muted_until: current.muted_until,
+              sensitive: normalized.sensitive,
+              tags: normalized.tags,
+              workspace_id: data.workspaceId
+            })
+          )
+          .catch(() => undefined);
+      }
+    },
+    [compactMode, data.workspaceId]
+  );
+
+  const updateCollaborationDisplay = useCallback(
+    (nextCompactMode: boolean, nextCallJoin: CallJoinPreferences) => {
+      setCompactMode(nextCompactMode);
+      setCallJoinPreferences(nextCallJoin);
+      if (!data.workspaceId) {
+        return;
+      }
+      try {
+        void getPlatformServices().storage.setItem(
+          collaborationDisplayStorageKey(data.workspaceId),
+          JSON.stringify({
+            callJoin: nextCallJoin,
+            compactMode: nextCompactMode
+          }),
+          "persistent"
+        );
+      } catch {
+        // The display preference remains active for the current session.
+      }
+    },
+    [data.workspaceId]
+  );
+
+  useEffect(() => {
     if (!getPlatformServices().lifecycle.isDesktop) {
       return;
     }
@@ -1075,6 +1299,8 @@ export function ChatWorkspace() {
     channelId: data.selectedChannelId,
     channelName: selectedChatChannel?.name,
     currentUserId: currentUser.id,
+    defaultCameraEnabled: callJoinPreferences.cameraEnabled,
+    defaultMicrophoneEnabled: callJoinPreferences.microphoneEnabled,
     enabled: Boolean(data.workspaceId),
     lastSignal: data.realtime.lastCallSignal,
     onCallOutcome: handleCallOutcome,
@@ -1095,20 +1321,14 @@ export function ChatWorkspace() {
       void callControls.openIncomingCall(incoming.callId);
     }
   }, [callControls.callState.status, callControls.openIncomingCall, currentUser.id, data.notifications, data.selectedChannelId]);
-  function handleCallOutcome(outcome: WebRtcCallOutcome) {
+  function handleCallOutcome() {
     if (!data.selectedChannelId || selectedChatChannel?.type !== "direct") {
       return;
     }
-    data.sendCallEventMutation.mutate({
-      callId: outcome.callId,
-      durationSeconds: outcome.durationSeconds,
-      endedAt: new Date(outcome.endedAt).toISOString(),
-      initiatorUserId: outcome.initiatorUserId,
-      mode: outcome.mode,
-      reason: outcome.reason,
-      startedAt: outcome.startedAt ? new Date(outcome.startedAt).toISOString() : undefined,
-      status: outcome.status
-    });
+    // The backend is the single source of truth for call-history messages.
+    // Refreshing here makes the server-created event visible even if the
+    // realtime connection briefly dropped without creating a duplicate card.
+    void data.messagesQuery.refetch();
   }
 
   const composerPlaceholder = botComposerPlaceholder(selectedChatChannel);
@@ -1628,6 +1848,16 @@ export function ChatWorkspace() {
     window.requestAnimationFrame(() => composerInputRef.current?.focus());
   }
 
+  function handleInsertGroupMention() {
+    const token = resolveMentionToken(draft);
+    if (!token) {
+      return;
+    }
+
+    handleDraftChange(`${draft.slice(0, token.start)}@group `);
+    window.requestAnimationFrame(() => composerInputRef.current?.focus());
+  }
+
   function handleDraftChange(value: string) {
     setDraft(value);
     if (data.workspaceId && data.selectedChannelId) {
@@ -1898,12 +2128,49 @@ export function ChatWorkspace() {
 
     const mentionedUserIds = collectMentionedUserIds(body, mentionMembers);
 
+    if (scheduledFor) {
+      if (uploads.length) {
+        setToast("Tin nhắn hẹn giờ hiện chỉ hỗ trợ nội dung chữ; hãy gửi file riêng.");
+        return;
+      }
+      if (!data.workspaceId || !data.selectedChannelId) {
+        return;
+      }
+      const scheduledDate = new Date(scheduledFor);
+      if (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() < Date.now() + 15_000) {
+        setToast("Thời gian gửi phải sau hiện tại ít nhất 15 giây.");
+        return;
+      }
+      void api.messages
+        .schedule(data.workspaceId, data.selectedChannelId, {
+          body,
+          kind: "text",
+          mentioned_user_ids: mentionedUserIds,
+          parent_id: replyingTo?.messageId,
+          scheduled_for: scheduledDate.toISOString(),
+          silent: isSilentMessage
+        })
+        .then(() => {
+          setDraft("");
+          setReplyingTo(null);
+          setScheduledFor("");
+          setIsSilentMessage(false);
+          if (data.workspaceId && data.selectedChannelId) {
+            void writeDraft(data.workspaceId, data.selectedChannelId, "").catch(() => undefined);
+          }
+          setToast("Đã lên lịch gửi tin nhắn.");
+        })
+        .catch((error) => setToast(error instanceof Error ? error.message : "Không lên lịch được tin nhắn."));
+      return;
+    }
+
     data.sendMessageMutation.mutate(
       {
         body,
         mentionedUserIds,
         parentId: replyingTo?.messageId,
         replyTo: replyingTo ?? undefined,
+        silent: isSilentMessage,
         uploads
       },
       {
@@ -1912,6 +2179,7 @@ export function ChatWorkspace() {
         onSuccess: (result) => {
           setDraft("");
           setReplyingTo(null);
+          setIsSilentMessage(false);
           if (data.workspaceId && data.selectedChannelId) {
             void writeDraft(data.workspaceId, data.selectedChannelId, "").catch(() => undefined);
           }
@@ -1951,6 +2219,44 @@ export function ChatWorkspace() {
     setIsEmojiPickerOpen(false);
     setIsComposerMoreOpen(false);
     refocusComposerInput();
+  }
+
+  async function handleReplyPrivately(message: ChatMessage, author: ChatUser) {
+    if (!author.id || author.id === currentUser.id) {
+      return;
+    }
+    try {
+      const conversation = await data.createDirectConversationMutation.mutateAsync({
+        participantId: author.id,
+        sourceChannelId: data.selectedChannelId,
+        workspaceId: data.workspaceId
+      });
+      const channelId = conversation.channel_id ?? conversation.id;
+      showMessageWorkspace("conversations");
+      data.setSelectedChannelId(channelId);
+      handleDraftChange(`Trả lời riêng tư ${author.name}:\n> ${replyPreviewBody(message)}\n\n`);
+      window.requestAnimationFrame(() => composerInputRef.current?.focus());
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Không mở được cuộc trò chuyện riêng.");
+    }
+  }
+
+  async function handleConvertMessageToTask(message: ChatMessage) {
+    if (!data.workspaceId || !data.selectedChannelId) {
+      return;
+    }
+    try {
+      await api.channels.createChannelTask(data.workspaceId, data.selectedChannelId, {
+        source_message_id: message.id,
+        title: replyPreviewBody(message).slice(0, 240)
+      });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.channels.tasks(data.workspaceId, data.selectedChannelId)
+      });
+      setToast("Đã chuyển tin nhắn thành task công việc.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Không chuyển được tin nhắn thành task.");
+    }
   }
 
   function handleDownload(file: FileItem) {
@@ -2132,6 +2438,60 @@ export function ChatWorkspace() {
     );
   }
 
+  function handleCreatePoll(poll: CreatePollPayload) {
+    data.createPollMutation.mutate(poll, {
+      onError: (error) =>
+        setToast(
+          error instanceof Error
+            ? error.message
+            : "Không thể tạo bình chọn."
+        ),
+      onSuccess: () => {
+        setIsPollComposerOpen(false);
+        setToast("Đã tạo bình chọn.", "success");
+      }
+    });
+  }
+
+  async function handleVotePoll(message: ChatMessage, reaction: string) {
+    const poll = message.poll;
+    if (!poll) {
+      return;
+    }
+    const selected = message.reactions?.find((item) => item.emoji === reaction);
+    try {
+      if (!poll.multiple && !selected?.reactedByMe) {
+        const previousVotes = (message.reactions ?? []).filter(
+          (item) =>
+            item.reactedByMe &&
+            item.emoji !== reaction &&
+            poll.options.some((option) => option.reaction === item.emoji)
+        );
+        for (const previousVote of previousVotes) {
+          await data.toggleReactionMutation.mutateAsync({
+            emoji: previousVote.emoji,
+            messageId: message.id,
+            reactedByMe: true
+          });
+        }
+      }
+      await data.toggleReactionMutation.mutateAsync({
+        emoji: reaction,
+        messageId: message.id,
+        reactedByMe: selected?.reactedByMe
+      });
+      if (selected?.reactedByMe) {
+        await data.messagesQuery.refetch();
+      }
+    } catch (error) {
+      setToast(
+        error instanceof Error
+          ? error.message
+          : "Không thể cập nhật lựa chọn."
+      );
+    }
+  }
+
   function handleToggleMessagePin(message: ChatMessage, isPinned: boolean) {
     const mutation = isPinned ? data.unpinMessageMutation : data.pinMessageMutation;
 
@@ -2153,15 +2513,17 @@ export function ChatWorkspace() {
 
   return (
     <main
-      className={`chat-app-shell chat-app-shell--zalo${activeRailItem === "messages" ? selectedChatChannel ? " chat-app-shell--mobile-chat" : " chat-app-shell--mobile-list" : " chat-app-shell--section chat-app-shell--mobile-section"}${activeRailItem !== "messages" && activeRailItem !== "contacts" ? " chat-app-shell--section-full" : ""}${activeRailItem === "messages" && data.selectedChannel && !data.canAccessSelectedChannel ? " chat-app-shell--no-detail" : ""}${activeRailItem === "messages" && isDetailPanelOpen ? " chat-app-shell--detail-open" : " chat-app-shell--detail-closed"}${isChannelPanelCollapsed ? " chat-app-shell--channel-collapsed" : ""}`}
-      aria-label="Màn hình chat WebTui"
+      className={`chat-app-shell chat-app-shell--zalo${activeRailItem === "messages" ? selectedChatChannel ? " chat-app-shell--mobile-chat" : " chat-app-shell--mobile-list" : " chat-app-shell--section chat-app-shell--mobile-section"}${activeRailItem !== "messages" && activeRailItem !== "contacts" ? " chat-app-shell--section-full" : ""}${activeRailItem === "messages" && data.selectedChannel && !data.canAccessSelectedChannel ? " chat-app-shell--no-detail" : ""}${activeRailItem === "messages" && isDetailPanelOpen ? " chat-app-shell--detail-open" : " chat-app-shell--detail-closed"}${isChannelPanelCollapsed ? " chat-app-shell--channel-collapsed" : ""}${compactMode ? " chat-app-shell--compact" : ""}`}
+      aria-label={`Màn hình chat ${zoneRuntime?.app_name ?? "tổ chức"}`}
     >
       <div className="navigation-rail-slot" ref={accountMenuRef}>
         <NavigationRail
           activeId={activeRailItem === "messages" && messageSidebarTab === "channels" ? "channels" : activeRailItem}
           ariaLabel="Điều hướng chính"
-          brandLogoAlt="WebTui Chat"
-          brandLogoSrc="/brand/logo_webtui.png"
+          brandLabel={(zoneRuntime?.app_name ?? "O").slice(0, 1).toUpperCase()}
+          brandLogoAlt={zoneRuntime?.app_name ?? "Tổ chức"}
+          brandLogoSrc={zoneRuntime?.logo_url}
+          brandTitle={zoneRuntime?.app_name}
           isProfileMenuOpen={isProfileMenuOpen}
           items={visibleRailItems}
           onProfileClick={() => setIsProfileMenuOpen((current) => !current)}
@@ -2174,7 +2536,7 @@ export function ChatWorkspace() {
               <Avatar name={currentUser.name} size="lg" src={currentUser.avatarUrl} status={currentUser.status} />
               <span>
                 <strong>{currentUser.name}</strong>
-                <small>{currentUser.email || currentUser.username || "Tài khoản WebTui"}</small>
+                <small>{currentUser.email || currentUser.username || `Tài khoản ${zoneRuntime?.app_name ?? "tổ chức"}`}</small>
                 <i><span /> Đang hoạt động</i>
               </span>
             </header>
@@ -2387,9 +2749,10 @@ export function ChatWorkspace() {
                   ) : filteredConversations.length ? (
                     filteredConversations.map((item) => {
                       const unreadCount = effectiveUnreadCount(item.id, item.unreadCount);
+                      const collaborationPreference = conversationPreferenceFor(item.id);
                       return (
                         <button
-                          className={`conversation-row${item.id === data.selectedChannelId ? " conversation-row--active" : ""}${unreadCount ? " conversation-row--unread" : ""}`}
+                          className={`conversation-row${item.id === data.selectedChannelId ? " conversation-row--active" : ""}${unreadCount ? " conversation-row--unread" : ""}${collaborationPreference.important ? " conversation-row--important" : ""}${collaborationPreference.sensitive ? " conversation-row--sensitive" : ""}`}
                           key={item.id}
                           onClick={() => handleChannelSelect(item.id)}
                           title={isChannelPanelCollapsed ? item.user.name : undefined}
@@ -2398,7 +2761,18 @@ export function ChatWorkspace() {
                           <Avatar name={item.user.name} size="md" src={item.user.avatarUrl} status={item.user.status} />
                           <span className="conversation-row__body">
                             <strong>{item.user.name}</strong>
-                            <small>{item.lastMessage}</small>
+                            <small>
+                              {collaborationPreference.sensitive
+                                ? "Nội dung nhạy cảm đã được ẩn"
+                                : item.lastMessage}
+                            </small>
+                            {collaborationPreference.tags.length ? (
+                              <span className="conversation-tags" aria-label="Nhãn hội thoại">
+                                {collaborationPreference.tags.slice(0, 3).map((tag) => (
+                                  <i key={tag}>#{tag}</i>
+                                ))}
+                              </span>
+                            ) : null}
                           </span>
                           <span className="conversation-row__meta">
                             <time>{item.relativeTime}</time>
@@ -2452,9 +2826,10 @@ export function ChatWorkspace() {
                   ) : sidebarChannels.length ? (
                     sidebarChannels.map((channel) => {
                       const unreadCount = effectiveUnreadCount(channel.id, channel.unreadCount);
+                      const collaborationPreference = conversationPreferenceFor(channel.id);
                       return (
                         <button
-                          className={`channel-row${channel.id === data.selectedChannelId ? " channel-row--active" : ""}${unreadCount ? " channel-row--unread" : ""}`}
+                          className={`channel-row${channel.id === data.selectedChannelId ? " channel-row--active" : ""}${unreadCount ? " channel-row--unread" : ""}${collaborationPreference.important ? " channel-row--important" : ""}${collaborationPreference.sensitive ? " channel-row--sensitive" : ""}`}
                           key={channel.id}
                           onClick={() => handleChannelSelect(channel.id)}
                           title={isChannelPanelCollapsed ? channel.name : undefined}
@@ -2463,7 +2838,18 @@ export function ChatWorkspace() {
                           <span className={`channel-hash channel-hash--${channel.tone}`} style={channelHashStyle(channel)}>#</span>
                           <span className="channel-row__body">
                             <strong>{channel.name}</strong>
-                            <small>{channel.description}</small>
+                            <small>
+                              {collaborationPreference.sensitive
+                                ? "Nội dung nhạy cảm đã được ẩn"
+                                : channel.description}
+                            </small>
+                            {collaborationPreference.tags.length ? (
+                              <span className="conversation-tags" aria-label="Nhãn kênh">
+                                {collaborationPreference.tags.slice(0, 3).map((tag) => (
+                                  <i key={tag}>#{tag}</i>
+                                ))}
+                              </span>
+                            ) : null}
                           </span>
                           <span className="channel-row__meta">
                             <time>{channel.relativeTime}</time>
@@ -2836,7 +3222,20 @@ export function ChatWorkspace() {
                 onResolveAttachment={data.downloadAttachment}
                 onLoadOlderMessages={handleLoadOlderMessages}
                 onOpenThread={handleOpenThread}
+                onPollVote={(message, reaction) => void handleVotePoll(message, reaction)}
+                onConvertMessageToTask={(message) => void handleConvertMessageToTask(message)}
                 onReplyMessage={handleReplyToMessage}
+                onReplyPrivately={(message, author) => void handleReplyPrivately(message, author)}
+                onRemindMessage={(message) => {
+                  if (!data.workspaceId || !data.selectedChannelId) return;
+                  void api.messages
+                    .createReminder(data.workspaceId, data.selectedChannelId, message.id, {
+                      remind_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+                      note: message.body.slice(0, 160)
+                    })
+                    .then(() => setToast("Sẽ nhắc lại tin nhắn này sau 1 giờ."))
+                    .catch((error) => setToast(error instanceof Error ? error.message : "Không tạo được lời nhắc."));
+                }}
                 onFocusedMessageSettled={handleFocusedMessageSettled}
                 onRetryCall={(mode) => void callControls.startCall(mode)}
                 onSearchResultSelect={(message) => {
@@ -2886,6 +3285,28 @@ export function ChatWorkspace() {
               {replyingTo ? (
                 <ReplyComposerPreview onCancel={() => setReplyingTo(null)} preview={replyingTo} />
               ) : null}
+              {isSilentMessage || scheduledFor ? (
+                <div className="composer-delivery-options">
+                  {isSilentMessage ? (
+                    <button onClick={() => setIsSilentMessage(false)} type="button">
+                      <MicOff size={14} /> Gửi im lặng <X size={12} />
+                    </button>
+                  ) : null}
+                  {scheduledFor ? (
+                    <label>
+                      <Clock3 size={14} />
+                      <span>Gửi lúc</span>
+                      <input
+                        min={new Date().toISOString().slice(0, 16)}
+                        onChange={(event) => setScheduledFor(event.target.value)}
+                        type="datetime-local"
+                        value={scheduledFor}
+                      />
+                      <button aria-label="Bỏ hẹn giờ" onClick={() => setScheduledFor("")} type="button"><X size={12} /></button>
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
               <form className="composer" onSubmit={handleSendMessage}>
                 {isRecording ? (
                   <div className="recording-status" role="status">
@@ -2904,8 +3325,24 @@ export function ChatWorkspace() {
                   </div>
                 ) : null}
                 <div className="composer-input-group">
-                  {activeMentionToken && mentionSuggestions.length ? (
+                  {activeMentionToken && (mentionSuggestions.length || showGroupMentionSuggestion) ? (
                     <div className="mention-suggestions" role="listbox" aria-label="Gợi ý nhắc tên">
+                      {showGroupMentionSuggestion ? (
+                        <button
+                          aria-label="Nhắc tên cả nhóm"
+                          aria-selected="false"
+                          onClick={handleInsertGroupMention}
+                          onMouseDown={(event) => event.preventDefault()}
+                          role="option"
+                          type="button"
+                        >
+                          <span className="mention-group-icon"><Users size={16} /></span>
+                          <span>
+                            <strong>@group</strong>
+                            <small>Thông báo cho tất cả thành viên phòng</small>
+                          </span>
+                        </button>
+                      ) : null}
                       {mentionSuggestions.map((member) => (
                         <button
                           aria-label={`Nhắc tên ${mentionMemberName(member)}`}
@@ -3030,6 +3467,42 @@ export function ChatWorkspace() {
                             <Paperclip size={19} />
                             <span>Đính kèm file</span>
                           </button>
+                          <button
+                            disabled={!canSendMessage}
+                            onClick={() => {
+                              setIsComposerMoreOpen(false);
+                              setIsSilentMessage((current) => !current);
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            <MicOff size={19} />
+                            <span>{isSilentMessage ? "Bỏ gửi im lặng" : "Gửi im lặng"}</span>
+                          </button>
+                          <button
+                            disabled={!canSendMessage}
+                            onClick={() => {
+                              setIsComposerMoreOpen(false);
+                              setScheduledFor((current) => current || localComposerDateTime(new Date(Date.now() + 30 * 60_000)));
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            <CalendarClock size={19} />
+                            <span>Hẹn giờ gửi</span>
+                          </button>
+                          <button
+                            disabled={data.createPollMutation.isPending || !canSendMessage}
+                            onClick={() => {
+                              setIsComposerMoreOpen(false);
+                              setIsPollComposerOpen(true);
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            <ClipboardCheck size={19} />
+                            <span>Tạo bình chọn</span>
+                          </button>
                         </div>
                       ) : null}
                     </span>
@@ -3062,15 +3535,29 @@ export function ChatWorkspace() {
       {activeRailItem === "messages" && isDetailPanelOpen && (!data.selectedChannel || data.canAccessSelectedChannel) ? (
         <RightDetailPanel
           activeTab={detailTab}
+          callJoinPreferences={callJoinPreferences}
+          channel={selectedChatChannel}
           channelMembers={displayChannelMembers}
+          compactMode={compactMode}
+          conversationPreference={conversationPreferenceFor(selectedChatChannel?.id)}
+          currentUser={currentUser}
           files={selectedChatFiles}
           isDirectChat={selectedChatChannel?.type === "direct"}
           isLoading={data.messagesQuery.isLoading || data.pinnedMessagesQuery.isLoading || data.channelMediaQuery.isLoading}
           isSendingThread={data.sendThreadMessageMutation.isPending}
           isThreadLoading={data.threadQuery.isLoading}
           mediaItems={data.mediaItems}
+          messages={selectedChatChannel?.messages ?? []}
           onClose={() => setIsDetailPanelOpen(false)}
           onCloseThread={() => setThreadMessageId(null)}
+          onCollaborationDisplayChange={updateCollaborationDisplay}
+          onConversationPreferenceChange={(preference) => {
+            if (selectedChatChannel?.id) {
+              updateConversationPreference(selectedChatChannel.id, preference);
+            }
+          }}
+          onCreatePoll={() => setIsPollComposerOpen(true)}
+          onToast={setToast}
           onFileSelect={handleDownload}
           onMediaSelect={handlePreviewMediaItem}
           onResolveMedia={data.downloadAttachment}
@@ -3089,17 +3576,42 @@ export function ChatWorkspace() {
           threadMessages={data.threadMessages}
           threadMessageId={threadMessageId}
           workspaceMembers={displayWorkspaceMembers}
+          workspaceId={data.workspaceId}
         />
       ) : null}
 
       <CallPanel
+        cameraEnabled={callControls.cameraEnabled}
         callState={callControls.callState}
         hasMediaSession={callControls.hasMediaSession}
+        microphoneEnabled={callControls.microphoneEnabled}
         onAccept={() => void callControls.acceptCall()}
         onEnd={callControls.endCall}
         onReject={callControls.rejectCall}
+        onToggleCamera={callControls.toggleCamera}
+        onToggleMicrophone={callControls.toggleMicrophone}
+        onToggleScreenSharing={() => {
+          void callControls.toggleScreenSharing().catch((error) => {
+            setToast(
+              error instanceof Error
+                ? error.message
+                : "Không thể bắt đầu chia sẻ màn hình."
+            );
+          });
+        }}
         mediaContainerRef={callControls.mediaContainerRef}
+        reconnecting={callControls.reconnecting}
+        screenSharing={callControls.screenSharing}
+        screenSharingSupported={callControls.screenSharingSupported}
       />
+
+      {isPollComposerOpen ? (
+        <PollComposerDialog
+          isPending={data.createPollMutation.isPending}
+          onCancel={() => setIsPollComposerOpen(false)}
+          onSubmit={handleCreatePoll}
+        />
+      ) : null}
 
       {forwardingMessageId ? (
         <ForwardMessageDialog
@@ -5623,7 +6135,7 @@ function OperationalPage({ activeRailItem }: { activeRailItem: RailItemId }) {
         <Badge tone="orange">Sắp có</Badge>
         <Icon size={42} />
         <h2>{config.title} đang được hoàn thiện</h2>
-        <p>WebTui Chat sẽ mở phần này khi quy trình sử dụng đã sẵn sàng cho người dùng.</p>
+        <p>Ứng dụng sẽ mở phần này khi quy trình sử dụng đã sẵn sàng cho người dùng.</p>
       </section>
     </div>
   );
@@ -6004,27 +6516,71 @@ function useIncomingCallRingtone(active: boolean) {
 }
 
 function CallPanel({
+  cameraEnabled,
   callState,
   hasMediaSession,
   mediaContainerRef,
+  microphoneEnabled,
   onAccept,
   onEnd,
-  onReject
+  onReject,
+  onToggleCamera,
+  onToggleMicrophone,
+  onToggleScreenSharing,
+  reconnecting,
+  screenSharing,
+  screenSharingSupported
 }: {
+  cameraEnabled: boolean;
   callState: WebRtcCallState;
   hasMediaSession: boolean;
   mediaContainerRef: RefObject<HTMLDivElement | null>;
+  microphoneEnabled: boolean;
   onAccept: () => void;
   onEnd: () => void;
   onReject: () => void;
+  onToggleCamera: () => void;
+  onToggleMicrophone: () => void;
+  onToggleScreenSharing: () => void;
+  reconnecting: boolean;
+  screenSharing: boolean;
+  screenSharingSupported: boolean;
 }) {
   const [minimized, setMinimized] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [mediaZoom, setMediaZoom] = useState(1);
+  const [mediaPan, setMediaPan] = useState({ x: 0, y: 0 });
+  const mediaDragRef = useRef<{
+    originX: number;
+    originY: number;
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
 
   useEffect(() => {
     if (callState.status === "incoming" || callState.status === "idle") {
       setMinimized(false);
     }
+    if (callState.status !== "active") {
+      setElapsedSeconds(0);
+      setMediaZoom(1);
+      setMediaPan({ x: 0, y: 0 });
+    }
   }, [callState.status]);
+
+  useEffect(() => {
+    if (callState.status !== "active" || !callState.startedAt) {
+      return undefined;
+    }
+    const updateElapsed = () =>
+      setElapsedSeconds(
+        Math.max(0, Math.floor((Date.now() - (callState.startedAt ?? Date.now())) / 1000))
+      );
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1_000);
+    return () => window.clearInterval(timer);
+  }, [callState.startedAt, callState.status]);
 
   if (callState.status === "idle") {
     return null;
@@ -6042,30 +6598,151 @@ function CallPanel({
         </span>
         <div>
           <strong>{callPanelTitle(callState)}</strong>
-          <small>{callPanelSubtitle(callState)}</small>
+          <small>
+            {reconnecting
+              ? "Đang khôi phục kết nối…"
+              : callPanelSubtitle(callState)}
+          </small>
         </div>
       </div>
       {showMediaSession && !minimized ? (
         <div className={`call-panel__media call-panel__media--${callState.mode}`}>
           <div
             className={hasMediaSession ? "webtui-webrtc-call" : "webtui-webrtc-call webtui-webrtc-call--loading"}
+            onPointerDown={(event) => {
+              if (mediaZoom <= 1 || !(event.target instanceof Element) || !event.target.closest(".webtui-webrtc-call__remote-video")) {
+                return;
+              }
+              mediaDragRef.current = {
+                originX: mediaPan.x,
+                originY: mediaPan.y,
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY
+              };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const drag = mediaDragRef.current;
+              if (!drag || drag.pointerId !== event.pointerId) {
+                return;
+              }
+              setMediaPan({
+                x: drag.originX + event.clientX - drag.startX,
+                y: drag.originY + event.clientY - drag.startY
+              });
+            }}
+            onPointerUp={(event) => {
+              if (mediaDragRef.current?.pointerId === event.pointerId) {
+                mediaDragRef.current = null;
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+            }}
             ref={mediaContainerRef}
+            style={{
+              "--call-pan-x": `${mediaPan.x}px`,
+              "--call-pan-y": `${mediaPan.y}px`,
+              "--call-zoom": String(mediaZoom)
+            } as CallMediaStyle}
           />
+          {isVideo ? (
+            <div className="call-panel__zoom-controls" aria-label="Thu phóng nội dung chia sẻ">
+              <button
+                aria-label="Thu nhỏ nội dung"
+                disabled={mediaZoom <= 1}
+                onClick={() => {
+                  setMediaZoom((value) => Math.max(1, Number((value - 0.25).toFixed(2))));
+                  if (mediaZoom <= 1.25) {
+                    setMediaPan({ x: 0, y: 0 });
+                  }
+                }}
+                type="button"
+              >
+                −
+              </button>
+              <span>{Math.round(mediaZoom * 100)}%</span>
+              <button
+                aria-label="Phóng to nội dung"
+                disabled={mediaZoom >= 3}
+                onClick={() => setMediaZoom((value) => Math.min(3, Number((value + 0.25).toFixed(2))))}
+                type="button"
+              >
+                +
+              </button>
+              {mediaZoom > 1 ? (
+                <button
+                  aria-label="Đặt lại góc nhìn"
+                  onClick={() => {
+                    setMediaZoom(1);
+                    setMediaPan({ x: 0, y: 0 });
+                  }}
+                  type="button"
+                >
+                  Đặt lại
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {elapsedSeconds >= 3_600 && !minimized ? (
+        <div className="call-panel__duration-warning" role="status">
+          <Clock3 size={15} />
+          Cuộc họp đã kéo dài {Math.floor(elapsedSeconds / 60)} phút.
         </div>
       ) : null}
       <div className="call-panel__actions">
         {showMediaSession ? (
-          <Tooltip label={minimized ? "Mở cửa sổ cuộc gọi" : "Thu nhỏ cuộc gọi"}>
-            <Button
-              aria-label={minimized ? "Mở cửa sổ cuộc gọi" : "Thu nhỏ cuộc gọi"}
-              className="call-panel__icon-button"
-              onClick={() => setMinimized((value) => !value)}
-              size="sm"
-              variant="secondary"
-            >
-              <Minimize2 size={16} />
-            </Button>
-          </Tooltip>
+          <>
+            <Tooltip label={microphoneEnabled ? "Tắt microphone" : "Bật microphone"}>
+              <Button
+                aria-label={microphoneEnabled ? "Tắt microphone" : "Bật microphone"}
+                className={`call-panel__icon-button${microphoneEnabled ? "" : " call-panel__icon-button--disabled"}`}
+                onClick={onToggleMicrophone}
+                size="sm"
+                variant="secondary"
+              >
+                {microphoneEnabled ? <Mic size={17} /> : <MicOff size={17} />}
+              </Button>
+            </Tooltip>
+            {isVideo ? (
+              <Tooltip label={cameraEnabled ? "Tắt camera" : "Bật camera"}>
+                <Button
+                  aria-label={cameraEnabled ? "Tắt camera" : "Bật camera"}
+                  className={`call-panel__icon-button${cameraEnabled ? "" : " call-panel__icon-button--disabled"}`}
+                  onClick={onToggleCamera}
+                  size="sm"
+                  variant="secondary"
+                >
+                  {cameraEnabled ? <Video size={17} /> : <VideoOff size={17} />}
+                </Button>
+              </Tooltip>
+            ) : null}
+            {isVideo && screenSharingSupported ? (
+              <Tooltip label={screenSharing ? "Dừng chia sẻ màn hình" : "Chia sẻ màn hình"}>
+                <Button
+                  aria-label={screenSharing ? "Dừng chia sẻ màn hình" : "Chia sẻ màn hình"}
+                  className={`call-panel__icon-button${screenSharing ? " call-panel__icon-button--active" : ""}`}
+                  onClick={onToggleScreenSharing}
+                  size="sm"
+                  variant="secondary"
+                >
+                  <Monitor size={17} />
+                </Button>
+              </Tooltip>
+            ) : null}
+            <Tooltip label={minimized ? "Mở cửa sổ cuộc gọi" : "Thu nhỏ cuộc gọi"}>
+              <Button
+                aria-label={minimized ? "Mở cửa sổ cuộc gọi" : "Thu nhỏ cuộc gọi"}
+                className="call-panel__icon-button"
+                onClick={() => setMinimized((value) => !value)}
+                size="sm"
+                variant="secondary"
+              >
+                <Minimize2 size={16} />
+              </Button>
+            </Tooltip>
+          </>
         ) : null}
         {callState.status === "incoming" ? (
           <>
@@ -6343,16 +7020,18 @@ function UploadQueue({
     uploading: "Đang tải"
   };
 
-  const hasImages = items.some((item) => item.isImage);
+  const hasMedia = items.some((item) => item.isImage || item.isVideo);
 
   return (
-    <div className={hasImages ? "upload-queue upload-queue--media" : "upload-queue"} aria-label="Hàng đợi upload">
+    <div className={hasMedia ? "upload-queue upload-queue--media" : "upload-queue"} aria-label="Hàng đợi upload">
       {items.map((item) => {
         const kindClassName = item.isImage
           ? "upload-queue__item--image"
-          : item.isAudio
-            ? "upload-queue__item--audio"
-            : "upload-queue__item--file";
+          : item.isVideo
+            ? "upload-queue__item--video"
+            : item.isAudio
+              ? "upload-queue__item--audio"
+              : "upload-queue__item--file";
         const statusLabel = item.error ?? labels[item.status];
 
         return (
@@ -6364,6 +7043,11 @@ function UploadQueue({
             {item.isImage && item.previewUrl ? (
               <div className="upload-queue__preview upload-queue__preview--image">
                 <img alt={item.name} className="upload-queue__thumb" src={item.previewUrl} />
+                <span className="upload-queue__status visually-hidden" role="status">{statusLabel}</span>
+              </div>
+            ) : item.isVideo && item.previewUrl ? (
+              <div className="upload-queue__preview upload-queue__preview--video">
+                <video aria-label={item.name} className="upload-queue__thumb" muted playsInline preload="metadata" src={item.previewUrl} />
                 <span className="upload-queue__status visually-hidden" role="status">{statusLabel}</span>
               </div>
             ) : item.isAudio && item.previewUrl ? (
@@ -6382,7 +7066,13 @@ function UploadQueue({
                 <small className="upload-queue__meta">
                   {item.durationSeconds ? `${formatVoiceTime(item.durationSeconds)} · ` : ""}{statusLabel}
                 </small>
-                {item.status === "uploading" ? <i aria-hidden="true" className="upload-queue__progress" /> : null}
+                {item.status === "uploading" ? (
+                  <i
+                    aria-hidden="true"
+                    className="upload-queue__progress"
+                    style={{ "--upload-progress": `${Math.round((item.progress ?? 0.08) * 100)}%` } as CSSProperties}
+                  />
+                ) : null}
               </div>
             ) : null}
             {!item.isImage && item.status === "failed" ? (
@@ -6405,6 +7095,185 @@ function UploadQueue({
           </article>
         );
       })}
+    </div>
+  );
+}
+
+const pollOptionReactions = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"] as const;
+
+function PollComposerDialog({
+  isPending,
+  onCancel,
+  onSubmit
+}: {
+  isPending: boolean;
+  onCancel: () => void;
+  onSubmit: (poll: CreatePollPayload) => void;
+}) {
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState(["", ""]);
+  const [multiple, setMultiple] = useState(false);
+  const [anonymous, setAnonymous] = useState(false);
+  const [closesAt, setClosesAt] = useState("");
+  const [importError, setImportError] = useState("");
+  const importRef = useRef<HTMLInputElement>(null);
+  const cleanOptions = options.map((option) => option.trim()).filter(Boolean);
+  const isValid = question.trim().length > 0 && cleanOptions.length >= 2;
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isPending) {
+        onCancel();
+      }
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [isPending, onCancel]);
+
+  function pollPayload(): CreatePollPayload {
+    return {
+      anonymous,
+      ...(closesAt ? { closesAt: new Date(closesAt).toISOString() } : {}),
+      multiple,
+      options: cleanOptions.map((label, index) => ({
+        id: `option-${index + 1}`,
+        label,
+        reaction: pollOptionReactions[index]
+      })),
+      question: question.trim()
+    };
+  }
+
+  function exportTemplate() {
+    const payload = pollPayload();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json"
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `poll-${Date.now()}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importTemplate(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    try {
+      const decoded = JSON.parse(await file.text()) as Record<string, unknown>;
+      const importedQuestion = typeof decoded.question === "string" ? decoded.question.trim() : "";
+      const rawOptions = Array.isArray(decoded.options) ? decoded.options : [];
+      const importedOptions = rawOptions
+        .map((option) => {
+          if (typeof option === "string") {
+            return option.trim();
+          }
+          if (option && typeof option === "object" && !Array.isArray(option)) {
+            const label = (option as Record<string, unknown>).label;
+            return typeof label === "string" ? label.trim() : "";
+          }
+          return "";
+        })
+        .filter(Boolean)
+        .slice(0, pollOptionReactions.length);
+      if (!importedQuestion || importedOptions.length < 2) {
+        throw new Error("Mẫu cần có câu hỏi và ít nhất hai lựa chọn.");
+      }
+      setQuestion(importedQuestion.slice(0, 500));
+      setOptions(importedOptions);
+      setMultiple(decoded.multiple === true);
+      setAnonymous(decoded.anonymous === true);
+      setClosesAt("");
+      setImportError("");
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Không đọc được mẫu bình chọn.");
+    }
+  }
+
+  return (
+    <div
+      className="forward-dialog-backdrop poll-dialog-backdrop"
+      onMouseDown={(event) => event.target === event.currentTarget && !isPending && onCancel()}
+      role="presentation"
+    >
+      <section aria-labelledby="poll-dialog-title" aria-modal="true" className="forward-dialog poll-dialog" role="dialog">
+        <header className="poll-dialog__header">
+          <span><ClipboardCheck size={22} /></span>
+          <div>
+            <h2 id="poll-dialog-title">Tạo bình chọn</h2>
+            <p>Chuẩn bị trước, nhập lại hoặc xuất mẫu JSON để dùng cho cuộc họp sau.</p>
+          </div>
+        </header>
+        <label>
+          Câu hỏi
+          <textarea
+            autoFocus
+            maxLength={500}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="Ví dụ: Chọn thời gian họp tuần này?"
+            rows={3}
+            value={question}
+          />
+        </label>
+        <div className="poll-dialog__options">
+          <strong>Lựa chọn</strong>
+          {options.map((option, index) => (
+            <label key={index}>
+              <span>{pollOptionReactions[index]}</span>
+              <input
+                aria-label={`Lựa chọn ${index + 1}`}
+                maxLength={200}
+                onChange={(event) =>
+                  setOptions((current) =>
+                    current.map((item, itemIndex) => itemIndex === index ? event.target.value : item)
+                  )
+                }
+                placeholder={`Lựa chọn ${index + 1}`}
+                value={option}
+              />
+              {options.length > 2 ? (
+                <button
+                  aria-label={`Xóa lựa chọn ${index + 1}`}
+                  onClick={() => setOptions((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                  type="button"
+                >
+                  <X size={15} />
+                </button>
+              ) : null}
+            </label>
+          ))}
+          {options.length < pollOptionReactions.length ? (
+            <Button onClick={() => setOptions((current) => [...current, ""])} size="sm" type="button" variant="ghost">
+              <Plus size={15} /> Thêm lựa chọn
+            </Button>
+          ) : null}
+        </div>
+        <div className="poll-dialog__settings">
+          <label><input checked={multiple} onChange={(event) => setMultiple(event.target.checked)} type="checkbox" /> Cho chọn nhiều đáp án</label>
+          <label><input checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} type="checkbox" /> Bình chọn ẩn danh</label>
+          <label>Đóng lúc <input min={new Date().toISOString().slice(0, 16)} onChange={(event) => setClosesAt(event.target.value)} type="datetime-local" value={closesAt} /></label>
+        </div>
+        <div className="poll-dialog__templates">
+          <input accept="application/json,.json" hidden onChange={(event) => void importTemplate(event)} ref={importRef} type="file" />
+          <Button onClick={() => importRef.current?.click()} size="sm" type="button" variant="secondary">
+            Nhập mẫu
+          </Button>
+          <Button disabled={!isValid} onClick={exportTemplate} size="sm" type="button" variant="secondary">
+            Xuất mẫu
+          </Button>
+          {importError ? <small role="alert">{importError}</small> : null}
+        </div>
+        <div className="forward-dialog__actions">
+          <Button disabled={isPending} onClick={onCancel} variant="secondary">Hủy</Button>
+          <Button disabled={isPending || !isValid} onClick={() => onSubmit(pollPayload())}>
+            {isPending ? "Đang tạo..." : "Tạo bình chọn"}
+          </Button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -6504,6 +7373,7 @@ function MessageTimeline({
   messages,
   onCancelEdit,
   onChangeEditingBody,
+  onConvertMessageToTask,
   onDeleteMessage,
   onDownloadAttachment,
   onForwardMessage,
@@ -6511,7 +7381,10 @@ function MessageTimeline({
   onResolveAttachment,
   onLoadOlderMessages,
   onOpenThread,
+  onPollVote,
   onReplyMessage,
+  onReplyPrivately,
+  onRemindMessage,
   onFocusedMessageSettled,
   onRetryCall,
   onSearchResultSelect,
@@ -6537,6 +7410,7 @@ function MessageTimeline({
   messages: ChatMessage[];
   onCancelEdit: () => void;
   onChangeEditingBody: (value: string) => void;
+  onConvertMessageToTask: (message: ChatMessage) => void;
   onDeleteMessage: (message: ChatMessage) => void;
   onDownloadAttachment: (attachment: MessageAttachmentItem) => void;
   onForwardMessage: (messageId: string) => void;
@@ -6544,7 +7418,10 @@ function MessageTimeline({
   onResolveAttachment: (fileId: string) => Promise<Blob>;
   onLoadOlderMessages: () => Promise<unknown> | void;
   onOpenThread: (messageId: string) => void;
+  onPollVote: (message: ChatMessage, reaction: string) => void;
   onReplyMessage: (message: ChatMessage, author: ChatUser) => void;
+  onReplyPrivately: (message: ChatMessage, author: ChatUser) => void;
+  onRemindMessage: (message: ChatMessage) => void;
   onFocusedMessageSettled: () => void;
   onRetryCall: (mode: "audio" | "video") => void;
   onSearchResultSelect: (message: ChatMessage) => void;
@@ -6889,6 +7766,51 @@ function MessageTimeline({
                         </button>
                       </Tooltip>
                     ) : null}
+                    {!message.isDeleted && !message.isPending ? (
+                      <Tooltip label="Chuyển thành task">
+                        <button
+                          aria-label="Chuyển tin nhắn thành task"
+                          onClick={() => {
+                            setActionMenuMessageId(null);
+                            onConvertMessageToTask(message);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          <ClipboardCheck size={15} />
+                        </button>
+                      </Tooltip>
+                    ) : null}
+                    {!message.isDeleted && !message.isPending ? (
+                      <Tooltip label="Nhắc lại sau 1 giờ">
+                        <button
+                          aria-label="Nhắc lại tin nhắn sau 1 giờ"
+                          onClick={() => {
+                            setActionMenuMessageId(null);
+                            onRemindMessage(message);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          <Clock3 size={15} />
+                        </button>
+                      </Tooltip>
+                    ) : null}
+                    {!message.isMine && !message.isDeleted && !message.isPending ? (
+                      <Tooltip label="Trả lời riêng tư">
+                        <button
+                          aria-label="Trả lời riêng tư"
+                          onClick={() => {
+                            setActionMenuMessageId(null);
+                            onReplyPrivately(message, messageAuthor);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          <LockKeyhole size={15} />
+                        </button>
+                      </Tooltip>
+                    ) : null}
                     <Tooltip label="Mở luồng trả lời">
                       <button
                         aria-label="Mở luồng trả lời"
@@ -6933,7 +7855,12 @@ function MessageTimeline({
                 preview={replyPreview}
               />
             ) : null}
-            {editingMessageId === message.id ? (
+            {message.poll ? (
+              <MessagePollCard
+                message={message}
+                onVote={(reaction) => onPollVote(message, reaction)}
+              />
+            ) : editingMessageId === message.id ? (
               <form className="message-edit-form" onSubmit={onSubmitEdit}>
                 <input
                   aria-label="Nội dung sửa"
@@ -6993,7 +7920,7 @@ function MessageTimeline({
                 )}
               </div>
             ) : null}
-            {message.reactions?.length ? (
+            {!message.poll && message.reactions?.length ? (
               <div className="reaction-pill">
                 {message.reactions.map((reaction) => (
                   <button
@@ -7008,7 +7935,7 @@ function MessageTimeline({
                 ))}
               </div>
             ) : null}
-            {!message.isDeleted ? (
+            {!message.isDeleted && !message.poll ? (
               <div className="message-reaction-control">
                 <button
                   aria-expanded={reactionPickerMessageId === message.id}
@@ -7065,6 +7992,72 @@ function MessageTimeline({
   );
 }
 
+function MessagePollCard({
+  message,
+  onVote
+}: {
+  message: ChatMessage;
+  onVote: (reaction: string) => void;
+}) {
+  const poll = message.poll;
+  if (!poll) {
+    return null;
+  }
+  const reactions = new Map(
+    (message.reactions ?? []).map((reaction) => [reaction.emoji, reaction])
+  );
+  const totalVotes = poll.options.reduce(
+    (total, option) => total + (reactions.get(option.reaction)?.count ?? 0),
+    0
+  );
+  const closesAt = poll.closesAt ? new Date(poll.closesAt) : null;
+  const closed = Boolean(
+    closesAt && Number.isFinite(closesAt.getTime()) && closesAt.getTime() <= Date.now()
+  );
+
+  return (
+    <section className="message-poll-card" aria-label={`Bình chọn: ${poll.question}`}>
+      <header>
+        <span><ClipboardCheck size={18} /></span>
+        <div>
+          <small>Bình chọn</small>
+          <strong>{poll.question}</strong>
+        </div>
+      </header>
+      <div className="message-poll-card__options">
+        {poll.options.map((option) => {
+          const reaction = reactions.get(option.reaction);
+          const count = reaction?.count ?? 0;
+          const percentage = totalVotes ? Math.round((count / totalVotes) * 100) : 0;
+          return (
+            <button
+              aria-pressed={reaction?.reactedByMe === true}
+              className={reaction?.reactedByMe ? "poll-option poll-option--selected" : "poll-option"}
+              disabled={closed}
+              key={option.id}
+              onClick={() => onVote(option.reaction)}
+              type="button"
+            >
+              <span className="poll-option__progress" style={{ width: `${percentage}%` }} />
+              <span className="poll-option__content">
+                <ReactionGlyph emoji={option.reaction} />
+                <strong>{option.label}</strong>
+                <small>{count} · {percentage}%</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <footer>
+        <span>{totalVotes} lượt chọn</span>
+        <span>{poll.multiple ? "Chọn nhiều đáp án" : "Chọn một đáp án"}</span>
+        {poll.anonymous ? <span>Ẩn danh</span> : null}
+        {closed ? <strong>Đã đóng</strong> : null}
+      </footer>
+    </section>
+  );
+}
+
 function CallMessageRow({
   focused,
   message,
@@ -7082,7 +8075,13 @@ function CallMessageRow({
   }
 
   const isMissed = callEvent.status === "missed";
-  const isLocalCallRow = message.isMine;
+  // Call history placement follows the call direction, not the persisted
+  // message sender. This keeps an incoming missed call on the remote/left side
+  // even when an older server or optimistic event used the current user as the
+  // event-message sender.
+  const isLocalCallRow = callEvent.direction
+    ? callEvent.direction === "outgoing"
+    : message.isMine;
   const CallIcon = isMissed ? PhoneOff : callEvent.mode === "video" ? Video : Phone;
 
   return (
@@ -7328,14 +8327,26 @@ function isIncomingCallNotification(notification: NotificationItem, currentUserI
   );
 }
 
-function shouldShowDesktopNotification(notification: NotificationItem, preferences: NotificationPreferences): boolean {
-  if (preferences.mode === "muted") {
+function shouldShowDesktopNotification(
+  notification: NotificationItem,
+  preferences: NotificationPreferences,
+  conversationPreference: ConversationPreference = defaultConversationPreference
+): boolean {
+  if (!conversationPreference.important && preferences.mode === "muted") {
     return false;
   }
-  if (preferences.mode === "mentions" && !isMentionNotification(notification)) {
+  if (
+    !conversationPreference.important &&
+    preferences.mode === "mentions" &&
+    !isMentionNotification(notification)
+  ) {
     return false;
   }
-  if (preferences.quietHours && isWithinQuietHours(preferences.quietStart, preferences.quietEnd)) {
+  if (
+    !conversationPreference.important &&
+    preferences.quietHours &&
+    isWithinQuietHours(preferences.quietStart, preferences.quietEnd)
+  ) {
     return false;
   }
   return true;
@@ -7431,6 +8442,17 @@ function collectMentionedUserIds(body: string, members: Array<ChannelMember | Wo
   const normalizedBody = body.toLowerCase();
   const seen = new Set<string>();
   const mentionedUserIds: string[] = [];
+  const mentionsGroup = /(^|\s)@(group|all|everyone)(?=\s|$|[.,!?;:])/iu.test(body);
+
+  if (mentionsGroup) {
+    for (const member of members) {
+      if (!member.user_id || seen.has(member.user_id)) {
+        continue;
+      }
+      seen.add(member.user_id);
+      mentionedUserIds.push(member.user_id);
+    }
+  }
 
   for (const member of members) {
     if (!member.user_id || seen.has(member.user_id)) {
@@ -7530,6 +8552,10 @@ function uploadMimeTypeFromName(name: string): string {
     json: "application/json",
     m4a: "audio/mp4",
     mp3: "audio/mpeg",
+    m4v: "video/x-m4v",
+    mkv: "video/x-matroska",
+    mov: "video/quicktime",
+    mp4: "video/mp4",
     ogg: "audio/ogg",
     pdf: "application/pdf",
     png: "image/png",
@@ -7537,7 +8563,7 @@ function uploadMimeTypeFromName(name: string): string {
     pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     txt: "text/plain",
     wav: "audio/wav",
-    webm: "audio/webm",
+    webm: "video/webm",
     webp: "image/webp",
     xls: "application/vnd.ms-excel",
     xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -8057,6 +9083,11 @@ function isFileOnlyMessage(message: ChatMessage): boolean {
   return attachments.length > 0 && attachments.every((attachment) => !attachment.isAudio && !attachment.isImage && !attachment.isVideo) && !shouldRenderMessageBody(message);
 }
 
+function localComposerDateTime(date: Date): string {
+  const timezoneOffset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16);
+}
+
 function formatRecordingTime(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
   const seconds = (totalSeconds % 60).toString().padStart(2, "0");
@@ -8127,15 +9158,25 @@ function MediaGalleryThumbnail({
 
 function RightDetailPanel({
   activeTab,
+  callJoinPreferences,
+  channel,
   channelMembers,
+  compactMode,
+  conversationPreference,
+  currentUser,
   files,
   isDirectChat = false,
   isLoading,
   isSendingThread,
   isThreadLoading,
   mediaItems,
+  messages,
   onClose,
   onCloseThread,
+  onCollaborationDisplayChange,
+  onConversationPreferenceChange,
+  onCreatePoll,
+  onToast,
   onFileSelect,
   onMediaSelect,
   onResolveMedia,
@@ -8144,18 +9185,32 @@ function RightDetailPanel({
   pinnedMessages,
   threadMessageId,
   threadMessages,
+  workspaceId,
   workspaceMembers
 }: {
   activeTab: DetailTab;
+  callJoinPreferences: CallJoinPreferences;
+  channel: ChatChannel | null;
   channelMembers: ChannelMember[];
+  compactMode: boolean;
+  conversationPreference: ConversationPreference;
+  currentUser: ChatUser;
   files: FileItem[];
   isDirectChat?: boolean;
   isLoading: boolean;
   isSendingThread: boolean;
   isThreadLoading: boolean;
   mediaItems: MediaItem[];
+  messages: ChatMessage[];
   onClose: () => void;
   onCloseThread: () => void;
+  onCollaborationDisplayChange: (
+    compactMode: boolean,
+    callJoin: CallJoinPreferences
+  ) => void;
+  onConversationPreferenceChange: (preference: ConversationPreference) => void;
+  onCreatePoll: () => void;
+  onToast: (message: string) => void;
   onFileSelect: (file: FileItem) => void;
   onMediaSelect: (item: MediaItem, source?: string) => void;
   onResolveMedia: (fileId: string) => Promise<Blob>;
@@ -8164,18 +9219,56 @@ function RightDetailPanel({
   pinnedMessages: PinnedMessage[];
   threadMessageId: string | null;
   threadMessages: ChatMessage[];
+  workspaceId: string;
   workspaceMembers: WorkspaceMember[];
 }) {
+  const queryClient = useQueryClient();
   const [threadDraft, setThreadDraft] = useState("");
+  const [threadTitle, setThreadTitle] = useState("");
   const currentChatLabel = isDirectChat ? "Hội thoại này" : "Kênh này";
   const memberByUserId = useMemo(
     () => buildMessageAuthorLookup(workspaceMembers, channelMembers),
     [channelMembers, workspaceMembers]
   );
+  const threadDetailsKey = [
+    ...queryKeys.messages.thread(workspaceId, channel?.id ?? "", threadMessageId ?? ""),
+    "details"
+  ] as const;
+  const threadDetailsQuery = useQuery({
+    enabled: Boolean(workspaceId && channel?.id && threadMessageId),
+    queryFn: () => api.messages.threadDetails(workspaceId, channel?.id ?? "", threadMessageId ?? ""),
+    queryKey: threadDetailsKey
+  });
+  const threadDetailsMutation = useMutation({
+    mutationFn: (input: { subscribed?: boolean; title?: string; status?: "open" | "resolved" }) => {
+      const details = threadDetailsQuery.data;
+      if (!channel?.id || !threadMessageId || !details) {
+        throw new Error("Chưa tải được thông tin thread.");
+      }
+      if (typeof input.subscribed === "boolean") {
+        return api.messages.setThreadSubscription(workspaceId, channel.id, threadMessageId, input.subscribed);
+      }
+      return api.messages.updateThreadDetails(workspaceId, channel.id, threadMessageId, {
+        description: details.description,
+        status: input.status ?? details.status,
+        title: input.title ?? details.title
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: threadDetailsKey });
+    }
+  });
 
   useEffect(() => {
     setThreadDraft("");
+    setThreadTitle("");
   }, [threadMessageId]);
+
+  useEffect(() => {
+    if (threadDetailsQuery.data) {
+      setThreadTitle(threadDetailsQuery.data.title);
+    }
+  }, [threadDetailsQuery.data]);
 
   async function handleThreadSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -8201,6 +9294,38 @@ function RightDetailPanel({
               <X size={18} />
             </Button>
           </header>
+          {threadDetailsQuery.data ? (
+            <div className="thread-details">
+              <input
+                aria-label="Tiêu đề thread"
+                maxLength={160}
+                onBlur={() => {
+                  if (threadTitle.trim() !== threadDetailsQuery.data.title) {
+                    threadDetailsMutation.mutate({ title: threadTitle.trim() });
+                  }
+                }}
+                onChange={(event) => setThreadTitle(event.target.value)}
+                placeholder="Đặt tiêu đề cho thread"
+                value={threadTitle}
+              />
+              <button
+                className={threadDetailsQuery.data.subscribed ? "is-active" : ""}
+                onClick={() => threadDetailsMutation.mutate({ subscribed: !threadDetailsQuery.data.subscribed })}
+                type="button"
+              >
+                <Bell size={14} /> {threadDetailsQuery.data.subscribed ? "Đang theo dõi" : "Theo dõi"}
+              </button>
+              <button
+                onClick={() => threadDetailsMutation.mutate({
+                  status: threadDetailsQuery.data.status === "open" ? "resolved" : "open"
+                })}
+                type="button"
+              >
+                <CheckCircle2 size={14} /> {threadDetailsQuery.data.status === "open" ? "Đánh dấu đã xử lý" : "Mở lại"}
+              </button>
+              {threadDetailsQuery.data.unread_count ? <Badge tone="blue">{threadDetailsQuery.data.unread_count} chưa đọc</Badge> : null}
+            </div>
+          ) : null}
           {isThreadLoading ? (
             <PanelSkeleton />
           ) : threadMessages.length ? (
@@ -8244,6 +9369,25 @@ function RightDetailPanel({
           </Button>
         </Tooltip>
       </div>
+
+      {activeTab === "workspace" ? (
+        <CollaborationWorkspacePanel
+          callJoinPreferences={callJoinPreferences}
+          channel={channel}
+          compactMode={compactMode}
+          conversationPreference={conversationPreference}
+          currentUser={currentUser}
+          files={files}
+          members={channelMembers}
+          messages={messages}
+          onCollaborationDisplayChange={onCollaborationDisplayChange}
+          onConversationPreferenceChange={onConversationPreferenceChange}
+          onCreatePoll={onCreatePoll}
+          onToast={onToast}
+          pinnedMessages={pinnedMessages}
+          workspaceId={workspaceId}
+        />
+      ) : null}
 
       {activeTab === "pinned" ? (
         <section className="detail-section">
@@ -8315,6 +9459,327 @@ function RightDetailPanel({
       ) : null}
     </aside>
   );
+}
+
+function CollaborationWorkspacePanel({
+  callJoinPreferences,
+  channel,
+  compactMode,
+  conversationPreference,
+  currentUser,
+  files,
+  members,
+  messages,
+  onCollaborationDisplayChange,
+  onConversationPreferenceChange,
+  onCreatePoll,
+  onToast,
+  pinnedMessages,
+  workspaceId
+}: {
+  callJoinPreferences: CallJoinPreferences;
+  channel: ChatChannel | null;
+  compactMode: boolean;
+  conversationPreference: ConversationPreference;
+  currentUser: ChatUser;
+  files: FileItem[];
+  members: ChannelMember[];
+  messages: ChatMessage[];
+  onCollaborationDisplayChange: (
+    compactMode: boolean,
+    callJoin: CallJoinPreferences
+  ) => void;
+  onConversationPreferenceChange: (preference: ConversationPreference) => void;
+  onCreatePoll: () => void;
+  onToast: (message: string) => void;
+  pinnedMessages: PinnedMessage[];
+  workspaceId: string;
+}) {
+  const [tagDraft, setTagDraft] = useState("");
+  const summary = useMemo(
+    () => buildLocalConversationSummary(messages, files, pinnedMessages),
+    [files, messages, pinnedMessages]
+  );
+
+  function addTag() {
+    const tags = normalizeConversationTags([
+      ...conversationPreference.tags,
+      tagDraft
+    ]);
+    if (tags.length !== conversationPreference.tags.length) {
+      onConversationPreferenceChange({ ...conversationPreference, tags });
+    }
+    setTagDraft("");
+  }
+
+  return (
+    <div className="collaboration-workspace">
+      <section className="collaboration-hero">
+        <div>
+          <span className="collaboration-hero__icon"><Sparkles size={18} /></span>
+          <span>
+            <small>Không gian cộng tác</small>
+            <strong>{channel?.name ?? "Cuộc trò chuyện"}</strong>
+          </span>
+        </div>
+        <p>File, quyết định và việc cần làm nằm cạnh luồng chat, không cần đổi tab.</p>
+      </section>
+
+      {channel && workspaceId ? (
+        <TalkCollaborationHub
+          channel={channel}
+          currentUser={currentUser}
+          members={members}
+          onToast={onToast}
+          workspaceId={workspaceId}
+        />
+      ) : null}
+
+      <section className="collaboration-summary-card">
+        <header>
+          <span><Sparkles size={16} /></span>
+          <div>
+            <strong>Tóm tắt thông minh</strong>
+            <small>Xử lý cục bộ trên thiết bị</small>
+          </div>
+        </header>
+        <div className="collaboration-summary-card__metrics">
+          <span><strong>{summary.messageCount}</strong><small>tin gần đây</small></span>
+          <span><strong>{summary.fileCount}</strong><small>tài liệu</small></span>
+          <span><strong>{summary.taskCount}</strong><small>việc cần làm</small></span>
+        </div>
+        {summary.highlights.length ? (
+          <ul>
+            {summary.highlights.map((highlight, index) => (
+              <li key={`${highlight}-${index}`}>{highlight}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>Chưa đủ nội dung để tạo bản tóm tắt.</p>
+        )}
+        <small className="collaboration-summary-card__privacy">
+          <LockKeyhole size={13} /> Nội dung không được gửi sang dịch vụ AI bên ngoài.
+        </small>
+      </section>
+
+      {summary.tasks.length ? (
+        <section className="collaboration-card collaboration-task-card">
+          <header>
+            <span><ClipboardCheck size={16} /></span>
+            <strong>Việc cần làm từ hội thoại</strong>
+          </header>
+          <div>
+            {summary.tasks.map((task) => (
+              <label key={task.id}>
+                <input checked={task.completed} readOnly type="checkbox" />
+                <span>{task.text}</span>
+              </label>
+            ))}
+          </div>
+          <small>Nhận diện từ “TODO”, “Cần làm” hoặc checklist trong tin nhắn.</small>
+        </section>
+      ) : null}
+
+      <section className="collaboration-card collaboration-files-card">
+        <header>
+          <span><FileText size={16} /></span>
+          <strong>Tài liệu gần đây</strong>
+          <small>{files.length}</small>
+        </header>
+        {files.length ? (
+          <div>
+            {files.slice(0, 4).map((file) => (
+              <span key={file.id}>
+                <FileText size={15} />
+                <span><strong>{file.name}</strong><small>{file.size}</small></span>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p>File được gửi trong cuộc trò chuyện sẽ xuất hiện tại đây.</p>
+        )}
+      </section>
+
+      <section className="collaboration-card collaboration-actions-card">
+        <header><strong>Công cụ nhanh</strong></header>
+        <div>
+          <button onClick={onCreatePoll} type="button">
+            <ClipboardCheck size={17} />
+            <span><strong>Tạo bình chọn</strong><small>Chuẩn bị hoặc nhập mẫu câu hỏi</small></span>
+          </button>
+          <button disabled type="button">
+            <CalendarClock size={17} />
+            <span><strong>Lịch làm việc</strong><small>Sẽ có khi kết nối CalDAV</small></span>
+          </button>
+        </div>
+      </section>
+
+      <section className="collaboration-card collaboration-privacy-card">
+        <header>
+          <span><ShieldCheck size={16} /></span>
+          <strong>Riêng tư và ưu tiên</strong>
+        </header>
+        <label>
+          <span><strong>Hội thoại nhạy cảm</strong><small>Ẩn preview ở danh sách và thông báo.</small></span>
+          <input
+            checked={conversationPreference.sensitive}
+            onChange={(event) =>
+              onConversationPreferenceChange({
+                ...conversationPreference,
+                sensitive: event.target.checked
+              })
+            }
+            type="checkbox"
+          />
+        </label>
+        <label>
+          <span><strong>Luôn thông báo</strong><small>Vượt qua giờ yên lặng và chế độ tắt tiếng.</small></span>
+          <input
+            checked={conversationPreference.important}
+            onChange={(event) =>
+              onConversationPreferenceChange({
+                ...conversationPreference,
+                important: event.target.checked
+              })
+            }
+            type="checkbox"
+          />
+        </label>
+        <div className="collaboration-tags-editor">
+          <strong>Nhãn hội thoại</strong>
+          <div>
+            {conversationPreference.tags.map((tag) => (
+              <button
+                aria-label={`Xóa nhãn ${tag}`}
+                key={tag}
+                onClick={() =>
+                  onConversationPreferenceChange({
+                    ...conversationPreference,
+                    tags: conversationPreference.tags.filter((item) => item !== tag)
+                  })
+                }
+                type="button"
+              >
+                #{tag} <X size={12} />
+              </button>
+            ))}
+          </div>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              addTag();
+            }}
+          >
+            <input
+              maxLength={32}
+              onChange={(event) => setTagDraft(event.target.value)}
+              placeholder="KháchHàng, DựÁnA..."
+              value={tagDraft}
+            />
+            <Button disabled={!tagDraft.trim()} size="sm" type="submit">Thêm</Button>
+          </form>
+        </div>
+      </section>
+
+      <section className="collaboration-card collaboration-display-card">
+        <header><strong>Trải nghiệm làm việc</strong></header>
+        <label>
+          <span><strong>Giao diện thu gọn</strong><small>Tăng lượng hội thoại và tin nhắn hiển thị.</small></span>
+          <input
+            checked={compactMode}
+            onChange={(event) =>
+              onCollaborationDisplayChange(event.target.checked, callJoinPreferences)
+            }
+            type="checkbox"
+          />
+        </label>
+        <label>
+          <span><strong>Tắt mic khi vào cuộc gọi</strong><small>Áp dụng cho cuộc gọi đến và đi tiếp theo.</small></span>
+          <input
+            checked={!callJoinPreferences.microphoneEnabled}
+            onChange={(event) =>
+              onCollaborationDisplayChange(compactMode, {
+                ...callJoinPreferences,
+                microphoneEnabled: !event.target.checked
+              })
+            }
+            type="checkbox"
+          />
+        </label>
+        <label>
+          <span><strong>Tắt camera khi vào video call</strong><small>Có thể bật lại trong cuộc gọi.</small></span>
+          <input
+            checked={!callJoinPreferences.cameraEnabled}
+            onChange={(event) =>
+              onCollaborationDisplayChange(compactMode, {
+                ...callJoinPreferences,
+                cameraEnabled: !event.target.checked
+              })
+            }
+            type="checkbox"
+          />
+        </label>
+      </section>
+    </div>
+  );
+}
+
+function buildLocalConversationSummary(
+  messages: ChatMessage[],
+  files: FileItem[],
+  pinnedMessages: PinnedMessage[]
+) {
+  const eligibleMessages = messages
+    .filter(
+      (message) =>
+        !message.isDeleted &&
+        !message.isSystem &&
+        !message.callEvent &&
+        !message.poll &&
+        message.body.trim().length >= 12
+    )
+    .slice(-40);
+  const tasks = eligibleMessages
+    .flatMap((message) =>
+      message.body.split(/\r?\n/).map((line, index) => {
+        const match = line.match(/^\s*(?:-\s*)?(?:\[(x| )\]\s*|TODO\s*:|Cần làm\s*:)(.+)$/i);
+        if (!match) {
+          return null;
+        }
+        return {
+          completed: match[1]?.toLowerCase() === "x",
+          id: `${message.id}-${index}`,
+          text: match[2].trim()
+        };
+      })
+    )
+    .filter(Boolean)
+    .slice(-6) as Array<{ completed: boolean; id: string; text: string }>;
+  const highlightCandidates = [
+    ...pinnedMessages.slice(-2).map((message) => message.text),
+    ...eligibleMessages.slice(-5).map((message) => message.body)
+  ];
+  const seen = new Set<string>();
+  const highlights = highlightCandidates
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter((value) => {
+      const key = value.toLocaleLowerCase("vi");
+      if (!value || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(-5)
+    .map((value) => value.length > 150 ? `${value.slice(0, 147)}…` : value);
+
+  return {
+    fileCount: files.length,
+    highlights,
+    messageCount: eligibleMessages.length,
+    taskCount: tasks.length,
+    tasks
+  };
 }
 
 function PanelSkeleton() {

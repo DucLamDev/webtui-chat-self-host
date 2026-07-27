@@ -24,6 +24,7 @@ Tài liệu dự án WebTui Chat được viết bằng tiếng Việt có dấu
 - [Cài đặt self-hosted cho customer](../deploy/self-hosted/README.md)
 - [Triển khai portal trung tâm](../portal/deploy/README.md)
 - [Kế hoạch hoàn thiện backend](planning/backend-roadmap.md)
+- [Kế hoạch cải thiện Push, Realtime, Session và File Transfer](planning/cross-platform-reliability-improvement-plan.md)
 - [Deploy production lên VPS](deploy/vps-production.md)
 - [CI/CD từng bước với GitHub Actions và Docker Compose](deploy/cicd.md)
 

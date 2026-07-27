@@ -4,7 +4,11 @@ import type {
   CursorMeta,
   ForwardMessageInput,
   Message,
+  MessageReminder,
+  ScheduledMessage,
+  ScheduleMessageInput,
   SendMessageInput,
+  ThreadDetails,
   UpdateMessageInput
 } from "@webtui/types";
 import type { HttpClient, QueryParams } from "./http-client";
@@ -39,6 +43,50 @@ export function createMessagesClient(http: HttpClient) {
       return http.post<Message>(
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages`,
         input
+      );
+    },
+    async scheduled(workspaceId: string, params: QueryParams = {}) {
+      const data = await http.get<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/messages/scheduled`,
+        { query: params }
+      );
+      return collectionFrom<ScheduledMessage>(data, "scheduled_messages");
+    },
+    async schedule(workspaceId: string, channelId: string, input: ScheduleMessageInput) {
+      const data = await http.post<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/messages/scheduled`,
+        input,
+        { query: { channel_id: channelId } }
+      );
+      return itemFrom<ScheduledMessage>(data, "scheduled_message") ?? (data as ScheduledMessage);
+    },
+    cancelScheduled(workspaceId: string, scheduledMessageId: string) {
+      return http.delete<void>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/messages/scheduled/${encodeURIComponent(scheduledMessageId)}`
+      );
+    },
+    async reminders(workspaceId: string, params: QueryParams = {}) {
+      const data = await http.get<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/messages/reminders`,
+        { query: params }
+      );
+      return collectionFrom<MessageReminder>(data, "reminders");
+    },
+    async createReminder(
+      workspaceId: string,
+      channelId: string,
+      messageId: string,
+      input: { remind_at: string; note?: string }
+    ) {
+      const data = await http.post<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/reminders`,
+        input
+      );
+      return itemFrom<MessageReminder>(data, "reminder") ?? (data as MessageReminder);
+    },
+    cancelReminder(workspaceId: string, reminderId: string) {
+      return http.delete<void>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/messages/reminders/${encodeURIComponent(reminderId)}`
       );
     },
     async get(workspaceId: string, channelId: string, messageId: string) {
@@ -86,6 +134,55 @@ export function createMessagesClient(http: HttpClient) {
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/thread`
       );
       return collectionFrom<Message>(data, "messages");
+    },
+    async threadDetails(workspaceId: string, channelId: string, messageId: string) {
+      const data = await http.get<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/thread/details`
+      );
+      return itemFrom<ThreadDetails>(data, "thread") ?? (data as ThreadDetails);
+    },
+    async updateThreadDetails(
+      workspaceId: string,
+      channelId: string,
+      messageId: string,
+      input: { title: string; description: string; status: "open" | "resolved" }
+    ) {
+      const data = await http.put<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/thread/details`,
+        input
+      );
+      return itemFrom<ThreadDetails>(data, "thread") ?? (data as ThreadDetails);
+    },
+    async setThreadSubscription(
+      workspaceId: string,
+      channelId: string,
+      messageId: string,
+      subscribed: boolean
+    ) {
+      const data = await http.put<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/thread/subscription`,
+        { subscribed }
+      );
+      return itemFrom<ThreadDetails>(data, "thread") ?? (data as ThreadDetails);
+    },
+    async markThreadRead(
+      workspaceId: string,
+      channelId: string,
+      messageId: string,
+      lastReadMessageId?: string
+    ) {
+      const data = await http.put<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/thread/read`,
+        { last_read_message_id: lastReadMessageId ?? "" }
+      );
+      return itemFrom<ThreadDetails>(data, "thread") ?? (data as ThreadDetails);
+    },
+    async threads(workspaceId: string, params: QueryParams = {}) {
+      const data = await http.get<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/threads`,
+        { query: params }
+      );
+      return collectionFrom<ThreadDetails>(data, "threads");
     },
     async threadPage(
       workspaceId: string,

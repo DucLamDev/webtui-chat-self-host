@@ -13,7 +13,31 @@ export const queryKeys = {
     detail: (workspaceId: string, channelId: string) => ["channels", workspaceId, channelId] as const,
     directConversations: (workspaceId: string) => ["direct-conversations", workspaceId] as const,
     joinRequests: (workspaceId: string, channelId: string) => ["channels", workspaceId, channelId, "join-requests"] as const,
-    members: (workspaceId: string, channelId: string) => ["channels", workspaceId, channelId, "members"] as const
+    members: (workspaceId: string, channelId: string) => ["channels", workspaceId, channelId, "members"] as const,
+    collaboration: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration"] as const,
+    collaborationDocument: (workspaceId: string, channelId: string, kind: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "document", kind] as const,
+    collaborationRoles: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "roles"] as const,
+    breakoutRooms: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "breakouts"] as const,
+    guestRequests: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "guests"] as const,
+    tasks: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "tasks"] as const,
+    meetings: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "meetings"] as const,
+    voiceRoom: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "voice-room"] as const,
+    sharedItems: (workspaceId: string, channelId: string, kind = "all") =>
+      ["channels", workspaceId, channelId, "collaboration", "shared-items", kind] as const,
+    recordings: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "recordings"] as const,
+    recordingPolicy: (workspaceId: string, channelId: string) =>
+      ["channels", workspaceId, channelId, "collaboration", "recording-policy"] as const,
+    talkHome: (workspaceId: string) => ["channels", workspaceId, "talk-home"] as const,
+    talkIntegration: (workspaceId: string) => ["channels", workspaceId, "talk-integration"] as const
   },
   contacts: {
     all: ["contacts"] as const,
@@ -43,7 +67,9 @@ export const queryKeys = {
   },
   notifications: {
     list: (workspaceId?: string) => ["notifications", workspaceId ?? "all"] as const,
-    preferences: (workspaceId: string) => ["notifications", workspaceId, "preferences"] as const
+    preferences: (workspaceId: string) => ["notifications", workspaceId, "preferences"] as const,
+    channelPreference: (workspaceId: string, channelId: string) =>
+      ["notifications", workspaceId, "preferences", channelId] as const
   },
   orderBot: {
     status: (workspaceId: string) => ["order-bot", workspaceId, "status"] as const
@@ -99,6 +125,7 @@ export const queryKeys = {
   workspaces: {
     all: ["workspaces"] as const,
     detail: (workspaceId: string) => ["workspaces", workspaceId] as const,
+    invites: (workspaceId: string) => ["workspaces", workspaceId, "invites"] as const,
     members: (workspaceId: string) => ["workspaces", workspaceId, "members"] as const,
     settings: (workspaceId: string) => ["workspaces", workspaceId, "settings"] as const
   }

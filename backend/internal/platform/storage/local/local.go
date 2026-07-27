@@ -100,6 +100,47 @@ func (s *Store) Get(ctx context.Context, key string) (*storage.GetObjectOutput, 
 	}, nil
 }
 
+func (s *Store) GetRange(ctx context.Context, key string, start int64, end int64) (*storage.GetObjectOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if start < 0 || end < start {
+		return nil, errors.New("khoảng byte không hợp lệ")
+	}
+	path, err := s.path(key)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("mở đối tượng lưu trữ: %w", err)
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("đọc thông tin đối tượng lưu trữ: %w", err)
+	}
+	if start >= stat.Size() {
+		_ = file.Close()
+		return nil, errors.New("khoảng byte nằm ngoài đối tượng")
+	}
+	if end >= stat.Size() {
+		end = stat.Size() - 1
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("định vị đối tượng lưu trữ: %w", err)
+	}
+	length := end - start + 1
+	return &storage.GetObjectOutput{
+		Info: storage.ObjectInfo{Key: key, Size: length},
+		Body: &rangeReadCloser{
+			Reader: io.LimitReader(file, length),
+			closer: file,
+		},
+	}, nil
+}
+
 func (s *Store) Delete(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -159,4 +200,13 @@ func isChmodUnsupported(err error) bool {
 	return errors.Is(err, os.ErrPermission) ||
 		errors.Is(err, syscall.EPERM) ||
 		errors.Is(err, syscall.EACCES)
+}
+
+type rangeReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r *rangeReadCloser) Close() error {
+	return r.closer.Close()
 }

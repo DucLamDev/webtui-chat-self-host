@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"context"
 	nethttp "net/http"
+	"os"
+	"strings"
 	"time"
 
 	adminapp "github.com/duclamdev/application-chat/backend/internal/modules/admin/application"
@@ -30,6 +32,7 @@ import (
 	callsws "github.com/duclamdev/application-chat/backend/internal/modules/calls/infrastructure/websocket"
 	channelsapp "github.com/duclamdev/application-chat/backend/internal/modules/channels/application"
 	channelshttp "github.com/duclamdev/application-chat/backend/internal/modules/channels/delivery/http"
+	channelslocalai "github.com/duclamdev/application-chat/backend/internal/modules/channels/infrastructure/localai"
 	channelspostgres "github.com/duclamdev/application-chat/backend/internal/modules/channels/infrastructure/postgres"
 	contactsapp "github.com/duclamdev/application-chat/backend/internal/modules/contacts/application"
 	contactshttp "github.com/duclamdev/application-chat/backend/internal/modules/contacts/delivery/http"
@@ -242,7 +245,11 @@ func (a *API) registerAPIV1() {
 	departmentsHandler.RegisterRoutes(v1, authMiddleware)
 
 	channelsRepo := channelspostgres.NewRepository(pool)
-	channelsService := channelsapp.NewService(channelsRepo, rbacService)
+	channelsService := channelsapp.NewService(channelsRepo, rbacService, channelsRepo)
+	channelsService.SetMeetingBaseURL(a.cfg.Calls.JitsiBaseURL)
+	channelsService.SetTalkAIProvider(channelslocalai.NewClient(
+		strings.Split(os.Getenv("TALK_AI_ALLOWED_HOSTS"), ","),
+	))
 	channelsHandler := channelshttp.NewHandler(channelsService)
 	channelsHandler.RegisterRoutes(v1, authMiddleware)
 

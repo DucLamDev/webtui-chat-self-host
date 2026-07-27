@@ -39,6 +39,7 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private := router.Group("/workspaces/:workspace_id/calls")
 	private.Use(authMiddleware)
 	private.POST("", h.Create)
+	private.GET("/incoming", h.Incoming)
 	private.GET("/:call_id", h.Get)
 	private.POST("/:call_id/accept", h.Accept)
 	private.POST("/:call_id/reject", h.Reject)
@@ -46,6 +47,19 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.POST("/:call_id/hangup", h.Hangup)
 	private.POST("/:call_id/miss", h.Miss)
 	private.POST("/:call_id/signals", h.Signal)
+}
+
+func (h *Handler) Incoming(c *gin.Context) {
+	call, err := h.service.FindIncomingRinging(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		c.Param("workspace_id"),
+	)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, nethttp.StatusOK, gin.H{"call": call})
 }
 
 func (h *Handler) Create(c *gin.Context) {

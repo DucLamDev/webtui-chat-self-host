@@ -18,7 +18,14 @@ import type {
   MessageAuthor
 } from "@webtui/types";
 import { api } from "@/lib/api";
-import type { ChatMessage, ChatUser, MessageAttachmentItem, MessageCallEvent, MessageReplyPreview } from "../model/types";
+import type {
+  ChatMessage,
+  ChatUser,
+  MessageAttachmentItem,
+  MessageCallEvent,
+  MessagePoll,
+  MessageReplyPreview
+} from "../model/types";
 import {
   mergeMessageIntoTimeline,
   messageTimelineKey,
@@ -78,6 +85,18 @@ export type ToggleReactionPayload = {
   emoji: string;
   messageId: string;
   reactedByMe?: boolean;
+};
+
+export type CreatePollPayload = {
+  anonymous?: boolean;
+  closesAt?: string;
+  multiple: boolean;
+  options: Array<{
+    id: string;
+    label: string;
+    reaction: string;
+  }>;
+  question: string;
 };
 
 export function useMessageTimeline({
@@ -248,6 +267,27 @@ export function useMessageTimeline({
     }
   });
 
+  const createPollMutation = useMutation({
+    mutationFn: (poll: CreatePollPayload) =>
+      api.messages.send(workspaceId, channelId, {
+        body: poll.question.trim(),
+        kind: "event",
+        metadata: {
+          message_type: "poll",
+          poll: {
+            anonymous: Boolean(poll.anonymous),
+            ...(poll.closesAt ? { closes_at: poll.closesAt } : {}),
+            multiple: poll.multiple,
+            options: poll.options,
+            question: poll.question.trim()
+          }
+        }
+      }),
+    onSuccess: (message) => {
+      mergeMessageIntoTimeline(queryClient, workspaceId, channelId, message);
+    }
+  });
+
   const searchQueryResult = useQuery({
     enabled: Boolean(enabled && workspaceId && cleanSearchQuery.length >= 2),
     queryFn: () => api.messages.searchPage(workspaceId, {
@@ -352,6 +392,7 @@ export function useMessageTimeline({
   });
 
   return {
+    createPollMutation,
     deleteMessageMutation,
     editMessageMutation,
     forwardMessageMutation,
@@ -436,6 +477,7 @@ export function mapMessage(
   const isLocal = message.id.startsWith("local-");
   const canTargetMessageAPI = uuidLikePattern.test(message.id);
   const callEvent = resolveCallEvent(message, fallbackAuthor.id);
+  const poll = resolvePoll(message);
   const isVoice = message.metadata?.message_type === "voice"
     || (message.kind === "file" && /^Đã gửi(?: \d+)? tin nhắn thoại$/i.test(message.body));
 
@@ -445,7 +487,7 @@ export function mapMessage(
     author,
     body: message.deleted_at ? "Tin nhắn đã bị xóa." : message.body,
     canDelete: !callEvent && !systemAuthor && !message.deleted_at && !isLocal && canTargetMessageAPI && (isOwner || canManageMessages),
-    canEdit: !callEvent && !systemAuthor && !message.deleted_at && isOwner,
+    canEdit: !callEvent && !poll && !systemAuthor && !message.deleted_at && isOwner,
     callEvent,
     editedAt: message.edited_at ? formatTime(message.edited_at) : undefined,
     id: message.id,
@@ -461,6 +503,7 @@ export function mapMessage(
     rawCreatedAt: message.created_at ?? message.sent_at,
     rawSenderId: senderId,
     parentId: message.parent_id ?? undefined,
+    poll,
     threadRootId: message.thread_root_id ?? undefined,
     replyTo,
     qrImageUrl,
@@ -472,6 +515,46 @@ export function mapMessage(
     })),
     sentAt: formatTime(message.created_at ?? message.sent_at),
     systemTone
+  };
+}
+
+function resolvePoll(message: ApiMessage): MessagePoll | undefined {
+  const metadata = message.metadata;
+  const messageType = typeof metadata?.message_type === "string"
+    ? metadata.message_type.trim().toLowerCase()
+    : "";
+  if (message.kind !== "event" || messageType !== "poll") {
+    return undefined;
+  }
+  const rawPoll = metadata?.poll;
+  if (!rawPoll || typeof rawPoll !== "object" || Array.isArray(rawPoll)) {
+    return undefined;
+  }
+
+  const poll = rawPoll as Record<string, unknown>;
+  const rawOptions = Array.isArray(poll.options) ? poll.options : [];
+  const options = rawOptions
+    .map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      const option = value as Record<string, unknown>;
+      const id = stringValue(option.id);
+      const label = stringValue(option.label);
+      const reaction = stringValue(option.reaction);
+      return id && label && reaction ? { id, label, reaction } : null;
+    })
+    .filter(Boolean) as MessagePoll["options"];
+  if (options.length < 2) {
+    return undefined;
+  }
+
+  return {
+    anonymous: poll.anonymous === true,
+    closesAt: stringValue(poll.closes_at) || undefined,
+    multiple: poll.multiple === true,
+    options,
+    question: stringValue(poll.question) || message.body
   };
 }
 

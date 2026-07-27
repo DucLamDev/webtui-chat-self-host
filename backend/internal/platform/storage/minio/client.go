@@ -101,6 +101,33 @@ func (c *Client) Get(ctx context.Context, key string) (*storage.GetObjectOutput,
 	}, nil
 }
 
+func (c *Client) GetRange(ctx context.Context, key string, start int64, end int64) (*storage.GetObjectOutput, error) {
+	if start < 0 || end < start {
+		return nil, errors.New("khoảng byte không hợp lệ")
+	}
+	req, err := c.newRequest(ctx, http.MethodGet, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		defer resp.Body.Close()
+		return nil, c.statusError(resp)
+	}
+	return &storage.GetObjectOutput{
+		Info: storage.ObjectInfo{
+			Key:         key,
+			ContentType: resp.Header.Get("Content-Type"),
+			Size:        resp.ContentLength,
+		},
+		Body: resp.Body,
+	}, nil
+}
+
 func (c *Client) Delete(ctx context.Context, key string) error {
 	req, err := c.newRequest(ctx, http.MethodDelete, key, nil)
 	if err != nil {

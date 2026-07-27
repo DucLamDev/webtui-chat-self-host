@@ -29,3 +29,8 @@ type Store interface {
 	Delete(ctx context.Context, key string) error
 	Health(ctx context.Context) error
 }
+
+// RangeStore is an optional capability for efficient media streaming.
+type RangeStore interface {
+	GetRange(ctx context.Context, key string, start int64, end int64) (*GetObjectOutput, error)
+}

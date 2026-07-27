@@ -45,6 +45,8 @@ type UseWebRtcCallOptions = {
   channelId?: string;
   channelName?: string;
   currentUserId: string;
+  defaultCameraEnabled?: boolean;
+  defaultMicrophoneEnabled?: boolean;
   enabled?: boolean;
   lastSignal: RealtimeCallSignal | null;
   onCallOutcome?: (outcome: WebRtcCallOutcome) => void;
@@ -61,6 +63,8 @@ export function useWebRtcCall({
   channelId,
   channelName,
   currentUserId,
+  defaultCameraEnabled = true,
+  defaultMicrophoneEnabled = true,
   enabled = true,
   lastSignal,
   onCallOutcome,
@@ -74,11 +78,18 @@ export function useWebRtcCall({
     status: "idle"
   });
   const [hasMediaSession, setHasMediaSession] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(defaultCameraEnabled);
+  const [microphoneEnabled, setMicrophoneEnabled] = useState(defaultMicrophoneEnabled);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [screenSharing, setScreenSharing] = useState(false);
   const mediaContainerRef = useRef<HTMLDivElement | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
   const activeCallIdRef = useRef("");
+  const iceRestartAttemptedRef = useRef(false);
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const pendingOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
   const callStateRef = useRef<WebRtcCallState>({
@@ -145,16 +156,31 @@ export function useWebRtcCall({
     const connection = peerConnectionRef.current;
     peerConnectionRef.current = null;
     connection?.close();
-    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    const localTracks = new Set(localStreamRef.current?.getTracks() ?? []);
+    if (cameraTrackRef.current) {
+      localTracks.add(cameraTrackRef.current);
+    }
+    displayStreamRef.current?.getTracks().forEach((track) => {
+      track.onended = null;
+      localTracks.add(track);
+    });
+    localTracks.forEach((track) => track.stop());
     remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
     remoteStreamRef.current = null;
+    cameraTrackRef.current = null;
+    displayStreamRef.current = null;
     activeCallIdRef.current = "";
+    iceRestartAttemptedRef.current = false;
     pendingCandidatesRef.current = [];
     pendingOfferRef.current = null;
     mediaContainerRef.current?.replaceChildren();
     setHasMediaSession(false);
-  }, [clearDisconnectTimer]);
+    setCameraEnabled(defaultCameraEnabled);
+    setMicrophoneEnabled(defaultMicrophoneEnabled);
+    setReconnecting(false);
+    setScreenSharing(false);
+  }, [clearDisconnectTimer, defaultCameraEnabled, defaultMicrophoneEnabled]);
 
   const resetCallUi = useCallback(
     (nextState?: WebRtcCallState) => {
@@ -250,6 +276,12 @@ export function useWebRtcCall({
       }
 
       const remoteStream = new MediaStream();
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = defaultMicrophoneEnabled;
+      });
+      localStream.getVideoTracks().forEach((track) => {
+        track.enabled = defaultCameraEnabled;
+      });
       const discoveredIceServers =
         useAuthStore.getState().zoneRuntime?.rtc_ice_servers;
       const connection = new RTCPeerConnection({
@@ -262,7 +294,13 @@ export function useWebRtcCall({
       activeCallIdRef.current = callId;
       localStreamRef.current = localStream;
       remoteStreamRef.current = remoteStream;
+      cameraTrackRef.current = localStream.getVideoTracks()[0] ?? null;
+      iceRestartAttemptedRef.current = false;
       peerConnectionRef.current = connection;
+      setCameraEnabled(defaultCameraEnabled);
+      setMicrophoneEnabled(defaultMicrophoneEnabled);
+      setReconnecting(false);
+      setScreenSharing(false);
       renderMedia(container, mode, localStream, remoteStream);
 
       localStream.getTracks().forEach((track) => {
@@ -289,6 +327,63 @@ export function useWebRtcCall({
           // A later ICE candidate can still establish the connection.
         }
       };
+      const failConnection = (
+        reason: "webrtc_disconnected" | "webrtc_failed",
+        message: string
+      ) => {
+        const current = callStateRef.current;
+        if (current.callId !== callId) {
+          return;
+        }
+        if (workspaceId) {
+          void api.calls
+            .hangup(workspaceId, callId, reason)
+            .catch(() => undefined);
+        }
+        finishCall(current, reason, message);
+      };
+      const restartIce = async () => {
+        if (
+          iceRestartAttemptedRef.current ||
+          activeCallIdRef.current !== callId ||
+          connection.signalingState === "closed"
+        ) {
+          return;
+        }
+        iceRestartAttemptedRef.current = true;
+        setReconnecting(true);
+        if (callStateRef.current.initiatorUserId !== currentUserId) {
+          clearDisconnectTimer();
+          disconnectTimerRef.current = setTimeout(() => {
+            if (
+              activeCallIdRef.current === callId &&
+              connection.connectionState !== "connected"
+            ) {
+              failConnection(
+                "webrtc_disconnected",
+                "Kết nối cuộc gọi đã bị gián đoạn sau khi chờ phía gọi khôi phục."
+              );
+            }
+          }, 15_000);
+          return;
+        }
+        connection.restartIce();
+        const offer = await connection.createOffer({ iceRestart: true });
+        await connection.setLocalDescription(offer);
+        await signal("CallOffer", callId, { sdp: offer });
+        clearDisconnectTimer();
+        disconnectTimerRef.current = setTimeout(() => {
+          if (
+            activeCallIdRef.current === callId &&
+            connection.connectionState !== "connected"
+          ) {
+            failConnection(
+              "webrtc_disconnected",
+              "Kết nối cuộc gọi đã bị gián đoạn sau khi thử khôi phục."
+            );
+          }
+        }, 12_000);
+      };
       connection.onconnectionstatechange = () => {
         if (activeCallIdRef.current !== callId) {
           return;
@@ -296,6 +391,8 @@ export function useWebRtcCall({
         if (connection.connectionState === "connected") {
           clearDisconnectTimer();
           clearOutgoingTimer();
+          iceRestartAttemptedRef.current = false;
+          setReconnecting(false);
           setCallState((current) =>
             current.callId === callId
               ? {
@@ -308,40 +405,30 @@ export function useWebRtcCall({
           return;
         }
         if (connection.connectionState === "failed") {
-          const current = callStateRef.current;
-          if (current.callId === callId) {
-            if (workspaceId) {
-              void api.calls
-                .hangup(workspaceId, callId, "webrtc_failed")
-                .catch(() => undefined);
-            }
-            finishCall(
-              current,
+          void restartIce().catch(() => {
+            failConnection(
               "webrtc_failed",
               "Không thể thiết lập đường truyền WebRTC. Hãy kiểm tra TURN và tường lửa."
             );
-          }
+          });
           return;
         }
         if (connection.connectionState === "disconnected") {
+          setReconnecting(true);
           clearDisconnectTimer();
           disconnectTimerRef.current = setTimeout(() => {
             if (
               connection.connectionState === "disconnected" &&
               callStateRef.current.callId === callId
             ) {
-              if (workspaceId) {
-                void api.calls
-                  .hangup(workspaceId, callId, "webrtc_disconnected")
-                  .catch(() => undefined);
-              }
-              finishCall(
-                callStateRef.current,
-                "webrtc_disconnected",
-                "Kết nối cuộc gọi đã bị gián đoạn."
-              );
+              void restartIce().catch(() => {
+                failConnection(
+                  "webrtc_disconnected",
+                  "Kết nối cuộc gọi đã bị gián đoạn."
+                );
+              });
             }
-          }, 5_000);
+          }, 3_000);
         }
       };
 
@@ -350,6 +437,9 @@ export function useWebRtcCall({
     [
       clearDisconnectTimer,
       clearOutgoingTimer,
+      currentUserId,
+      defaultCameraEnabled,
+      defaultMicrophoneEnabled,
       finishCall,
       signal,
       stopMediaSession,
@@ -623,6 +713,110 @@ export function useWebRtcCall({
     finishCall(current, "ended");
   }, [finishCall, workspaceId]);
 
+  const toggleMicrophone = useCallback(() => {
+    const tracks = localStreamRef.current?.getAudioTracks() ?? [];
+    if (tracks.length === 0) {
+      return;
+    }
+    const enabled = !tracks.every((track) => track.enabled);
+    tracks.forEach((track) => {
+      track.enabled = enabled;
+    });
+    setMicrophoneEnabled(enabled);
+  }, []);
+
+  const toggleCamera = useCallback(() => {
+    const track = cameraTrackRef.current;
+    if (!track) {
+      return;
+    }
+    track.enabled = !track.enabled;
+    setCameraEnabled(track.enabled);
+  }, []);
+
+  const stopScreenSharing = useCallback(async () => {
+    const displayStream = displayStreamRef.current;
+    if (!displayStream) {
+      return;
+    }
+    displayStreamRef.current = null;
+    displayStream.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
+
+    const connection = peerConnectionRef.current;
+    const localStream = localStreamRef.current;
+    const cameraTrack = cameraTrackRef.current;
+    const videoSender = connection
+      ?.getSenders()
+      .find((sender) => sender.track?.kind === "video");
+    if (videoSender) {
+      await videoSender.replaceTrack(cameraTrack);
+    }
+    if (localStream) {
+      localStream.getVideoTracks().forEach((track) => {
+        localStream.removeTrack(track);
+      });
+      if (cameraTrack) {
+        localStream.addTrack(cameraTrack);
+      }
+      refreshLocalPreview(mediaContainerRef.current, localStream);
+    }
+    setScreenSharing(false);
+  }, []);
+
+  const toggleScreenSharing = useCallback(async () => {
+    if (displayStreamRef.current) {
+      await stopScreenSharing();
+      return;
+    }
+    const connection = peerConnectionRef.current;
+    const localStream = localStreamRef.current;
+    if (
+      !connection ||
+      !localStream ||
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices?.getDisplayMedia
+    ) {
+      return;
+    }
+
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      audio: false,
+      video: { frameRate: { ideal: 15, max: 30 } }
+    });
+    const displayTrack = displayStream.getVideoTracks()[0];
+    if (!displayTrack) {
+      displayStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    const videoSender = connection
+      .getSenders()
+      .find((sender) => sender.track?.kind === "video");
+    if (!videoSender) {
+      displayStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    try {
+      await videoSender.replaceTrack(displayTrack);
+      displayStreamRef.current = displayStream;
+      localStream.getVideoTracks().forEach((track) => {
+        localStream.removeTrack(track);
+      });
+      localStream.addTrack(displayTrack);
+      refreshLocalPreview(mediaContainerRef.current, localStream);
+      displayTrack.onended = () => {
+        void stopScreenSharing();
+      };
+      setScreenSharing(true);
+    } catch (error) {
+      displayStream.getTracks().forEach((track) => track.stop());
+      throw error;
+    }
+  }, [stopScreenSharing]);
+
   useEffect(() => {
     if (!lastSignal) {
       return;
@@ -829,13 +1023,24 @@ export function useWebRtcCall({
 
   return {
     acceptCall,
+    cameraEnabled,
     callState,
     endCall,
     hasMediaSession,
     mediaContainerRef,
+    microphoneEnabled,
     openIncomingCall,
+    reconnecting,
     rejectCall,
+    screenSharing,
+    screenSharingSupported:
+      typeof navigator !== "undefined" &&
+      Boolean(navigator.mediaDevices?.getDisplayMedia),
     startCall
+    ,
+    toggleCamera,
+    toggleMicrophone,
+    toggleScreenSharing
   };
 }
 
@@ -860,6 +1065,7 @@ function renderMedia(
     localVideo.playsInline = true;
     localVideo.srcObject = localStream;
     container.append(remoteVideo, localVideo);
+    enableDraggableLocalPreview(localVideo, container);
     void remoteVideo.play().catch(() => undefined);
     void localVideo.play().catch(() => undefined);
     return;
@@ -874,6 +1080,60 @@ function renderMedia(
   remoteAudio.srcObject = remoteStream;
   container.append(audioState, remoteAudio);
   void remoteAudio.play().catch(() => undefined);
+}
+
+function enableDraggableLocalPreview(
+  localVideo: HTMLVideoElement,
+  container: HTMLDivElement
+) {
+  localVideo.title = "Kéo để di chuyển camera";
+  let drag:
+    | {
+        left: number;
+        pointerId: number;
+        startX: number;
+        startY: number;
+        top: number;
+      }
+    | undefined;
+  localVideo.addEventListener("pointerdown", (event) => {
+    const containerRect = container.getBoundingClientRect();
+    const videoRect = localVideo.getBoundingClientRect();
+    drag = {
+      left: videoRect.left - containerRect.left,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      top: videoRect.top - containerRect.top
+    };
+    localVideo.setPointerCapture(event.pointerId);
+    localVideo.classList.add("webtui-webrtc-call__local-video--dragging");
+    event.stopPropagation();
+  });
+  localVideo.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const maxLeft = Math.max(8, container.clientWidth - localVideo.offsetWidth - 8);
+    const maxTop = Math.max(8, container.clientHeight - localVideo.offsetHeight - 8);
+    const left = Math.min(maxLeft, Math.max(8, drag.left + event.clientX - drag.startX));
+    const top = Math.min(maxTop, Math.max(8, drag.top + event.clientY - drag.startY));
+    localVideo.style.left = `${left}px`;
+    localVideo.style.right = "auto";
+    localVideo.style.top = `${top}px`;
+  });
+  const stopDragging = (event: PointerEvent) => {
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    drag = undefined;
+    localVideo.classList.remove("webtui-webrtc-call__local-video--dragging");
+    if (localVideo.hasPointerCapture(event.pointerId)) {
+      localVideo.releasePointerCapture(event.pointerId);
+    }
+  };
+  localVideo.addEventListener("pointerup", stopDragging);
+  localVideo.addEventListener("pointercancel", stopDragging);
 }
 
 function attachRemoteStream(
@@ -891,6 +1151,21 @@ function attachRemoteStream(
   }
   media.srcObject = stream;
   void media.play().catch(() => undefined);
+}
+
+function refreshLocalPreview(
+  container: HTMLDivElement | null,
+  stream: MediaStream
+) {
+  const video = container?.querySelector<HTMLVideoElement>(
+    ".webtui-webrtc-call__local-video"
+  );
+  if (!video) {
+    return;
+  }
+  video.srcObject = null;
+  video.srcObject = stream;
+  void video.play().catch(() => undefined);
 }
 
 function isCallFinished(status: WebRtcCallStatus): boolean {

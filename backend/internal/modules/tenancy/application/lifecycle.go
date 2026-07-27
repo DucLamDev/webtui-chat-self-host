@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ type UpdateZoneSettingsInput struct {
 	ZoneID           string
 	Name             *string
 	RegistrationMode *string
+	LogoURL          *string
 }
 
 type ZoneLifecycleInput struct {
@@ -98,7 +100,7 @@ func (s *Service) UpdateZoneSettings(
 	if err := s.ensureZoneManager(ctx, input.ActorUserID, input.ZoneID); err != nil {
 		return ZoneAdminOverviewDTO{}, err
 	}
-	if input.Name == nil && input.RegistrationMode == nil {
+	if input.Name == nil && input.RegistrationMode == nil && input.LogoURL == nil {
 		return ZoneAdminOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Can cung cap it nhat mot truong de cap nhat.")
 	}
 	if input.Name != nil {
@@ -115,11 +117,30 @@ func (s *Service) UpdateZoneSettings(
 		}
 		input.RegistrationMode = &value
 	}
+	if input.LogoURL != nil {
+		value := strings.TrimSpace(*input.LogoURL)
+		if len(value) > 2048 {
+			return ZoneAdminOverviewDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "URL logo quá dài.")
+		}
+		if value != "" {
+			parsed, err := url.Parse(value)
+			if err != nil ||
+				(parsed.IsAbs() && (parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil)) ||
+				(!parsed.IsAbs() && (!strings.HasPrefix(value, "/") || parsed.Host != "")) {
+				return ZoneAdminOverviewDTO{}, apperrors.BadRequest(
+					"VALIDATION_ERROR",
+					"Logo phải là URL HTTPS hoặc đường dẫn bắt đầu bằng /.",
+				)
+			}
+		}
+		input.LogoURL = &value
+	}
 	overview, err := s.repo.UpdateZoneSettings(ctx, UpdateZoneSettingsParams{
 		ActorUserID:      input.ActorUserID,
 		ZoneID:           input.ZoneID,
 		Name:             input.Name,
 		RegistrationMode: input.RegistrationMode,
+		LogoURL:          input.LogoURL,
 	})
 	if err != nil {
 		return ZoneAdminOverviewDTO{}, mapClaimError(err)
@@ -326,6 +347,7 @@ func toZoneAdminOverviewDTO(overview tenancydomain.ZoneAdminOverview) ZoneAdminO
 			ID:               overview.Zone.ID,
 			Slug:             overview.Zone.Slug,
 			Name:             overview.Zone.Name,
+			LogoURL:          brandingLogoURL(overview.Zone.Metadata),
 			Kind:             overview.Zone.Kind,
 			Status:           overview.Zone.Status,
 			RegistrationMode: overview.Zone.RegistrationMode,

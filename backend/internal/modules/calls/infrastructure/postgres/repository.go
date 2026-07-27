@@ -74,6 +74,24 @@ WHERE workspace_id = $1::uuid AND id = $2::uuid
 	return scanCall(row)
 }
 
+func (r *Repository) FindIncomingRinging(
+	ctx context.Context,
+	workspaceID string,
+	targetUserID string,
+) (callsdomain.Call, error) {
+	row := r.pool.QueryRow(ctx, `
+SELECT id::text, workspace_id::text, channel_id::text, initiator_user_id::text, target_user_id::text,
+       client_call_id, mode, status, metadata::text, started_at, ended_at, created_at, updated_at
+FROM call_sessions
+WHERE workspace_id = $1::uuid
+  AND target_user_id = $2::uuid
+  AND status = 'ringing'
+ORDER BY created_at DESC
+LIMIT 1
+`, workspaceID, targetUserID)
+	return scanCall(row)
+}
+
 func (r *Repository) UpdateStatus(ctx context.Context, params callsapp.StatusParams) (callsdomain.Call, error) {
 	row := r.pool.QueryRow(ctx, `
 UPDATE call_sessions

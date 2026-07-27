@@ -1721,8 +1721,26 @@ paths:
           description: Danh sách direct conversation
     post:
       summary: Tạo hoặc lấy lại direct conversation theo participant
+      description: source_channel_id cho phép Reply privately giữa hai thành viên đang hoạt động trong cùng phòng mà không yêu cầu kết bạn trước.
       parameters:
         - $ref: "#/components/parameters/WorkspaceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_ids]
+              properties:
+                participant_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                    format: uuid
+                source_channel_id:
+                  type: string
+                  format: uuid
       responses:
         "201":
           description: Direct conversation sẵn sàng
@@ -1879,6 +1897,31 @@ paths:
                     properties:
                       data:
                         $ref: "#/components/schemas/CallSession"
+  /api/v1/workspaces/{workspace_id}/calls/incoming:
+    get:
+      tags: [Calls]
+      summary: Lấy cuộc gọi đến đang đổ chuông của người dùng hiện tại
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      responses:
+        "200":
+          description: Cuộc gọi đang chờ, hoặc null nếu không có
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          call:
+                            allOf:
+                              - $ref: "#/components/schemas/CallSession"
+                            nullable: true
   /api/v1/workspaces/{workspace_id}/calls/{call_id}:
     get:
       summary: Lấy chi tiết phiên gọi
@@ -2471,6 +2514,206 @@ paths:
       responses:
         "201":
           description: Backup run đã được tạo
+  /api/v1/workspaces/{workspace_id}/messages/scheduled:
+    get:
+      summary: List scheduled messages
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      responses:
+        "200":
+          description: Scheduled messages
+    post:
+      summary: Schedule a message
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, scheduled_for]
+              properties:
+                body: { type: string }
+                scheduled_for: { type: string, format: date-time }
+                silent: { type: boolean }
+      responses:
+        "201":
+          description: Message scheduled
+  /api/v1/workspaces/{workspace_id}/messages/reminders:
+    get:
+      summary: List message reminders
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      responses:
+        "200":
+          description: Message reminders
+  /api/v1/workspaces/{workspace_id}/files/uploads:
+    post:
+      summary: Create a resumable file upload
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [original_name, mime_type, total_size]
+              properties:
+                original_name: { type: string }
+                mime_type: { type: string }
+                total_size: { type: integer, format: int64 }
+                chunk_size: { type: integer, default: 5242880 }
+      responses:
+        "201":
+          description: Upload session created
+  /api/v1/workspaces/{workspace_id}/files/uploads/{upload_id}/parts/{part_number}:
+    put:
+      summary: Upload or retry one file chunk
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: upload_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: part_number
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - name: X-Chunk-SHA256
+          in: header
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Chunk accepted
+  /api/v1/workspaces/{workspace_id}/files/uploads/{upload_id}/complete:
+    post:
+      summary: Assemble and finalize a resumable upload
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: upload_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: File finalized
+  /api/v1/workspaces/{workspace_id}/talk/home:
+    get:
+      summary: Talk Home dashboard
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      responses:
+        "200":
+          description: Meetings, voice rooms, tasks, reminders and missed calls
+  /api/v1/workspaces/{workspace_id}/talk/integrations:
+    get:
+      summary: Get self-hosted Talk capability flags
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      responses:
+        "200":
+          description: Talk integration settings
+    put:
+      summary: Configure local AI, federation, E2EE, SIP and bridge gates
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      responses:
+        "200":
+          description: Talk integration settings updated
+  /api/v1/workspaces/{workspace_id}/channels/{channel_id}/collaboration/meetings:
+    get:
+      summary: List channel meetings
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Meetings
+    post:
+      summary: Schedule a channel meeting
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "201":
+          description: Meeting scheduled
+  /api/v1/workspaces/{workspace_id}/channels/{channel_id}/collaboration/voice-room:
+    get:
+      summary: Get the channel voice-room state
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Voice-room state
+  /api/v1/workspaces/{workspace_id}/channels/{channel_id}/collaboration/breakouts/setup:
+    put:
+      summary: Prepare automatic, manual or self-select breakout rooms
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Prepared breakout rooms
+  /api/v1/workspaces/{workspace_id}/channels/{channel_id}/collaboration/shared-items:
+    get:
+      summary: List shared files, pins, polls, tasks and recordings
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Shared items
+  /api/v1/workspaces/{workspace_id}/channels/{channel_id}/collaboration/recording-policy:
+    get:
+      summary: Get recording consent and retention policy
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Recording policy
+    put:
+      summary: Update recording consent and retention policy
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Recording policy updated
+  /api/v1/workspaces/{workspace_id}/channels/{channel_id}/collaboration/recordings:
+    get:
+      summary: List meeting recordings
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Recordings
+    post:
+      summary: Start recording consent flow
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "201":
+          description: Recording lifecycle created
+  /api/v1/workspaces/{workspace_id}/channels/{channel_id}/collaboration/ai/summary:
+    post:
+      summary: Summarize recent messages with self-hosted Ollama or LocalAI
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - $ref: "#/components/parameters/ChannelID"
+      responses:
+        "200":
+          description: Summary, decisions and action items
 components:
   securitySchemes:
     bearerAuth:
@@ -2604,6 +2847,8 @@ components:
           type: string
         name:
           type: string
+        logo_url:
+          type: string
         kind:
           type: string
           enum: [vpsttt_internal, customer_saas, customer_dedicated]
@@ -2627,6 +2872,8 @@ components:
       type: object
       properties:
         app_name:
+          type: string
+        logo_url:
           type: string
         app_version:
           type: string
@@ -2769,6 +3016,9 @@ components:
         registration_mode:
           type: string
           enum: [open, invite_only, closed]
+        logo_url:
+          type: string
+          maxLength: 2048
     CreateZoneDeploymentRequest:
       type: object
       required: [requested_mode, requested_database_mode]

@@ -86,6 +86,7 @@ export function createTenancyClient(http: HttpClient) {
     async updateCurrentZone(input: {
       name?: string;
       registration_mode?: "open" | "invite_only" | "closed";
+      logo_url?: string;
     }) {
       const data = await http.patch<unknown>("/api/v1/zones/current", input);
       return requiredItem<ZoneAdminOverview>(data, "zone");

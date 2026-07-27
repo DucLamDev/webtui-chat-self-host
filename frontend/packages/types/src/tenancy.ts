@@ -8,6 +8,7 @@ export type ZoneSummary = {
   id: string;
   slug: string;
   name: string;
+  logo_url?: string;
   kind: ZoneKind | string;
   status: ZoneStatus | string;
   registration_mode: ZoneRegistrationMode | string;
@@ -21,6 +22,7 @@ export type ZoneWorkspaceRef = {
 
 export type ZoneRuntime = {
   app_name: string;
+  logo_url?: string;
   app_version: string;
   release_channel: string;
   locale: string;

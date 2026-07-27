@@ -17,6 +17,7 @@ import type {
   CreateIncomingWebhookInput,
   CreateOutgoingWebhookInput,
   CreateRoleInput,
+  CreateWorkspaceInviteInput,
   CreateZoneOIDCProviderInput,
   InstallBotInput,
   PermissionCode,
@@ -95,6 +96,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
   const canManageCronjobs = can("cronjob.manage");
   const canManageWebhooks = can("webhook.manage");
   const canManageWorkspace = can("workspace.manage");
+  const canInviteUsers = can("workspace.invite_user");
   const adminQueryEnabled = Boolean(workspaceId && canViewAdmin);
   const integrationQueryEnabled = Boolean(workspaceId && (canManageApiTokens || canManageBots || canManageWebhooks));
   const operationsQueryEnabled = Boolean(workspaceId && (canManageCronjobs || canManageBackups));
@@ -137,6 +139,13 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     enabled: adminQueryEnabled,
     queryFn: () => api.workspaces.members(workspaceId),
     queryKey: queryKeys.workspaces.members(workspaceId),
+    retry: false
+  });
+
+  const invitesQuery = useQuery({
+    enabled: Boolean(workspaceId && canInviteUsers),
+    queryFn: () => api.workspaces.invites(workspaceId),
+    queryKey: queryKeys.workspaces.invites(workspaceId),
     retry: false
   });
 
@@ -413,6 +422,18 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     onSuccess: invalidateWorkspaceMembers
   });
 
+  const createInviteMutation = useMutation({
+    mutationFn: (input: CreateWorkspaceInviteInput) =>
+      api.workspaces.createInvite(requireWorkspaceId(workspaceId), input),
+    onSuccess: () => {
+      if (workspaceId) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.workspaces.invites(workspaceId)
+        });
+      }
+    }
+  });
+
   const updateMemberStatusMutation = useMutation({
     mutationFn: ({ input, userId }: { input: UpdateMemberStatusInput; userId: string }) =>
       api.workspaces.updateMemberStatus(requireWorkspaceId(workspaceId), userId, input),
@@ -529,6 +550,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     mutationFn: (input: {
       name?: string;
       registration_mode?: "open" | "invite_only" | "closed";
+      logo_url?: string;
     }) => api.tenancy.updateCurrentZone(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.tenancy.currentZone });
@@ -782,6 +804,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     canManageUsers,
     canManageWebhooks,
     canManageWorkspace,
+    canInviteUsers,
     canViewAdmin,
     canViewAudit,
     channels: channelsQuery.data ?? [],
@@ -793,6 +816,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     createBotMutation,
     createCronjobMutation,
     createIncomingWebhookMutation,
+    createInviteMutation,
     createOutgoingWebhookMutation,
     createDeploymentRequestMutation,
     createOIDCProviderMutation,
@@ -811,6 +835,8 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     incomingWebhooks: incomingWebhooksQuery.data ?? [],
     incomingWebhooksQuery,
     installBotMutation,
+    invites: invitesQuery.data ?? [],
+    invitesQuery,
     members: membersQuery.data ?? [],
     membersQuery,
     outgoingWebhooks: outgoingWebhooksQuery.data ?? [],

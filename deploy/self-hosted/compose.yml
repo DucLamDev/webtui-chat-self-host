@@ -54,6 +54,20 @@ services:
       retries: 10
       start_period: 30s
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai"]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
   migrate:
     build:
       context: ../../backend
@@ -154,6 +168,7 @@ services:
         NEXT_PUBLIC_APP_NAME: ${INSTANCE_NAME}
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS}
+        NEXT_PUBLIC_JITSI_BASE_URL: ${NEXT_PUBLIC_JITSI_BASE_URL:-}
         NEXT_PUBLIC_WS_BASE_URL: wss://${INSTANCE_DOMAIN}/ws
     image: vpsttt-chat-web:${APP_VERSION:-self-hosted}
     restart: unless-stopped
@@ -242,6 +257,8 @@ volumes:
     name: vpsttt_chat_redis_data
   rabbitmq_data:
     name: vpsttt_chat_rabbitmq_data
+  ollama_data:
+    name: vpsttt_chat_ollama_data
   storage_data:
     name: vpsttt_chat_storage_data
   backup_data:

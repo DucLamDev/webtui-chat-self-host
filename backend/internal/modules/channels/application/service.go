@@ -39,8 +39,19 @@ type Repository interface {
 }
 
 type Service struct {
-	repo    Repository
-	checker PermissionChecker
+	repo           Repository
+	checker        PermissionChecker
+	collab         CollaborationRepository
+	meetingBaseURL string
+	talkAI         TalkAIProvider
+}
+
+func (s *Service) SetMeetingBaseURL(value string) {
+	s.meetingBaseURL = strings.TrimRight(strings.TrimSpace(value), "/")
+}
+
+func (s *Service) SetTalkAIProvider(provider TalkAIProvider) {
+	s.talkAI = provider
 }
 
 type CreateChannelInput struct {
@@ -123,9 +134,10 @@ type UpdateReadStateParams struct {
 }
 
 type CreateDirectInput struct {
-	ActorUserID    string
-	WorkspaceID    string
-	ParticipantIDs []string
+	ActorUserID     string
+	WorkspaceID     string
+	ParticipantIDs  []string
+	SourceChannelID string
 }
 
 type CreateDirectParams struct {
@@ -212,8 +224,12 @@ type MessageSummaryDTO struct {
 	UpdatedAt   string  `json:"updated_at"`
 }
 
-func NewService(repo Repository, checker PermissionChecker) *Service {
-	return &Service{repo: repo, checker: checker}
+func NewService(repo Repository, checker PermissionChecker, collaborationRepositories ...CollaborationRepository) *Service {
+	service := &Service{repo: repo, checker: checker}
+	if len(collaborationRepositories) > 0 {
+		service.collab = collaborationRepositories[0]
+	}
+	return service
 }
 
 func (s *Service) Create(ctx context.Context, input CreateChannelInput) (ChannelDTO, error) {
@@ -502,8 +518,14 @@ func (s *Service) CreateDirect(ctx context.Context, input CreateDirectInput) (Di
 	if len(participantIDs) < 2 {
 		return DirectConversationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Direct message cần ít nhất 2 thành viên.")
 	}
-	if err := s.ensureDirectContacts(ctx, input.ActorUserID, participantIDs); err != nil {
-		return DirectConversationDTO{}, err
+	if strings.TrimSpace(input.SourceChannelID) != "" {
+		if err := s.ensureSharedSourceChannel(ctx, input.ActorUserID, input.WorkspaceID, input.SourceChannelID, participantIDs); err != nil {
+			return DirectConversationDTO{}, err
+		}
+	} else {
+		if err := s.ensureDirectContacts(ctx, input.ActorUserID, participantIDs); err != nil {
+			return DirectConversationDTO{}, err
+		}
 	}
 	conversationType := "group"
 	if len(participantIDs) == 2 {
@@ -523,6 +545,24 @@ func (s *Service) CreateDirect(ctx context.Context, input CreateDirectInput) (Di
 		return DirectConversationDTO{}, err
 	}
 	return toDirectDTO(conversation, input.ActorUserID), nil
+}
+
+func (s *Service) ensureSharedSourceChannel(
+	ctx context.Context,
+	actorUserID string,
+	workspaceID string,
+	channelID string,
+	participantIDs []string,
+) error {
+	channelID = strings.TrimSpace(channelID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	for _, userID := range participantIDs {
+		member, err := s.repo.FindMember(ctx, workspaceID, channelID, strings.TrimSpace(userID))
+		if err != nil || (member.Status != "active" && member.Status != "muted") {
+			return apperrors.Forbidden("Chỉ có thể trả lời riêng tư cho một thành viên đang hoạt động trong cùng phòng.")
+		}
+	}
+	return nil
 }
 
 func (s *Service) ensureDirectContacts(ctx context.Context, actorUserID string, participantIDs []string) error {

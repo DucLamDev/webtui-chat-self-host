@@ -22,6 +22,8 @@ type directConversationRepo struct {
 	params         CreateDirectParams
 	privateSource  channelsdomain.Channel
 	privateSession channelsdomain.Channel
+	memberStatuses map[string]string
+	contactChecks  int
 }
 
 func (r *directConversationRepo) CreateChannel(context.Context, CreateChannelParams) (channelsdomain.Channel, error) {
@@ -55,7 +57,10 @@ func (r *directConversationRepo) ListMembers(context.Context, string, string) ([
 	panic("không được gọi")
 }
 
-func (r *directConversationRepo) FindMember(context.Context, string, string, string) (channelsdomain.Member, error) {
+func (r *directConversationRepo) FindMember(_ context.Context, _ string, _ string, userID string) (channelsdomain.Member, error) {
+	if status, ok := r.memberStatuses[userID]; ok {
+		return channelsdomain.Member{UserID: userID, Status: status}, nil
+	}
 	panic("không được gọi")
 }
 
@@ -95,6 +100,7 @@ func (r *directConversationRepo) CreateOrGetDirectConversation(_ context.Context
 }
 
 func (r *directConversationRepo) HasAcceptedContact(context.Context, string, string) (bool, error) {
+	r.contactChecks++
 	return true, nil
 }
 
@@ -131,6 +137,49 @@ func TestCreateDirectNormalizesParticipants(t *testing.T) {
 	}
 	if dto.ParticipantKey != repo.params.ParticipantKey {
 		t.Fatalf("DTO ParticipantKey = %q", dto.ParticipantKey)
+	}
+}
+
+func TestCreateDirectFromSharedChannelBypassesContactRequirement(t *testing.T) {
+	repo := &directConversationRepo{
+		memberStatuses: map[string]string{
+			"user-a": "active",
+			"user-b": "muted",
+		},
+	}
+	service := NewService(repo, staticPermissionChecker{allowed: true})
+
+	_, err := service.CreateDirect(context.Background(), CreateDirectInput{
+		ActorUserID:     "user-a",
+		WorkspaceID:     "workspace-1",
+		ParticipantIDs:  []string{"user-b"},
+		SourceChannelID: "channel-team",
+	})
+	if err != nil {
+		t.Fatalf("CreateDirect() from shared channel error = %v", err)
+	}
+	if repo.contactChecks != 0 {
+		t.Fatalf("HasAcceptedContact() called %d times, want 0", repo.contactChecks)
+	}
+}
+
+func TestCreateDirectFromSharedChannelRejectsInactiveParticipant(t *testing.T) {
+	repo := &directConversationRepo{
+		memberStatuses: map[string]string{
+			"user-a": "active",
+			"user-b": "removed",
+		},
+	}
+	service := NewService(repo, staticPermissionChecker{allowed: true})
+
+	_, err := service.CreateDirect(context.Background(), CreateDirectInput{
+		ActorUserID:     "user-a",
+		WorkspaceID:     "workspace-1",
+		ParticipantIDs:  []string{"user-b"},
+		SourceChannelID: "channel-team",
+	})
+	if err == nil {
+		t.Fatal("CreateDirect() must reject a participant who is not active in the source channel")
 	}
 }
 

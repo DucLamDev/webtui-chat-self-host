@@ -38,6 +38,8 @@ export type WorkspaceInvite = {
   role_id?: Id | null;
   token?: string;
   status?: string;
+  accepted_at?: ISODateTime | null;
+  revoked_at?: ISODateTime | null;
   expires_at?: ISODateTime | null;
   created_at?: ISODateTime;
 };

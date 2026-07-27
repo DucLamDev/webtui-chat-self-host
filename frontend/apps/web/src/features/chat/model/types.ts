@@ -2,9 +2,9 @@ export type PresenceStatus = "online" | "offline" | "busy";
 
 export type ChannelTone = "purple" | "green" | "orange" | "red" | "violet" | "slate";
 
-export type ChannelFilter = "all" | "unread" | "favorite";
+export type ChannelFilter = "all" | "unread" | "favorite" | "important";
 
-export type DetailTab = "pinned" | "media" | "files";
+export type DetailTab = "workspace" | "pinned" | "media" | "files";
 
 export type ChatUser = {
   id: string;
@@ -57,7 +57,22 @@ export type ChatMessage = {
   qrImageUrl?: string;
   qrReference?: string;
   callEvent?: MessageCallEvent;
+  poll?: MessagePoll;
   systemTone?: "announcement" | "system";
+};
+
+export type MessagePollOption = {
+  id: string;
+  label: string;
+  reaction: string;
+};
+
+export type MessagePoll = {
+  anonymous?: boolean;
+  closesAt?: string;
+  multiple: boolean;
+  options: MessagePollOption[];
+  question: string;
 };
 
 export type MessageCallEvent = {

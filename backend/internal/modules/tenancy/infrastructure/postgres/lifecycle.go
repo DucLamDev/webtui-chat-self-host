@@ -217,15 +217,29 @@ func (r *Repository) UpdateZoneSettings(
 	if params.RegistrationMode != nil {
 		registrationMode = *params.RegistrationMode
 	}
+	logoURL := ""
+	if params.LogoURL != nil {
+		logoURL = *params.LogoURL
+	}
 	command, err := tx.Exec(ctx, `
 UPDATE zones
 SET name = CASE WHEN $2::boolean THEN $3 ELSE name END,
-    registration_mode = CASE WHEN $4::boolean THEN $5 ELSE registration_mode END
+    registration_mode = CASE WHEN $4::boolean THEN $5 ELSE registration_mode END,
+    metadata = CASE
+      WHEN $6::boolean THEN jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{branding}',
+        COALESCE(metadata -> 'branding', '{}'::jsonb) || jsonb_build_object('logo_url', $7::text),
+        true
+      )
+      ELSE metadata
+    END
 WHERE id = $1::uuid
   AND status <> 'archived'
   AND deleted_at IS NULL
 `, params.ZoneID, params.Name != nil, name,
-		params.RegistrationMode != nil, registrationMode)
+		params.RegistrationMode != nil, registrationMode,
+		params.LogoURL != nil, logoURL)
 	if err != nil {
 		return tenancydomain.ZoneAdminOverview{}, err
 	}
@@ -236,9 +250,13 @@ WHERE id = $1::uuid
 INSERT INTO audit_logs (zone_id, actor_user_id, action, entity_type, entity_id, metadata)
 VALUES (
     $1::uuid, $2::uuid, 'zone.settings_updated', 'zone', $1::uuid,
-    jsonb_build_object('name_changed', $3::boolean, 'registration_mode_changed', $4::boolean)
+    jsonb_build_object(
+      'name_changed', $3::boolean,
+      'registration_mode_changed', $4::boolean,
+      'logo_url_changed', $5::boolean
+    )
 )
-`, params.ZoneID, params.ActorUserID, params.Name != nil, params.RegistrationMode != nil); err != nil {
+`, params.ZoneID, params.ActorUserID, params.Name != nil, params.RegistrationMode != nil, params.LogoURL != nil); err != nil {
 		return tenancydomain.ZoneAdminOverview{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

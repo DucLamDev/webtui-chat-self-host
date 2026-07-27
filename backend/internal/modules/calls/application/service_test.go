@@ -15,6 +15,7 @@ type fakeCallRepo struct {
 	createCalled       bool
 	updateStatusCalled bool
 	messageCalled      bool
+	messageCount       int
 	lastMessage        CallMessageParams
 	lastSignal         SignalParams
 }
@@ -41,6 +42,15 @@ func (r *fakeCallRepo) Create(_ context.Context, params CreateParams) (callsdoma
 }
 
 func (r *fakeCallRepo) Get(context.Context, string, string) (callsdomain.Call, error) {
+	return r.call, nil
+}
+
+func (r *fakeCallRepo) FindIncomingRinging(_ context.Context, workspaceID string, targetUserID string) (callsdomain.Call, error) {
+	if r.call.WorkspaceID != workspaceID ||
+		r.call.TargetUserID != targetUserID ||
+		r.call.Status != "ringing" {
+		return callsdomain.Call{}, callsdomain.ErrCallNotFound
+	}
 	return r.call, nil
 }
 
@@ -93,6 +103,7 @@ func (r *fakeCallRepo) CreateSignal(_ context.Context, params SignalParams) (cal
 
 func (r *fakeCallRepo) CreateCallMessage(_ context.Context, params CallMessageParams) error {
 	r.messageCalled = true
+	r.messageCount++
 	r.lastMessage = params
 	return nil
 }
@@ -403,6 +414,159 @@ func TestAcceptedCallEndsAsCompleted(t *testing.T) {
 	}
 	if realtime.events[len(realtime.events)-1].Type != "CallEnded" {
 		t.Fatalf("realtime events = %#v", realtime.events)
+	}
+}
+
+func TestFindIncomingRingingReturnsOnlyTargetCall(t *testing.T) {
+	repo := &fakeCallRepo{call: callsdomain.Call{
+		ID:              "call-1",
+		WorkspaceID:     "workspace-1",
+		ChannelID:       "channel-1",
+		InitiatorUserID: "user-1",
+		TargetUserID:    "user-2",
+		Mode:            "video",
+		Status:          "ringing",
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}}
+	service := NewService(repo, fakeCallChecker{allowed: true}, nil)
+
+	call, err := service.FindIncomingRinging(context.Background(), "user-2", "workspace-1")
+	if err != nil {
+		t.Fatalf("FindIncomingRinging() error = %v", err)
+	}
+	if call == nil || call.ID != "call-1" || call.TargetUserID != "user-2" {
+		t.Fatalf("incoming call = %#v", call)
+	}
+
+	missing, err := service.FindIncomingRinging(context.Background(), "user-3", "workspace-1")
+	if err != nil {
+		t.Fatalf("FindIncomingRinging(missing) error = %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("incoming call for unrelated user = %#v, want nil", missing)
+	}
+}
+
+func TestTwoDeviceVideoCallControlPlaneEndToEnd(t *testing.T) {
+	repo := &fakeCallRepo{}
+	realtime := &fakeRealtime{}
+	notifications := &fakeCallNotifications{}
+	service := NewService(
+		repo,
+		fakeCallChecker{allowed: true},
+		realtime,
+		notifications,
+	)
+
+	call, err := service.Create(context.Background(), CreateInput{
+		ActorUserID:  "device-a-user",
+		WorkspaceID:  "workspace-1",
+		ChannelID:    "direct-channel-1",
+		TargetUserID: "device-b-user",
+		ClientCallID: "device-a-call-1",
+		Mode:         "video",
+		Metadata:     json.RawMessage(`{"client":"two-device-e2e"}`),
+	})
+	if err != nil {
+		t.Fatalf("device A create call: %v", err)
+	}
+	if len(notifications.incoming) != 1 {
+		t.Fatalf("incoming notifications = %d, want 1", len(notifications.incoming))
+	}
+
+	if _, err := service.ChangeStatus(context.Background(), StatusInput{
+		ActorUserID: "device-b-user",
+		WorkspaceID: "workspace-1",
+		CallID:      call.ID,
+		Action:      "accept",
+	}); err != nil {
+		t.Fatalf("device B accept call: %v", err)
+	}
+
+	signals := []SignalInput{
+		{
+			ActorUserID: "device-b-user",
+			WorkspaceID: "workspace-1",
+			CallID:      call.ID,
+			SignalType:  "ready",
+			Payload:     json.RawMessage(`{}`),
+		},
+		{
+			ActorUserID: "device-a-user",
+			WorkspaceID: "workspace-1",
+			CallID:      call.ID,
+			SignalType:  "offer",
+			Payload:     json.RawMessage(`{"sdp":{"type":"offer","sdp":"v=0"}}`),
+		},
+		{
+			ActorUserID: "device-b-user",
+			WorkspaceID: "workspace-1",
+			CallID:      call.ID,
+			SignalType:  "answer",
+			Payload:     json.RawMessage(`{"sdp":{"type":"answer","sdp":"v=0"}}`),
+		},
+		{
+			ActorUserID: "device-a-user",
+			WorkspaceID: "workspace-1",
+			CallID:      call.ID,
+			SignalType:  "ice_candidate",
+			Payload:     json.RawMessage(`{"candidate":{"candidate":"candidate:a","sdpMid":"0","sdpMLineIndex":0}}`),
+		},
+		{
+			ActorUserID: "device-b-user",
+			WorkspaceID: "workspace-1",
+			CallID:      call.ID,
+			SignalType:  "ice_candidate",
+			Payload:     json.RawMessage(`{"candidate":{"candidate":"candidate:b","sdpMid":"0","sdpMLineIndex":0}}`),
+		},
+	}
+	for index, signal := range signals {
+		if _, err := service.SendSignal(context.Background(), signal); err != nil {
+			t.Fatalf("signal %d (%s): %v", index, signal.SignalType, err)
+		}
+	}
+
+	ended, err := service.ChangeStatus(context.Background(), StatusInput{
+		ActorUserID: "device-b-user",
+		WorkspaceID: "workspace-1",
+		CallID:      call.ID,
+		Action:      "hangup",
+	})
+	if err != nil {
+		t.Fatalf("device B hangup: %v", err)
+	}
+	if ended.Status != "ended" {
+		t.Fatalf("final status = %q, want ended", ended.Status)
+	}
+	if repo.messageCount != 1 {
+		t.Fatalf("call history messages = %d, want exactly 1", repo.messageCount)
+	}
+	if len(notifications.terminal) != 1 {
+		t.Fatalf("terminal notifications = %d, want 1", len(notifications.terminal))
+	}
+
+	eventTypes := make([]string, 0, len(realtime.events))
+	for _, event := range realtime.events {
+		eventTypes = append(eventTypes, event.Type)
+	}
+	wantEvents := []string{
+		"CallInvited",
+		"CallAccepted",
+		"CallReady",
+		"CallOffer",
+		"CallAnswer",
+		"CallIceCandidate",
+		"CallIceCandidate",
+		"CallEnded",
+	}
+	if len(eventTypes) != len(wantEvents) {
+		t.Fatalf("event types = %#v, want %#v", eventTypes, wantEvents)
+	}
+	for index := range wantEvents {
+		if eventTypes[index] != wantEvents[index] {
+			t.Fatalf("event %d = %q, want %q", index, eventTypes[index], wantEvents[index])
+		}
 	}
 }
 

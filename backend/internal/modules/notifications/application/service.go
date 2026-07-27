@@ -120,16 +120,26 @@ type ChannelPreferenceInput struct {
 	ChannelID   string
 	Mode        string
 	MutedUntil  string
+	Sensitive   *bool
+	Important   *bool
+	Compact     *bool
+	Tags        []string
+	Archived    *bool
 }
 
 type ChannelPreferenceDTO struct {
-	UserID      string  `json:"user_id"`
-	WorkspaceID string  `json:"workspace_id"`
-	ChannelID   string  `json:"channel_id"`
-	Mode        string  `json:"mode"`
-	MutedUntil  *string `json:"muted_until,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	UserID      string   `json:"user_id"`
+	WorkspaceID string   `json:"workspace_id"`
+	ChannelID   string   `json:"channel_id"`
+	Mode        string   `json:"mode"`
+	MutedUntil  *string  `json:"muted_until,omitempty"`
+	Sensitive   bool     `json:"sensitive"`
+	Important   bool     `json:"important"`
+	Compact     bool     `json:"compact"`
+	Tags        []string `json:"tags"`
+	ArchivedAt  *string  `json:"archived_at,omitempty"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
 }
 
 func NewService(repo Repository) *Service {
@@ -365,12 +375,45 @@ func normalizeChannelPreferenceInput(input ChannelPreferenceInput) (notification
 		}
 		mutedUntil = &parsed
 	}
+	tags := make([]string, 0, len(input.Tags))
+	seenTags := make(map[string]struct{}, len(input.Tags))
+	for _, raw := range input.Tags {
+		tag := strings.TrimSpace(raw)
+		if tag == "" {
+			continue
+		}
+		if len([]rune(tag)) > 64 {
+			return notificationsdomain.ChannelPreference{}, apperrors.BadRequest("VALIDATION_ERROR", "Mỗi tag không được quá 64 ký tự.")
+		}
+		key := strings.ToLower(tag)
+		if _, exists := seenTags[key]; exists {
+			continue
+		}
+		seenTags[key] = struct{}{}
+		tags = append(tags, tag)
+		if len(tags) == 20 {
+			break
+		}
+	}
+	sensitive := input.Sensitive != nil && *input.Sensitive
+	important := input.Important != nil && *input.Important
+	compact := input.Compact != nil && *input.Compact
+	var archivedAt *time.Time
+	if input.Archived != nil && *input.Archived {
+		now := time.Now().UTC()
+		archivedAt = &now
+	}
 	return notificationsdomain.ChannelPreference{
 		UserID:      userID,
 		WorkspaceID: workspaceID,
 		ChannelID:   channelID,
 		Mode:        mode,
 		MutedUntil:  mutedUntil,
+		Sensitive:   sensitive,
+		Important:   important,
+		Compact:     compact,
+		Tags:        tags,
+		ArchivedAt:  archivedAt,
 	}, nil
 }
 
@@ -428,6 +471,11 @@ func toChannelPreferenceDTO(preference notificationsdomain.ChannelPreference) Ch
 		ChannelID:   preference.ChannelID,
 		Mode:        preference.Mode,
 		MutedUntil:  formatOptionalTime(preference.MutedUntil),
+		Sensitive:   preference.Sensitive,
+		Important:   preference.Important,
+		Compact:     preference.Compact,
+		Tags:        preference.Tags,
+		ArchivedAt:  formatOptionalTime(preference.ArchivedAt),
 		CreatedAt:   formatTime(preference.CreatedAt),
 		UpdatedAt:   formatTime(preference.UpdatedAt),
 	}

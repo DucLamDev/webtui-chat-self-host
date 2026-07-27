@@ -19,6 +19,8 @@ import type {
   IncomingWebhook,
   InstallBotInput,
   Notification,
+  ChannelNotificationPreference,
+  ChannelNotificationPreferenceInput,
   NotificationPreference,
   NotificationPreferenceInput,
   OrderBotStatus,
@@ -69,6 +71,18 @@ export function createNotificationsClient(http: HttpClient) {
     },
     updatePreferences(input: NotificationPreferenceInput) {
       return http.put<NotificationPreference>("/api/v1/notifications/preferences", input);
+    },
+    getChannelPreference(workspaceId: string, channelId: string) {
+      return http.get<ChannelNotificationPreference>(
+        `/api/v1/notifications/preferences/channels/${encodeURIComponent(channelId)}`,
+        { query: { workspace_id: workspaceId } }
+      );
+    },
+    updateChannelPreference(channelId: string, input: ChannelNotificationPreferenceInput) {
+      return http.put<ChannelNotificationPreference>(
+        `/api/v1/notifications/preferences/channels/${encodeURIComponent(channelId)}`,
+        input
+      );
     }
   };
 }

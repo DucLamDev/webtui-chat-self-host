@@ -225,8 +225,25 @@ TURN đang dùng credential tĩnh riêng của instance. Nếu credential bị l
 `TURN_PASSWORD`, cập nhật `NEXT_PUBLIC_RTC_ICE_SERVERS` và `RTC_ICE_SERVERS`,
 sau đó build lại web/admin và restart stack.
 
-Nhóm gọi quy mô lớn hoặc ghi hình cần bổ sung SFU/HPB chuyên dụng; compose mặc
-định chỉ nhắm nhóm nhỏ và cuộc gọi 1:1.
+Phòng nhóm, guest link, webinar và breakout room dùng Jitsi self-host làm SFU.
+Jitsi không được nhúng vào compose mặc định để instance chat nhỏ không phải gánh
+thêm media stack. Cài một Jitsi riêng (ví dụ `https://meet.chat.company.com`) và
+đặt trong `.env`:
+
+```dotenv
+JITSI_BASE_URL=https://meet.chat.company.com
+NEXT_PUBLIC_JITSI_BASE_URL=https://meet.chat.company.com
+```
+
+Sau đó build lại `api` và `web`. Backend trả media base URL cho web/mobile;
+client dùng room key ngẫu nhiên, grid view, giơ tay, screen share, blur/đổi nền
+và toolbar theo vai trò. Public link chỉ trả room key sau khi qua password và
+lobby; xoay/thu hồi link cũng xoay room key.
+
+Cho production, Jitsi phải bật secure domain hoặc JWT để Jicofo/Jitsi Videobridge
+thực sự cưỡng chế host và quyền media. Việc ẩn nút mic/camera/chat ở client là
+lớp UX, không thay thế policy phía media server. Ghi hình/livestream cần thêm
+Jibri và chính sách consent/retention riêng.
 
 ## Vận hành hằng ngày
 

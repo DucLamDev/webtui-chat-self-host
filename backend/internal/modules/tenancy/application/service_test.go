@@ -210,12 +210,15 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 	repo := &fakeRepo{
 		resolved: tenancydomain.ResolvedZone{
 			Zone: tenancydomain.Zone{
-				ID:       "zone-1",
-				Slug:     "abc",
-				Name:     "ABC",
-				Kind:     "customer_dedicated",
-				Status:   "active",
-				Metadata: map[string]any{"capabilities": map[string]any{"federation": true}},
+				ID:     "zone-1",
+				Slug:   "abc",
+				Name:   "ABC",
+				Kind:   "customer_dedicated",
+				Status: "active",
+				Metadata: map[string]any{
+					"capabilities": map[string]any{"federation": true},
+					"branding":     map[string]any{"logo_url": "https://chat.abc.com/logo.png"},
+				},
 			},
 			Deployment: &tenancydomain.Deployment{
 				Mode:         "dedicated_compose",
@@ -246,6 +249,10 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 	}
 	if discovery.Runtime.AppName != "ABC" {
 		t.Fatalf("app name = %q, want zone name", discovery.Runtime.AppName)
+	}
+	if discovery.Runtime.LogoURL != "https://chat.abc.com/logo.png" ||
+		discovery.Zone.LogoURL != discovery.Runtime.LogoURL {
+		t.Fatalf("branding logo = runtime:%q zone:%q", discovery.Runtime.LogoURL, discovery.Zone.LogoURL)
 	}
 	if discovery.Capabilities.Federation || !discovery.Capabilities.Dedicated ||
 		!discovery.Capabilities.OIDCConfiguration || !discovery.Capabilities.SelfHosted ||

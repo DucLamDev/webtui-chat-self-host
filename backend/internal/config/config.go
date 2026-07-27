@@ -45,6 +45,7 @@ type Config struct {
 	Security     SecurityConfig
 	Calls        CallsConfig
 	Firebase     FirebaseConfig
+	APNS         APNSConfig
 	Deployment   DeploymentConfig
 	Registration RegistrationConfig
 	Order        OrderConfig
@@ -144,14 +145,24 @@ type SecurityConfig struct {
 }
 
 type CallsConfig struct {
-	RingTimeout time.Duration
-	ICEServers  []map[string]any
+	RingTimeout  time.Duration
+	ICEServers   []map[string]any
+	JitsiBaseURL string
 }
 
 type FirebaseConfig struct {
 	ProjectID                string
 	ServiceAccountFile       string
 	ServiceAccountJSONBase64 string
+}
+
+type APNSConfig struct {
+	KeyID            string
+	TeamID           string
+	BundleID         string
+	PrivateKeyFile   string
+	PrivateKeyBase64 string
+	Sandbox          bool
 }
 
 type DeploymentConfig struct {
@@ -272,7 +283,8 @@ func Load() (*Config, error) {
 			OIDCClientSecrets:    getEnvMap("OIDC_CLIENT_SECRETS"),
 		},
 		Calls: CallsConfig{
-			RingTimeout: getEnvDuration("CALL_RING_TIMEOUT", 30*time.Second),
+			RingTimeout:  getEnvDuration("CALL_RING_TIMEOUT", 30*time.Second),
+			JitsiBaseURL: strings.TrimRight(getEnv("JITSI_BASE_URL", getEnv("NEXT_PUBLIC_JITSI_BASE_URL", "")), "/"),
 			ICEServers: getEnvJSONObjectList(
 				"RTC_ICE_SERVERS",
 				getEnvJSONObjectList(
@@ -285,6 +297,14 @@ func Load() (*Config, error) {
 			ProjectID:                getEnv("FIREBASE_PROJECT_ID", ""),
 			ServiceAccountFile:       getEnv("FIREBASE_SERVICE_ACCOUNT_FILE", ""),
 			ServiceAccountJSONBase64: getEnv("FIREBASE_SERVICE_ACCOUNT_JSON_BASE64", ""),
+		},
+		APNS: APNSConfig{
+			KeyID:            getEnv("APNS_KEY_ID", ""),
+			TeamID:           getEnv("APNS_TEAM_ID", ""),
+			BundleID:         getEnv("APNS_BUNDLE_ID", ""),
+			PrivateKeyFile:   getEnv("APNS_PRIVATE_KEY_FILE", ""),
+			PrivateKeyBase64: getEnv("APNS_PRIVATE_KEY_BASE64", ""),
+			Sandbox:          getEnvBool("APNS_SANDBOX", false),
 		},
 		Deployment: DeploymentConfig{
 			Mode:           deploymentMode,

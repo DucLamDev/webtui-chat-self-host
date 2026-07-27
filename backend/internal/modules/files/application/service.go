@@ -18,7 +18,12 @@ import (
 	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
-const maxUploadSize = 100 << 20
+const (
+	maxUploadSize          = 100 << 20
+	maxResumableUploadSize = int64(2 << 30)
+)
+
+var ErrRangeUnsupported = errors.New("object store does not support byte ranges")
 
 type PermissionChecker interface {
 	HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error)
@@ -61,6 +66,10 @@ type ObjectStore interface {
 	Put(ctx context.Context, input PutObjectInput) (StoredObject, error)
 	Get(ctx context.Context, key string) (StoredObjectReader, error)
 	Delete(ctx context.Context, key string) error
+}
+
+type RangeObjectStore interface {
+	GetRange(ctx context.Context, key string, start int64, end int64) (StoredObjectReader, error)
 }
 
 type PutObjectInput struct {
@@ -145,11 +154,30 @@ type DownloadInput struct {
 	ActorUserID string
 	WorkspaceID string
 	FileID      string
+	Range       *DownloadRange
+}
+
+type DownloadRange struct {
+	Start        *int64
+	End          *int64
+	SuffixLength *int64
 }
 
 type DownloadDTO struct {
-	File FileDTO
-	Body io.ReadCloser
+	File          FileDTO
+	Body          io.ReadCloser
+	ContentLength int64
+	RangeStart    int64
+	RangeEnd      int64
+	Partial       bool
+}
+
+type InvalidRangeError struct {
+	Size int64
+}
+
+func (e InvalidRangeError) Error() string {
+	return "requested byte range is not satisfiable"
 }
 
 type AttachFileInput struct {
@@ -423,7 +451,23 @@ func (s *Service) Download(ctx context.Context, input DownloadInput) (DownloadDT
 	if err != nil {
 		return DownloadDTO{}, mapFileError(err)
 	}
-	object, err := s.store.Get(ctx, file.ObjectKey)
+	start, end, partial, err := resolveDownloadRange(input.Range, file.ByteSize)
+	if err != nil {
+		return DownloadDTO{}, err
+	}
+	var object StoredObjectReader
+	if partial {
+		if rangeStore, ok := s.store.(RangeObjectStore); ok {
+			object, err = rangeStore.GetRange(ctx, file.ObjectKey, start, end)
+			if errors.Is(err, ErrRangeUnsupported) {
+				object, err = s.getRangeFallback(ctx, file.ObjectKey, start, end)
+			}
+		} else {
+			object, err = s.getRangeFallback(ctx, file.ObjectKey, start, end)
+		}
+	} else {
+		object, err = s.store.Get(ctx, file.ObjectKey)
+	}
 	if err != nil {
 		return DownloadDTO{}, err
 	}
@@ -438,7 +482,90 @@ func (s *Service) Download(ctx context.Context, input DownloadInput) (DownloadDT
 			"byte_size":     file.ByteSize,
 		},
 	})
-	return DownloadDTO{File: toFileDTO(file), Body: object.Body}, nil
+	contentLength := file.ByteSize
+	if partial {
+		contentLength = end - start + 1
+	}
+	return DownloadDTO{
+		File:          toFileDTO(file),
+		Body:          object.Body,
+		ContentLength: contentLength,
+		RangeStart:    start,
+		RangeEnd:      end,
+		Partial:       partial,
+	}, nil
+}
+
+func (s *Service) getRangeFallback(ctx context.Context, key string, start int64, end int64) (StoredObjectReader, error) {
+	object, err := s.store.Get(ctx, key)
+	if err != nil {
+		return StoredObjectReader{}, err
+	}
+	if start > 0 {
+		if _, err := io.CopyN(io.Discard, object.Body, start); err != nil {
+			_ = object.Body.Close()
+			return StoredObjectReader{}, err
+		}
+	}
+	length := end - start + 1
+	return StoredObjectReader{
+		Info: StoredObject{
+			Key:         object.Info.Key,
+			ContentType: object.Info.ContentType,
+			Size:        length,
+		},
+		Body: &limitedReadCloser{
+			Reader: io.LimitReader(object.Body, length),
+			closer: object.Body,
+		},
+	}, nil
+}
+
+func resolveDownloadRange(requested *DownloadRange, size int64) (int64, int64, bool, error) {
+	if requested == nil {
+		end := int64(0)
+		if size > 0 {
+			end = size - 1
+		}
+		return 0, end, false, nil
+	}
+	if size <= 0 {
+		return 0, 0, false, InvalidRangeError{Size: size}
+	}
+	if requested.SuffixLength != nil {
+		suffix := *requested.SuffixLength
+		if suffix <= 0 {
+			return 0, 0, false, InvalidRangeError{Size: size}
+		}
+		if suffix > size {
+			suffix = size
+		}
+		return size - suffix, size - 1, true, nil
+	}
+	if requested.Start == nil || *requested.Start < 0 || *requested.Start >= size {
+		return 0, 0, false, InvalidRangeError{Size: size}
+	}
+	start := *requested.Start
+	end := size - 1
+	if requested.End != nil {
+		end = *requested.End
+		if end < start {
+			return 0, 0, false, InvalidRangeError{Size: size}
+		}
+		if end >= size {
+			end = size - 1
+		}
+	}
+	return start, end, true, nil
+}
+
+type limitedReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r *limitedReadCloser) Close() error {
+	return r.closer.Close()
 }
 
 func fileWorkspaceID(file filesdomain.File) string {
@@ -624,11 +751,17 @@ func isAllowedMimeType(mimeType string) bool {
 	}
 	switch mimeType {
 	case "audio/webm",
+		"audio/aac",
 		"audio/ogg",
 		"audio/mp4",
 		"audio/mpeg",
 		"audio/wav",
 		"audio/x-m4a",
+		"video/mp4",
+		"video/webm",
+		"video/quicktime",
+		"video/x-m4v",
+		"video/x-matroska",
 		"application/ogg",
 		"application/pdf",
 		"application/json",

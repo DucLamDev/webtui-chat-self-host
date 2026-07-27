@@ -40,7 +40,8 @@ type updateReadStateRequest struct {
 }
 
 type createDirectRequest struct {
-	ParticipantIDs []string `json:"participant_ids"`
+	ParticipantIDs  []string `json:"participant_ids"`
+	SourceChannelID string   `json:"source_channel_id"`
 }
 
 func NewHandler(service *channelsapp.Service) *Handler {
@@ -64,8 +65,57 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.DELETE("/channels/:channel_id/join-requests/:user_id", h.RejectJoinRequest)
 	private.PUT("/channels/:channel_id/read-state", h.UpdateReadState)
 	private.POST("/channels/:channel_id/private-session", h.OpenPrivateSession)
+	private.GET("/channels/:channel_id/collaboration", h.GetCollaborationSettings)
+	private.PUT("/channels/:channel_id/collaboration", h.UpdateCollaborationSettings)
+	private.POST("/channels/:channel_id/collaboration/promote", h.PromoteConversation)
+	private.POST("/channels/:channel_id/collaboration/public-link", h.CreatePublicLink)
+	private.DELETE("/channels/:channel_id/collaboration/public-link", h.DisablePublicLink)
+	private.GET("/channels/:channel_id/collaboration/guests", h.ListGuestRequests)
+	private.POST("/channels/:channel_id/collaboration/guests/:request_id/approve", h.ApproveGuestRequest)
+	private.POST("/channels/:channel_id/collaboration/guests/:request_id/reject", h.RejectGuestRequest)
+	private.GET("/channels/:channel_id/collaboration/roles", h.ListCollaborationRoles)
+	private.PATCH("/channels/:channel_id/collaboration/roles/:user_id", h.UpdateCollaborationRole)
+	private.GET("/channels/:channel_id/collaboration/documents/:kind", h.GetCollaborationDocument)
+	private.PUT("/channels/:channel_id/collaboration/documents/:kind", h.UpdateCollaborationDocument)
+	private.GET("/channels/:channel_id/collaboration/tasks", h.ListChannelTasks)
+	private.POST("/channels/:channel_id/collaboration/tasks", h.CreateChannelTask)
+	private.PATCH("/channels/:channel_id/collaboration/tasks/:task_id", h.UpdateChannelTask)
+	private.GET("/channels/:channel_id/collaboration/breakouts", h.ListBreakoutRooms)
+	private.POST("/channels/:channel_id/collaboration/breakouts", h.CreateBreakoutRoom)
+	private.POST("/channels/:channel_id/collaboration/breakouts/return", h.ReturnBreakoutRooms)
+	private.POST("/channels/:channel_id/collaboration/breakouts/:room_id/close", h.CloseBreakoutRoom)
+	private.PUT("/channels/:channel_id/collaboration/breakouts/setup", h.SetupBreakoutRooms)
+	private.POST("/channels/:channel_id/collaboration/breakouts/start", h.StartBreakoutRooms)
+	private.POST("/channels/:channel_id/collaboration/breakouts/:room_id/join", h.JoinBreakoutRoom)
+	private.PUT("/channels/:channel_id/collaboration/breakouts/:room_id/assignments", h.UpdateBreakoutAssignments)
+	private.POST("/channels/:channel_id/collaboration/breakouts/broadcast", h.BroadcastToBreakouts)
+	private.GET("/channels/:channel_id/collaboration/meetings", h.ListMeetings)
+	private.POST("/channels/:channel_id/collaboration/meetings", h.CreateMeeting)
+	private.POST("/channels/:channel_id/collaboration/meetings/:meeting_id/:action", h.TransitionMeeting)
+	private.GET("/channels/:channel_id/collaboration/voice-room", h.GetVoiceRoom)
+	private.POST("/channels/:channel_id/collaboration/voice-room/start", h.StartVoiceRoom)
+	private.POST("/channels/:channel_id/collaboration/voice-room/stop", h.StopVoiceRoom)
+	private.GET("/channels/:channel_id/collaboration/shared-items", h.ListSharedItems)
+	private.POST("/channels/:channel_id/collaboration/ai/summary", h.SummarizeChannel)
+	private.GET("/channels/:channel_id/collaboration/recording-policy", h.GetRecordingPolicy)
+	private.PUT("/channels/:channel_id/collaboration/recording-policy", h.UpdateRecordingPolicy)
+	private.GET("/channels/:channel_id/collaboration/recordings", h.ListRecordings)
+	private.POST("/channels/:channel_id/collaboration/recordings", h.StartRecording)
+	private.PUT("/channels/:channel_id/collaboration/recordings/:recording_id/consent", h.SetRecordingConsent)
+	private.POST("/channels/:channel_id/collaboration/recordings/:recording_id/stop", h.StopRecording)
+	private.PUT("/channels/:channel_id/collaboration/recordings/:recording_id/result", h.UpdateRecordingResult)
+	private.GET("/channels/:channel_id/collaboration/federation-invites", h.ListFederationInvites)
+	private.POST("/channels/:channel_id/collaboration/federation-invites", h.CreateFederationInvite)
+	private.POST("/channels/:channel_id/collaboration/federation-invites/:invite_id/:status", h.TransitionFederationInvite)
+	private.GET("/talk/home", h.GetTalkHome)
+	private.GET("/talk/integrations", h.GetTalkIntegration)
+	private.PUT("/talk/integrations", h.UpdateTalkIntegration)
 	private.GET("/direct-conversations", h.ListDirects)
 	private.POST("/direct-conversations", h.CreateDirect)
+
+	router.GET("/public/conversations/:public_token", h.GetPublicRoom)
+	router.POST("/public/conversations/:public_token/join", h.JoinPublicRoom)
+	router.GET("/public/conversations/:public_token/join/:request_id", h.GetPublicJoinStatus)
 }
 
 func (h *Handler) OpenPrivateSession(c *gin.Context) {
@@ -260,9 +310,10 @@ func (h *Handler) CreateDirect(c *gin.Context) {
 		return
 	}
 	conversation, err := h.service.CreateDirect(c.Request.Context(), channelsapp.CreateDirectInput{
-		ActorUserID:    middleware.CurrentUserID(c),
-		WorkspaceID:    c.Param("workspace_id"),
-		ParticipantIDs: req.ParticipantIDs,
+		ActorUserID:     middleware.CurrentUserID(c),
+		WorkspaceID:     c.Param("workspace_id"),
+		ParticipantIDs:  req.ParticipantIDs,
+		SourceChannelID: req.SourceChannelID,
 	})
 	if err != nil {
 		response.Error(c, err)

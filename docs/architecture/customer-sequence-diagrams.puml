@@ -1,0 +1,346 @@
+' Sequence diagrams focused on customer-visible actions.
+' Each @startuml block can be rendered independently.
+
+@startuml sequence_customer_self_host_setup
+!theme plain
+title Sequence Diagram - Customer tự host instance
+
+actor "Customer Admin" as Admin
+participant "DNS Provider" as DNS
+participant "Ubuntu VPS" as VPS
+participant "Self-host Installer" as Installer
+participant "WebTUI Instance\n(Web + Admin + API)" as Instance
+
+Admin -> DNS: Tạo A record\nchat.company.com -> IP VPS
+activate DNS
+DNS --> Admin: DNS đã lưu
+deactivate DNS
+
+Admin -> VPS: SSH vào VPS
+activate VPS
+
+Admin -> Installer: Chạy lệnh cài đặt\nsudo sh bootstrap-ubuntu.sh\n--domain chat.company.com\n--email admin@company.com\n--name "Company Chat"
+activate Installer
+
+Installer -> Installer: Kiểm tra domain,\nDNS, Docker, firewall
+
+alt DNS/firewall chưa đúng
+    Installer --> Admin: Báo lỗi cần sửa\nDNS hoặc port
+    Admin -> DNS: Sửa A record nếu cần
+    Admin -> VPS: Mở lại firewall/rerun installer
+else Điều kiện hợp lệ
+    Installer -> VPS: Cài Docker nếu thiếu\nmở port cần thiết
+    Installer -> VPS: Tạo .env và secret\ncho instance
+    Installer -> Instance: Build và start stack\nweb, admin, api,\ndatabase, realtime, TURN, HTTPS
+    activate Instance
+    Instance --> Installer: /ready = OK
+    deactivate Instance
+    Installer --> Admin: Instance sẵn sàng\nhttps://chat.company.com
+end
+
+deactivate Installer
+deactivate VPS
+
+@enduml
+
+@startuml sequence_customer_portal_domain
+!theme plain
+title Sequence Diagram - Customer vào Portal nhập domain
+
+actor "Customer" as Customer
+participant "Portal\nchat.vpsttt.com/portal" as Portal
+participant "Customer Instance\nchat.company.com" as Instance
+participant "Customer Web App" as Web
+
+Customer -> Portal: Mở portal
+activate Portal
+Portal --> Customer: Hiển thị ô nhập domain
+
+Customer -> Portal: Nhập chat.company.com
+Portal -> Portal: Validate domain
+
+alt Domain sai format
+    Portal --> Customer: Báo lỗi domain không hợp lệ
+else Domain hợp lệ
+    Portal -> Instance: Kiểm tra discovery\nGET /api/v1/discovery
+    activate Instance
+
+    alt Instance chưa cài hoặc chưa ready
+        Instance --> Portal: Lỗi discovery
+        deactivate Instance
+        Portal --> Customer: Báo chưa tìm thấy server\nhoặc server chưa sẵn sàng
+    else Instance ready
+        Instance --> Portal: Discovery OK\nregistration_mode
+        deactivate Instance
+
+        alt Cho đăng ký owner đầu tiên
+            Portal -> Web: Redirect tới\nhttps://chat.company.com/?auth=register
+            activate Web
+            Web --> Customer: Màn đăng ký
+            deactivate Web
+        else Đã có owner / invite only
+            Portal -> Web: Redirect tới\nhttps://chat.company.com/?auth=login
+            activate Web
+            Web --> Customer: Màn đăng nhập
+            deactivate Web
+        end
+    end
+end
+
+deactivate Portal
+
+@enduml
+
+@startuml sequence_customer_web_first_use
+!theme plain
+title Sequence Diagram - Customer dùng Web lần đầu
+
+actor "Customer Owner/User" as User
+participant "Web App\nchat.company.com" as Web
+participant "Customer Instance API" as API
+participant "Realtime\nWebSocket" as WS
+
+User -> Web: Mở link từ portal\nhoặc vào trực tiếp domain
+activate Web
+
+alt Instance chưa có owner
+    Web --> User: Hiển thị form đăng ký
+    User -> Web: Nhập tên, email,\nusername, password
+    Web -> API: POST /api/v1/auth/register
+    activate API
+    API -> API: Tạo user đầu tiên\nvà cấp quyền owner
+    API --> Web: Đăng ký thành công\naccessToken + refreshToken
+    deactivate API
+    Web --> User: Vào workspace với quyền owner
+else Instance đã có owner
+    Web --> User: Hiển thị form đăng nhập
+    User -> Web: Nhập email/username\nvà password
+    Web -> API: POST /api/v1/auth/login
+    activate API
+    API --> Web: Đăng nhập thành công\naccessToken + refreshToken
+    deactivate API
+    Web --> User: Vào workspace được cấp quyền
+end
+
+Web -> API: Tải workspace,\nchannel, timeline
+activate API
+API --> Web: Dữ liệu chat
+deactivate API
+
+Web -> WS: Kết nối wss://chat.company.com/ws
+activate WS
+WS --> Web: Realtime connected
+
+User -> Web: Gửi / nhận tin nhắn
+Web -> API: POST message
+activate API
+API --> Web: Message đã lưu
+deactivate API
+WS --> Web: Event realtime
+Web --> User: Timeline cập nhật
+
+deactivate WS
+deactivate Web
+
+@enduml
+
+@startuml sequence_customer_desktop_app
+!theme plain
+title Sequence Diagram - User dùng Desktop app
+
+actor "Desktop User" as User
+participant "Desktop App\n(Tauri)" as Desktop
+participant "Customer Instance\nchat.company.com" as Instance
+participant "Secure Storage\nOS Keychain" as SecureStore
+participant "Realtime\nWebSocket" as WS
+
+User -> Desktop: Mở desktop app
+activate Desktop
+Desktop -> SecureStore: Kiểm tra server đã lưu
+activate SecureStore
+SecureStore --> Desktop: Chưa có hoặc cần đổi server
+deactivate SecureStore
+
+Desktop --> User: Hiển thị màn nhập domain
+User -> Desktop: Nhập chat.company.com
+Desktop -> Instance: GET /api/v1/discovery
+activate Instance
+
+alt Domain chưa cài hoặc không ready
+    Instance --> Desktop: Discovery lỗi
+    deactivate Instance
+    Desktop --> User: Báo server chưa sẵn sàng
+else Discovery OK
+    Instance --> Desktop: api_base_url,\nws_base_url, registration_mode
+    deactivate Instance
+    Desktop -> SecureStore: Lưu domain và runtime
+    activate SecureStore
+    SecureStore --> Desktop: OK
+    deactivate SecureStore
+
+    Desktop --> User: Hiển thị login/register
+    User -> Desktop: Nhập tài khoản
+    Desktop -> Instance: POST /api/v1/auth/login\nhoặc /register
+    activate Instance
+    Instance --> Desktop: Tokens + user
+    deactivate Instance
+
+    Desktop -> SecureStore: Lưu refresh token
+    activate SecureStore
+    SecureStore --> Desktop: OK
+    deactivate SecureStore
+
+    Desktop -> Instance: Tải workspace và timeline
+    activate Instance
+    Instance --> Desktop: Chat data
+    deactivate Instance
+
+    Desktop -> WS: Kết nối realtime\nwss://chat.company.com/ws
+    activate WS
+    WS --> Desktop: Connected
+    Desktop --> User: Dùng chat trên desktop
+    deactivate WS
+end
+
+deactivate Desktop
+
+@enduml
+
+@startuml sequence_customer_mobile_app
+!theme plain
+title Sequence Diagram - User dùng Mobile app
+
+actor "Mobile User" as User
+participant "Mobile App\nFlutter" as Mobile
+participant "Customer Instance\nchat.company.com" as Instance
+participant "Secure Store\nKeychain/Keystore" as SecureStore
+participant "Local Cache" as Cache
+participant "Push Service\nFCM/APNs hoặc none" as Push
+participant "Realtime\nWebSocket" as WS
+
+User -> Mobile: Mở mobile app
+activate Mobile
+Mobile -> SecureStore: Kiểm tra server đã lưu
+activate SecureStore
+SecureStore --> Mobile: Chưa có hoặc cần đổi server
+deactivate SecureStore
+
+Mobile --> User: Hiển thị màn nhập server
+User -> Mobile: Nhập chat.company.com
+Mobile -> Instance: GET /api/v1/discovery
+activate Instance
+
+alt Domain chưa cài hoặc discovery lỗi
+    Instance --> Mobile: Lỗi discovery
+    deactivate Instance
+    Mobile --> User: Báo server chưa sẵn sàng
+else Discovery OK
+    Instance --> Mobile: api_base_url,\nws_base_url, registration_mode
+    deactivate Instance
+    Mobile -> SecureStore: Lưu runtime server
+    activate SecureStore
+    SecureStore --> Mobile: OK
+    deactivate SecureStore
+
+    Mobile --> User: Hiển thị login/register
+    User -> Mobile: Nhập tài khoản
+    Mobile -> Instance: POST /api/v1/auth/login\nhoặc /register
+    activate Instance
+    Instance --> Mobile: Tokens + user
+    deactivate Instance
+
+    Mobile -> SecureStore: Lưu refresh token\naccess token giữ trong memory
+    activate SecureStore
+    SecureStore --> Mobile: OK
+    deactivate SecureStore
+
+    Mobile -> Instance: Tải workspace,\npermission, timeline
+    activate Instance
+    Instance --> Mobile: Chat data
+    deactivate Instance
+    Mobile -> Cache: Lưu dữ liệu offline\nvà sync cursor
+    activate Cache
+    Cache --> Mobile: OK
+    deactivate Cache
+
+    Mobile -> Push: Đăng ký push device\nnếu hỗ trợ
+    activate Push
+    Push --> Mobile: Push ready\nhoặc provider=none
+    deactivate Push
+
+    Mobile -> WS: Kết nối realtime\nwss://chat.company.com/ws
+    activate WS
+    WS --> Mobile: Connected
+    Mobile --> User: Dùng chat trên mobile
+
+    alt App bị background/kill
+        Push --> Mobile: Notification nếu có
+        User -> Mobile: Mở lại app
+        Mobile -> Instance: Sync bằng cursor
+        activate Instance
+        Instance --> Mobile: Tin nhắn/event bị lỡ
+        deactivate Instance
+        Mobile -> Cache: Merge dữ liệu mới
+    else App đang mở
+        WS --> Mobile: Event realtime
+    end
+
+    deactivate WS
+end
+
+deactivate Mobile
+
+@enduml
+
+@startuml sequence_customer_switch_server
+!theme plain
+title Sequence Diagram - User đổi sang domain customer khác
+
+actor "User" as User
+participant "Mobile/Desktop App" as Client
+participant "Current Instance" as OldInstance
+participant "New Instance" as NewInstance
+participant "Secure Storage" as SecureStore
+participant "Local Cache" as Cache
+
+User -> Client: Chọn đổi server/domain
+activate Client
+
+Client -> OldInstance: Logout session hiện tại\nnếu có refresh token
+activate OldInstance
+OldInstance --> Client: OK hoặc bỏ qua nếu offline
+deactivate OldInstance
+
+Client -> SecureStore: Xóa token và runtime cũ
+activate SecureStore
+SecureStore --> Client: OK
+deactivate SecureStore
+
+Client -> Cache: Xóa cache theo workspace cũ
+activate Cache
+Cache --> Client: OK
+deactivate Cache
+
+Client --> User: Hiển thị màn nhập domain
+User -> Client: Nhập new.company.com
+
+Client -> NewInstance: GET /api/v1/discovery
+activate NewInstance
+
+alt New domain không ready
+    NewInstance --> Client: Discovery lỗi
+    deactivate NewInstance
+    Client --> User: Báo không kết nối được server mới
+else Discovery OK
+    NewInstance --> Client: Runtime mới
+    deactivate NewInstance
+    Client -> SecureStore: Lưu runtime mới
+    activate SecureStore
+    SecureStore --> Client: OK
+    deactivate SecureStore
+    Client --> User: Hiển thị login/register\ncho new.company.com
+end
+
+deactivate Client
+
+@enduml

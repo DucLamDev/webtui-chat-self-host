@@ -31,11 +31,13 @@ export type AuthScreenProps = {
   isPending?: boolean;
   googleClientId?: string;
   initialDomain?: string;
+  initialInviteToken?: string;
   mode: AuthMode;
   onGoogleCredential?: (credential: string, domain: string) => void;
   onOIDCDiscover?: (domain: string) => Promise<AuthOIDCProvider[]>;
   onOIDCStart?: (domain: string, providerId: string) => Promise<void> | void;
   onLogin: (values: LoginFormValues) => void;
+  onChangeServer?: () => void;
   onModeChange: (mode: AuthMode) => void;
   onRegister: (values: RegisterFormValues) => void;
   panelLogoAlt?: string;
@@ -51,19 +53,21 @@ export function AuthScreen({
   error,
   googleClientId,
   initialDomain = "",
+  initialInviteToken = "",
   isPending = false,
   mode,
   onGoogleCredential,
   onOIDCDiscover,
   onOIDCStart,
   onLogin,
+  onChangeServer,
   onModeChange,
   onRegister,
   panelLogoAlt = "",
   panelLogoSrc,
   showServerField = true,
   subtitle = "Kết nối – Trò chuyện – Hiệu quả",
-  title = "WEBTUI CHAT"
+  title = "ỨNG DỤNG CHAT"
 }: AuthScreenProps) {
   const [domain, setDomain] = useState(initialDomain);
   const [identifier, setIdentifier] = useState("");
@@ -72,7 +76,7 @@ export function AuthScreen({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
-  const [inviteToken, setInviteToken] = useState("");
+  const [inviteToken, setInviteToken] = useState(initialInviteToken);
   const [username, setUsername] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
   const [isGoogleReady, setIsGoogleReady] = useState(false);
@@ -80,6 +84,12 @@ export function AuthScreen({
   const [oidcProviders, setOIDCProviders] = useState<AuthOIDCProvider[]>([]);
   const [selectedOIDCProvider, setSelectedOIDCProvider] = useState("");
   const googleButtonRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialInviteToken) {
+      setInviteToken(initialInviteToken);
+    }
+  }, [initialInviteToken]);
 
   useEffect(() => {
     if (!googleClientId || !onGoogleCredential) {
@@ -195,11 +205,11 @@ export function AuthScreen({
   }
 
   return (
-    <main className={`auth-screen auth-screen--${mode}`} aria-label="Xác thực WebTui Chat">
+    <main className={`auth-screen auth-screen--${mode}`} aria-label={`Xác thực ${title}`}>
       <section className="auth-hero">
         <div className="auth-header-brand">
           <span className={brandLogoSrc ? "auth-header-brand__logo auth-header-brand__logo--image" : "auth-header-brand__logo"}>
-            {brandLogoSrc ? <img alt={brandLogoAlt} src={brandLogoSrc} /> : "W"}
+            {brandLogoSrc ? <img alt={brandLogoAlt} src={brandLogoSrc} /> : organizationInitial(title)}
           </span>
           <span><strong>{title}</strong><small>{subtitle}</small></span>
         </div>
@@ -240,10 +250,15 @@ export function AuthScreen({
             <img alt={panelLogoAlt} src={panelLogoSrc} />
           </div>
         ) : (
-          <span className="auth-panel__icon" aria-hidden="true">{mode === "login" ? "⌑" : "+"}</span>
+          <span className="auth-panel__icon" aria-hidden="true">{organizationInitial(title)}</span>
         )}
         <div className="auth-panel__header">
           <h2>{mode === "login" ? "Đăng nhập" : "Tạo tài khoản mới"}</h2>
+          {onChangeServer ? (
+            <button className="auth-change-server" onClick={onChangeServer} type="button">
+              Đổi máy chủ
+            </button>
+          ) : null}
         </div>
         <form className="auth-form" onSubmit={handleSubmit}>
           {showServerField ? (
@@ -320,6 +335,11 @@ export function AuthScreen({
       </section>
     </main>
   );
+}
+
+function organizationInitial(value: string): string {
+  const normalized = value.trim();
+  return normalized ? normalized.slice(0, 1).toUpperCase() : "O";
 }
 
 function GoogleMark() {

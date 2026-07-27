@@ -13,9 +13,13 @@ import (
 	backupspostgres "github.com/duclamdev/application-chat/backend/internal/modules/backups/infrastructure/postgres"
 	callsapp "github.com/duclamdev/application-chat/backend/internal/modules/calls/application"
 	callspostgres "github.com/duclamdev/application-chat/backend/internal/modules/calls/infrastructure/postgres"
+	channelspostgres "github.com/duclamdev/application-chat/backend/internal/modules/channels/infrastructure/postgres"
 	cronjobsapp "github.com/duclamdev/application-chat/backend/internal/modules/cronjobs/application"
 	cronjobspostgres "github.com/duclamdev/application-chat/backend/internal/modules/cronjobs/infrastructure/postgres"
+	messagesapp "github.com/duclamdev/application-chat/backend/internal/modules/messages/application"
+	messagespostgres "github.com/duclamdev/application-chat/backend/internal/modules/messages/infrastructure/postgres"
 	notificationsapp "github.com/duclamdev/application-chat/backend/internal/modules/notifications/application"
+	notificationsapns "github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/apns"
 	notificationsfcm "github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/fcm"
 	notificationspostgres "github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/postgres"
 	outboxapp "github.com/duclamdev/application-chat/backend/internal/modules/outbox/application"
@@ -98,11 +102,22 @@ func (w *Worker) tasks() []workerTask {
 		ServiceAccountFile:       w.cfg.Firebase.ServiceAccountFile,
 		ServiceAccountJSONBase64: w.cfg.Firebase.ServiceAccountJSONBase64,
 	})
-	notificationsRepo := notificationspostgres.NewRepository(pool, pushSender)
+	voipPushSender := notificationsapns.NewSender(notificationsapns.Config{
+		KeyID:            w.cfg.APNS.KeyID,
+		TeamID:           w.cfg.APNS.TeamID,
+		BundleID:         w.cfg.APNS.BundleID,
+		PrivateKeyFile:   w.cfg.APNS.PrivateKeyFile,
+		PrivateKeyBase64: w.cfg.APNS.PrivateKeyBase64,
+		Sandbox:          w.cfg.APNS.Sandbox,
+	})
+	notificationsRepo := notificationspostgres.NewRepository(pool, pushSender, voipPushSender)
 	notificationsService := notificationsapp.NewService(notificationsRepo)
+	messagesRepo := messagespostgres.NewRepository(pool)
+	messagesService := messagesapp.NewService(messagesRepo, nil)
 	callsRepo := callspostgres.NewRepository(pool)
 	callsService := callsapp.NewService(callsRepo, nil, nil, notificationsService)
 	callsService.SetRingTimeout(w.cfg.Calls.RingTimeout)
+	channelsRepo := channelspostgres.NewRepository(pool)
 	apiTokensRepo := aptokenspostgres.NewRepository(pool)
 	apiTokensService := aptokensapp.NewService(apiTokensRepo, nil)
 	webhooksRepo := webhookspostgres.NewRepository(pool)
@@ -134,6 +149,59 @@ func (w *Worker) tasks() []workerTask {
 	}
 
 	return []workerTask{
+		{
+			name:     "talk_maintenance",
+			interval: 60 * time.Second,
+			run: func(ctx context.Context) error {
+				result, err := channelsRepo.MaintainTalk(
+					ctx,
+					w.resources.Storage,
+					limit,
+				)
+				total := result.ExpiredPins +
+					result.EndedMeetings +
+					result.ClosedBreakouts +
+					result.StoppedVoiceRooms +
+					result.FailedRecordings +
+					result.DeletedRecordings +
+					result.ExpiredUploads
+				if total > 0 {
+					slog.Debug(
+						"Đã bảo trì Talk",
+						"expired_pins", result.ExpiredPins,
+						"ended_meetings", result.EndedMeetings,
+						"closed_breakouts", result.ClosedBreakouts,
+						"stopped_voice_rooms", result.StoppedVoiceRooms,
+						"failed_recordings", result.FailedRecordings,
+						"deleted_recordings", result.DeletedRecordings,
+						"expired_uploads", result.ExpiredUploads,
+					)
+				}
+				return err
+			},
+		},
+		{
+			name:     "scheduled_messages",
+			interval: time.Second,
+			run: func(ctx context.Context) error {
+				count, err := messagesService.ProcessDueScheduledMessages(ctx, limit)
+				if count > 0 {
+					slog.Debug("Đã gửi tin nhắn được hẹn giờ", "count", count)
+				}
+				return err
+			},
+		},
+		{
+			name:     "message_reminders",
+			interval: time.Second,
+			run: func(ctx context.Context) error {
+				count, err := messagesService.ProcessDueReminders(ctx, limit)
+				if count > 0 {
+					slog.Debug("Đã phát lời nhắc tin nhắn", "count", count)
+				}
+				return err
+			},
+		},
 		{
 			name:     "outbox",
 			interval: 3 * time.Second,

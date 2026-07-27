@@ -59,6 +59,7 @@ import type {
   OutgoingWebhook,
   SaveCronJobInput,
   WebhookDelivery,
+  WorkspaceInvite,
   WorkspaceMember,
   WorkspaceSetting,
   ZoneOIDCProvider
@@ -831,6 +832,8 @@ function UsersSection({
   showToast: (message: string, tone?: ToastTone) => void;
   userFilter: AdminUserFilter;
 }) {
+  const [latestInvite, setLatestInvite] = useState<WorkspaceInvite | null>(null);
+
   async function handleAddMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -868,6 +871,33 @@ function UsersSection({
     try {
       await data.updateUserMutation.mutateAsync({ input: { status }, userId });
       showToast(status === "locked" ? "Đã khóa người dùng." : "Đã mở khóa người dùng.");
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    }
+  }
+
+  async function handleCreateInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const email = formValue(form, "email");
+    const roleCode = formValue(form, "role_code");
+    const expiresDays = Number(formValue(form, "expires_days") || 7);
+
+    if (!email) {
+      showToast("Vui lòng nhập email cần mời.", "danger");
+      return;
+    }
+
+    try {
+      const invite = await data.createInviteMutation.mutateAsync({
+        email,
+        expires_days: Number.isFinite(expiresDays) ? expiresDays : 7,
+        role_code: roleCode || undefined
+      });
+      setLatestInvite(invite);
+      formElement.reset();
+      showToast("Đã tạo lời mời đăng ký. Token chỉ hiển thị một lần.");
     } catch (error) {
       showToast(errorMessage(error), "danger");
     }
@@ -956,6 +986,71 @@ function UsersSection({
           </div>
         ) : (
           <EmptyState description="Không có người dùng nào khớp bộ lọc hiện tại." title="Danh sách trống" />
+        )}
+      </article>
+
+      <article className="admin-panel">
+        <header>
+          <div>
+            <h2>Lời mời đăng ký</h2>
+            <p>Tạo token để customer đăng ký vào server invite-only của bạn.</p>
+          </div>
+          <KeyRound size={20} />
+        </header>
+        <form className="admin-form admin-form--inline" onSubmit={(event) => void handleCreateInvite(event)}>
+          <label>
+            Email
+            <input name="email" placeholder="customer@example.com" required type="email" />
+          </label>
+          <label>
+            Role
+            <select name="role_code">
+              <option value="">workspace_member</option>
+              {data.roles.map((role) => (
+                <option key={role.id} value={role.code}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Hết hạn sau
+            <input defaultValue={7} max={30} min={1} name="expires_days" type="number" />
+          </label>
+          <Button disabled={data.createInviteMutation.isPending || !data.canInviteUsers} type="submit">
+            <Plus size={16} />
+            Tạo lời mời
+          </Button>
+        </form>
+        {!data.canInviteUsers ? <PermissionNotice permission="workspace.invite_user" /> : null}
+        {latestInvite?.token ? (
+          <SecretBox label={`Mã lời mời cho ${latestInvite.email ?? "customer"}`} value={latestInvite.token} />
+        ) : null}
+        {data.invitesQuery.isLoading ? (
+          <TableSkeleton />
+        ) : data.invites.length ? (
+          <div className="data-table data-table--invites" role="table">
+            <div className="data-table__row data-table__row--head" role="row">
+              <span>Email</span>
+              <span>Role</span>
+              <span>Hết hạn</span>
+              <span>Trạng thái</span>
+            </div>
+            {data.invites.map((invite) => (
+              <div className="data-table__row" key={invite.id} role="row">
+                <span>{invite.email ?? "Không có email"}</span>
+                <span>{invite.role_id ? shortId(invite.role_id) : "workspace_member"}</span>
+                <span>{formatDateTime(invite.expires_at)}</span>
+                <span>
+                  <Badge tone={invite.accepted_at ? "green" : invite.revoked_at ? "slate" : "blue"}>
+                    {invite.accepted_at ? "Đã dùng" : invite.revoked_at ? "Đã thu hồi" : "Đang mở"}
+                  </Badge>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState description="Chưa có lời mời nào cho workspace này." title="Chưa có lời mời" />
         )}
       </article>
 
@@ -2687,6 +2782,7 @@ function InstanceAdministration({
     try {
       await data.updateCurrentZoneMutation.mutateAsync({
         name: formValue(form, "name"),
+        logo_url: formValue(form, "logo_url"),
         registration_mode: formValue(form, "registration_mode") as
           | "open"
           | "invite_only"
@@ -2871,6 +2967,16 @@ function InstanceAdministration({
             <label>
               Tên zone
               <input defaultValue={zoneOverview.zone.name} name="name" required />
+            </label>
+            <label>
+              Logo tổ chức
+              <input
+                defaultValue={zoneOverview.zone.logo_url ?? ""}
+                name="logo_url"
+                placeholder="https://chat.example.com/branding/logo.png"
+                type="url"
+              />
+              <small>Logo PNG, WebP hoặc SVG công khai qua HTTPS.</small>
             </label>
             <label>
               Đăng ký

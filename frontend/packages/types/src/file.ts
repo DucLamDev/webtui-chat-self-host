@@ -51,3 +51,42 @@ export type FileAttachment = {
   created_at?: ISODateTime;
   file: FileObject;
 };
+
+export type UploadPart = {
+  part_number: number;
+  byte_size: number;
+  checksum_sha256: string;
+  created_at: ISODateTime;
+};
+
+export type ResumableUploadSession = {
+  id: Id;
+  workspace_id: Id;
+  owner_id: Id;
+  channel_id?: Id | null;
+  message_id?: Id | null;
+  original_name: string;
+  mime_type: string;
+  total_size: number;
+  chunk_size: number;
+  total_chunks: number;
+  received_bytes: number;
+  uploaded_parts: UploadPart[];
+  status: "uploading" | "completing" | "completed" | "cancelled" | "expired" | "failed";
+  file_id?: Id | null;
+  checksum_sha256?: string | null;
+  expires_at: ISODateTime;
+  completed_at?: ISODateTime | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+};
+
+export type CreateResumableUploadInput = {
+  channel_id?: Id;
+  message_id?: Id;
+  original_name: string;
+  mime_type: string;
+  total_size: number;
+  chunk_size?: number;
+  metadata?: JsonObject;
+};

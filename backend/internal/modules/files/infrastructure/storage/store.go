@@ -47,6 +47,25 @@ func (s *Store) Get(ctx context.Context, key string) (filesapp.StoredObjectReade
 	}, nil
 }
 
+func (s *Store) GetRange(ctx context.Context, key string, start int64, end int64) (filesapp.StoredObjectReader, error) {
+	rangeStore, ok := s.inner.(platformstorage.RangeStore)
+	if !ok {
+		return filesapp.StoredObjectReader{}, filesapp.ErrRangeUnsupported
+	}
+	object, err := rangeStore.GetRange(ctx, key, start, end)
+	if err != nil {
+		return filesapp.StoredObjectReader{}, err
+	}
+	return filesapp.StoredObjectReader{
+		Info: filesapp.StoredObject{
+			Key:         object.Info.Key,
+			ContentType: object.Info.ContentType,
+			Size:        object.Info.Size,
+		},
+		Body: object.Body,
+	}, nil
+}
+
 func (s *Store) Delete(ctx context.Context, key string) error {
 	return s.inner.Delete(ctx, key)
 }

@@ -52,6 +52,10 @@ type oauthToken struct {
 	TokenType   string `json:"token_type"`
 }
 
+func (s *Sender) Provider() string {
+	return "fcm"
+}
+
 func NewSender(config Config) *Sender {
 	client := config.HTTPClient
 	if client == nil {

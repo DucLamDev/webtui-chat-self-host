@@ -29,6 +29,37 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+func (r *Repository) ListActiveChannelMemberIDs(ctx context.Context, workspaceID string, channelID string) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+SELECT cm.user_id::text
+FROM channel_members cm
+JOIN channels c ON c.id = cm.channel_id
+WHERE c.workspace_id = $1::uuid
+  AND c.id = $2::uuid
+  AND c.deleted_at IS NULL
+  AND c.status = 'active'
+  AND cm.status IN ('active', 'muted')
+ORDER BY cm.user_id
+`, workspaceID, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("message list active channel members: %w", err)
+	}
+	defer rows.Close()
+
+	userIDs := make([]string, 0)
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("message scan active channel member: %w", err)
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("message list active channel members rows: %w", err)
+	}
+	return userIDs, nil
+}
+
 func (r *Repository) Send(ctx context.Context, params messagesapp.SendParams) (messagesdomain.Message, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -94,6 +125,42 @@ RETURNING id::text, workspace_id::text, channel_id::text, sender_id::text, paren
 			return messagesdomain.Message{}, messagesdomain.ErrChannelNotFound
 		}
 		return messagesdomain.Message{}, fmt.Errorf("message send insert message: %w", err)
+	}
+
+	if threadRootID != "" {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO message_threads (
+    workspace_id, channel_id, root_message_id, created_by
+)
+SELECT root.workspace_id, root.channel_id, root.id, COALESCE(root.sender_id, $4::uuid)
+FROM messages root
+WHERE root.workspace_id = $1::uuid
+  AND root.channel_id = $2::uuid
+  AND root.id = $3::uuid
+ON CONFLICT (workspace_id, root_message_id)
+DO UPDATE SET updated_at = now()
+`, params.WorkspaceID, params.ChannelID, threadRootID, params.SenderID); err != nil {
+			return messagesdomain.Message{}, fmt.Errorf("message send ensure thread details: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO message_thread_subscriptions (
+    workspace_id, root_message_id, user_id, subscribed
+)
+SELECT $1::uuid, $2::uuid, participant.user_id, true
+FROM (
+    SELECT $3::uuid AS user_id
+    UNION
+    SELECT root.sender_id
+    FROM messages root
+    WHERE root.workspace_id = $1::uuid
+      AND root.id = $2::uuid
+      AND root.sender_id IS NOT NULL
+) participant
+ON CONFLICT (workspace_id, root_message_id, user_id)
+DO UPDATE SET subscribed = true
+`, params.WorkspaceID, threadRootID, params.SenderID); err != nil {
+			return messagesdomain.Message{}, fmt.Errorf("message send subscribe thread participants: %w", err)
+		}
 	}
 
 	if err := touchDirectConversationLastMessage(ctx, tx, message); err != nil {

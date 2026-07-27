@@ -18,6 +18,7 @@ type AuthState = {
   user: AuthUser | null;
   zoneDomain: string | null;
   zoneRuntime: ZoneRuntime | null;
+  clearZoneRuntime: () => void;
   clearSession: () => void;
   setHydrated: (hydrated: boolean) => void;
   setRememberLogin: (remember: boolean) => void;
@@ -37,14 +38,13 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       zoneDomain: null,
       zoneRuntime: null,
+      clearZoneRuntime: () => set({ zoneDomain: null, zoneRuntime: null }),
       clearSession: () =>
         set({
           accessToken: null,
           refreshToken: null,
           sessionId: null,
-          user: null,
-          zoneDomain: null,
-          zoneRuntime: null
+          user: null
         }),
       setHydrated: (hydrated) => set({ hydrated }),
       setRememberLogin: (rememberLogin) => set({ rememberLogin }),

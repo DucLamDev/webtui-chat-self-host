@@ -12,11 +12,14 @@ export type UploadQueueItem = {
   id: string;
   isAudio?: boolean;
   isImage?: boolean;
+  isVideo?: boolean;
   messageId?: string;
   name: string;
   previewUrl?: string;
+  progress?: number;
   size: number;
   status: UploadQueueStatus;
+  uploadSessionId?: string;
 };
 
 type UploadQueueState = {
@@ -27,6 +30,8 @@ type UploadQueueState = {
   markAttached: (id: string, messageId: string, fileId: string) => void;
   markFailed: (id: string, error: string) => void;
   markUploading: (id: string) => void;
+  setProgress: (id: string, receivedBytes: number, totalBytes: number) => void;
+  setUploadSession: (id: string, uploadSessionId: string) => void;
   remove: (id: string) => void;
   retry: (id: string) => void;
 };
@@ -92,6 +97,23 @@ export const useUploadStore = create<UploadQueueState>((set) => ({
           : item
       )
     })),
+  setProgress: (id, receivedBytes, totalBytes) =>
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              progress: totalBytes > 0 ? Math.min(1, Math.max(0, receivedBytes / totalBytes)) : 0
+            }
+          : item
+      )
+    })),
+  setUploadSession: (id, uploadSessionId) =>
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.id === id ? { ...item, uploadSessionId } : item
+      )
+    })),
   remove: (id) =>
     set((state) => {
       state.items.filter((item) => item.id === id).forEach(revokeUploadPreview);
@@ -125,6 +147,7 @@ function createUploadItem(file: File, durationSeconds?: number): UploadQueueItem
   const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";
   const isImage = file.type.startsWith("image/") || ["gif", "jpeg", "jpg", "png", "webp"].includes(extension);
   const isAudio = Boolean(durationSeconds) || file.type.startsWith("audio/") || file.type === "application/ogg";
+  const isVideo = file.type.startsWith("video/") || ["m4v", "mkv", "mov", "mp4", "webm"].includes(extension);
 
   return {
     durationSeconds,
@@ -132,8 +155,9 @@ function createUploadItem(file: File, durationSeconds?: number): UploadQueueItem
     id: createUploadId(),
     isAudio,
     isImage,
+    isVideo,
     name: file.name || (isImage ? "ảnh-dán-từ-clipboard.png" : "file-đính-kèm"),
-    previewUrl: (isImage || isAudio) && typeof URL !== "undefined" ? URL.createObjectURL(file) : undefined,
+    previewUrl: (isImage || isAudio || isVideo) && typeof URL !== "undefined" ? URL.createObjectURL(file) : undefined,
     size: file.size,
     status: "queued"
   };

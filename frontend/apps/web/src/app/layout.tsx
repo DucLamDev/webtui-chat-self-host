@@ -3,16 +3,11 @@ import "@webtui/ui/styles.css";
 import "./globals.css";
 import { AppProviders } from "./providers";
 
-const instanceName = process.env.NEXT_PUBLIC_APP_NAME?.trim() || "WebTui Chat";
+const instanceName = process.env.NEXT_PUBLIC_APP_NAME?.trim() || "Ứng dụng chat";
 
 export const metadata: Metadata = {
   title: instanceName,
-  description: "Nền tảng chat nội bộ tự host cho doanh nghiệp Việt.",
-  icons: {
-    apple: "/brand/logo_webtui.png",
-    icon: "/brand/logo_webtui.png",
-    shortcut: "/brand/logo_webtui.png"
-  }
+  description: "Nền tảng chat nội bộ tự host cho doanh nghiệp Việt."
 };
 
 export default function RootLayout({

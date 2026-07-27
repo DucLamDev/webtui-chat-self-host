@@ -320,6 +320,68 @@ func TestSendAcceptsCallEventMessage(t *testing.T) {
 	}
 }
 
+func TestSendAcceptsPollEventMessage(t *testing.T) {
+	repo := &captureSendRepo{}
+	service := NewService(repo, testPermissionChecker{allowed: true})
+
+	message, err := service.Send(context.Background(), SendInput{
+		ActorUserID: "user-1",
+		WorkspaceID: "workspace-1",
+		ChannelID:   "channel-1",
+		Kind:        "event",
+		Body:        "Chọn lịch họp",
+		Metadata: json.RawMessage(`{
+			"message_type":"poll",
+			"poll":{
+				"question":"Chọn lịch họp",
+				"multiple":false,
+				"options":[
+					{"id":"option-1","label":"Thứ hai","reaction":"1️⃣"},
+					{"id":"option-2","label":"Thứ ba","reaction":"2️⃣"}
+				]
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("Send() returned error: %v", err)
+	}
+	if message.Kind != "event" || repo.sent.Kind != "event" {
+		t.Fatalf("kind = %q, want event", message.Kind)
+	}
+}
+
+func TestSendRejectsInvalidPollEventMessage(t *testing.T) {
+	service := NewService(emptyMessageRepo{}, testPermissionChecker{allowed: true})
+
+	_, err := service.Send(context.Background(), SendInput{
+		ActorUserID: "user-1",
+		WorkspaceID: "workspace-1",
+		ChannelID:   "channel-1",
+		Kind:        "event",
+		Body:        "Chọn lịch họp",
+		Metadata: json.RawMessage(`{
+			"message_type":"poll",
+			"poll":{
+				"question":"Chọn lịch họp",
+				"options":[
+					{"id":"same","label":"Thứ hai","reaction":"1️⃣"},
+					{"id":"same","label":"Thứ ba","reaction":"1️⃣"}
+				]
+			}
+		}`),
+	})
+	if err == nil {
+		t.Fatal("Send() must reject duplicated poll option identifiers")
+	}
+	appErr, ok := err.(*apperrors.AppError)
+	if !ok {
+		t.Fatalf("error = %T, want AppError", err)
+	}
+	if appErr.Code != "VALIDATION_ERROR" {
+		t.Fatalf("error code = %q, want VALIDATION_ERROR", appErr.Code)
+	}
+}
+
 func TestParseSearchDateUsesExclusiveEndDate(t *testing.T) {
 	got, err := parseSearchDate("2026-07-10", true)
 	if err != nil {

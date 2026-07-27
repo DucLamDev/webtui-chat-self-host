@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	notificationsapp "github.com/duclamdev/application-chat/backend/internal/modules/notifications/application"
@@ -15,19 +16,26 @@ import (
 )
 
 type Repository struct {
-	pool       *pgxpool.Pool
-	pushSender PushSender
+	pool        *pgxpool.Pool
+	pushSenders map[string]PushSender
 }
 
 type PushSender interface {
+	Provider() string
 	Enabled() bool
 	Send(ctx context.Context, token string, payload map[string]any) error
 }
 
 func NewRepository(pool *pgxpool.Pool, pushSenders ...PushSender) *Repository {
-	repository := &Repository{pool: pool}
-	if len(pushSenders) > 0 {
-		repository.pushSender = pushSenders[0]
+	repository := &Repository{pool: pool, pushSenders: make(map[string]PushSender)}
+	for _, sender := range pushSenders {
+		if sender == nil {
+			continue
+		}
+		provider := strings.ToLower(strings.TrimSpace(sender.Provider()))
+		if provider != "" {
+			repository.pushSenders[provider] = sender
+		}
 	}
 	return repository
 }
@@ -71,8 +79,8 @@ RETURNING id::text
 func (r *Repository) CreateMessageNotifications(ctx context.Context, params notificationsapp.MessageNotificationParams) error {
 	rows, err := r.pool.Query(ctx, `
 WITH source AS (
-    SELECT m.id, m.workspace_id, m.channel_id, m.sender_id, m.kind, m.body,
-           COALESCE(NULLIF(trim(u.display_name), ''), u.username::text, 'WebTui') AS sender_name
+    SELECT m.id, m.workspace_id, m.channel_id, m.sender_id, m.kind, m.body, m.metadata,
+           COALESCE(NULLIF(trim(u.display_name), ''), u.username::text, 'Người dùng') AS sender_name
     FROM messages m
     LEFT JOIN users u ON u.id = m.sender_id
     WHERE m.workspace_id = $2::uuid
@@ -83,7 +91,11 @@ WITH source AS (
     SELECT cm.user_id,
            s.*,
            cm.user_id = ANY($6::uuid[]) AS mentioned,
-           COALESCE(np.preview, true) AS preview
+           COALESCE(np.preview, true) AND NOT COALESCE(ncp.sensitive, false) AS preview,
+           COALESCE(ncp.important, false) AS important,
+           COALESCE(np.quiet_hours, false) AS quiet_hours,
+           COALESCE(np.quiet_start, '22:00'::time) AS quiet_start,
+           COALESCE(np.quiet_end, '07:00'::time) AS quiet_end
     FROM source s
     JOIN channel_members cm ON cm.channel_id = s.channel_id
     LEFT JOIN notification_preferences np
@@ -96,9 +108,21 @@ WITH source AS (
       AND cm.status IN ('active', 'muted')
       AND COALESCE(ncp.mode, 'all') <> 'muted'
       AND (ncp.muted_until IS NULL OR ncp.muted_until <= now())
+      AND COALESCE(s.metadata->>'silent', 'false') <> 'true'
       AND (
           COALESCE(np.mode, 'all') = 'all'
           OR (COALESCE(np.mode, 'all') = 'mentions' AND cm.user_id = ANY($6::uuid[]))
+      )
+      AND (
+          COALESCE(ncp.important, false)
+          OR NOT COALESCE(np.quiet_hours, false)
+          OR CASE
+               WHEN COALESCE(np.quiet_start, '22:00'::time) <= COALESCE(np.quiet_end, '07:00'::time)
+                 THEN localtime NOT BETWEEN COALESCE(np.quiet_start, '22:00'::time)
+                                        AND COALESCE(np.quiet_end, '07:00'::time)
+               ELSE localtime < COALESCE(np.quiet_start, '22:00'::time)
+                 AND localtime > COALESCE(np.quiet_end, '07:00'::time)
+             END
       )
 ), inserted AS (
     INSERT INTO notifications (user_id, workspace_id, channel_id, message_id, type, title, body, data)
@@ -196,9 +220,16 @@ func (r *Repository) CreateIncomingCallNotification(ctx context.Context, params 
 	var body string
 	err = r.pool.QueryRow(ctx, `
 WITH caller AS (
-    SELECT COALESCE(NULLIF(trim(display_name), ''), username::text, 'WebTui') AS display_name
+    SELECT COALESCE(NULLIF(trim(display_name), ''), username::text, 'Người dùng') AS display_name
     FROM users
     WHERE id = $4::uuid
+), organization AS (
+    SELECT z.name,
+           COALESCE(z.metadata #>> '{branding,logo_url}', '') AS logo_url
+    FROM workspaces w
+    JOIN zones z ON z.id = w.zone_id AND z.deleted_at IS NULL
+    WHERE w.id = $2::uuid
+      AND w.deleted_at IS NULL
 ), inserted AS (
     INSERT INTO notifications (user_id, workspace_id, channel_id, type, title, body, data)
     SELECT $5::uuid,
@@ -210,9 +241,12 @@ WITH caller AS (
            $7::jsonb || jsonb_build_object(
              'title', CASE WHEN $6 = 'video' THEN 'Cuộc gọi video đến' ELSE 'Cuộc gọi thoại đến' END,
              'body', caller.display_name || ' đang gọi cho bạn',
-             'caller_name', caller.display_name
+             'caller_name', caller.display_name,
+             'app_name', organization.name,
+             'logo_url', organization.logo_url
            )
     FROM caller
+    CROSS JOIN organization
     LEFT JOIN notification_preferences np
       ON np.user_id = $5::uuid AND np.workspace_id = $2::uuid
     WHERE COALESCE(np.call_ringing, true)
@@ -221,10 +255,10 @@ WITH caller AS (
         SELECT 1 FROM notifications n
         WHERE n.user_id = $5::uuid AND n.data->>'event_id' = $1
       )
-    RETURNING id::text, title, body
+    RETURNING id::text, title, body, data::text
 )
-SELECT id, title, body FROM inserted
-`, "call:"+params.CallID+":invite", params.WorkspaceID, params.ChannelID, params.InitiatorUserID, params.TargetUserID, params.Mode, string(data)).Scan(&notificationID, &title, &body)
+SELECT id, title, body, data FROM inserted
+`, "call:"+params.CallID+":invite", params.WorkspaceID, params.ChannelID, params.InitiatorUserID, params.TargetUserID, params.Mode, string(data)).Scan(&notificationID, &title, &body, &data)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -254,7 +288,7 @@ func (r *Repository) UpdateCallNotification(ctx context.Context, params notifica
 	var payload string
 	err := r.pool.QueryRow(ctx, `
 WITH caller AS (
-    SELECT COALESCE(NULLIF(trim(display_name), ''), username::text, 'WebTui') AS display_name
+    SELECT COALESCE(NULLIF(trim(display_name), ''), username::text, 'Người dùng') AS display_name
     FROM users
     WHERE id = $4::uuid
 ), updated AS (
@@ -470,6 +504,11 @@ WITH member AS (
 SELECT m.user_id::text, m.workspace_id::text, m.channel_id::text,
        COALESCE(ncp.mode, 'all'),
        ncp.muted_until,
+       COALESCE(ncp.sensitive, false),
+       COALESCE(ncp.important, false),
+       COALESCE(ncp.compact, false),
+       COALESCE(ncp.tags, '[]'::jsonb)::text,
+       ncp.archived_at,
        COALESCE(ncp.created_at, now()),
        COALESCE(ncp.updated_at, now())
 FROM member m
@@ -489,7 +528,7 @@ WITH member AS (
         JOIN channels c ON c.id = cm.channel_id
         JOIN workspaces w
           ON w.id = c.workspace_id
-         AND w.zone_id = $6::uuid
+         AND w.zone_id = $11::uuid
          AND w.status = 'active'
          AND w.deleted_at IS NULL
         WHERE cm.user_id = $1::uuid
@@ -500,17 +539,31 @@ WITH member AS (
     )
 ),
 upserted AS (
-    INSERT INTO notification_channel_preferences (user_id, workspace_id, channel_id, mode, muted_until)
-    SELECT user_id, workspace_id, channel_id, $4, $5
+    INSERT INTO notification_channel_preferences (
+        user_id, workspace_id, channel_id, mode, muted_until,
+        sensitive, important, compact, tags, archived_at
+    )
+    SELECT user_id, workspace_id, channel_id, $4, $5, $6, $7, $8, $9::jsonb, $10
     FROM member
     ON CONFLICT (user_id, workspace_id, channel_id) DO UPDATE SET
         mode = EXCLUDED.mode,
-        muted_until = EXCLUDED.muted_until
-    RETURNING user_id::text, workspace_id::text, channel_id::text, mode, muted_until, created_at, updated_at
+        muted_until = EXCLUDED.muted_until,
+        sensitive = EXCLUDED.sensitive,
+        important = EXCLUDED.important,
+        compact = EXCLUDED.compact,
+        tags = EXCLUDED.tags,
+        archived_at = EXCLUDED.archived_at
+    RETURNING user_id::text, workspace_id::text, channel_id::text, mode,
+              muted_until, sensitive, important, compact, tags::text,
+              archived_at, created_at, updated_at
 )
-SELECT user_id, workspace_id, channel_id, mode, muted_until, created_at, updated_at
+SELECT user_id, workspace_id, channel_id, mode, muted_until, sensitive,
+       important, compact, tags, archived_at, created_at, updated_at
 FROM upserted
-`, preference.UserID, preference.WorkspaceID, preference.ChannelID, preference.Mode, preference.MutedUntil, zoneID)
+`, preference.UserID, preference.WorkspaceID, preference.ChannelID,
+		preference.Mode, preference.MutedUntil, preference.Sensitive,
+		preference.Important, preference.Compact, mustJSON(preference.Tags),
+		preference.ArchivedAt, zoneID)
 	return scanChannelPreference(row)
 }
 
@@ -584,15 +637,12 @@ func (r *Repository) deliverJob(ctx context.Context, userID string, channel stri
 	if channel != "push" {
 		return nil
 	}
-	if r.pushSender == nil || !r.pushSender.Enabled() {
-		return errors.New("FCM push sender is not configured")
-	}
 	rows, err := r.pool.Query(ctx, `
-SELECT push_token
+SELECT push_provider, push_token
 FROM push_devices
 WHERE user_id = $1::uuid
   AND status = 'active'
-  AND push_provider = 'fcm'
+  AND push_provider IN ('fcm', 'apns')
   AND notification_permission IN ('granted', 'provisional')
   AND push_token IS NOT NULL
   AND length(trim(push_token)) > 0
@@ -602,23 +652,33 @@ WHERE user_id = $1::uuid
 	}
 	defer rows.Close()
 
-	tokens := make([]string, 0)
+	type destination struct {
+		provider string
+		token    string
+	}
+	destinations := make([]destination, 0)
 	for rows.Next() {
-		var token string
-		if err := rows.Scan(&token); err != nil {
+		var item destination
+		if err := rows.Scan(&item.provider, &item.token); err != nil {
 			return err
 		}
-		tokens = append(tokens, token)
+		destinations = append(destinations, item)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, token := range tokens {
-		if err := r.pushSender.Send(ctx, token, payload); err != nil {
-			return fmt.Errorf("send FCM notification: %w", err)
+	var deliveryErrors []error
+	for _, destination := range destinations {
+		sender := r.pushSenders[strings.ToLower(strings.TrimSpace(destination.provider))]
+		if sender == nil || !sender.Enabled() {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("%s push sender is not configured", destination.provider))
+			continue
+		}
+		if err := sender.Send(ctx, destination.token, payload); err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("send %s notification: %w", destination.provider, err))
 		}
 	}
-	return nil
+	return errors.Join(deliveryErrors...)
 }
 
 func (r *Repository) markJobSent(ctx context.Context, jobID string, notificationID string) error {
@@ -702,12 +762,19 @@ func scanNotificationPreference(row rowScanner) (notificationsdomain.Notificatio
 func scanChannelPreference(row rowScanner) (notificationsdomain.ChannelPreference, error) {
 	var preference notificationsdomain.ChannelPreference
 	var mutedUntil sql.NullTime
+	var archivedAt sql.NullTime
+	var tags string
 	if err := row.Scan(
 		&preference.UserID,
 		&preference.WorkspaceID,
 		&preference.ChannelID,
 		&preference.Mode,
 		&mutedUntil,
+		&preference.Sensitive,
+		&preference.Important,
+		&preference.Compact,
+		&tags,
+		&archivedAt,
 		&preference.CreatedAt,
 		&preference.UpdatedAt,
 	); err != nil {
@@ -717,7 +784,22 @@ func scanChannelPreference(row rowScanner) (notificationsdomain.ChannelPreferenc
 		return notificationsdomain.ChannelPreference{}, err
 	}
 	preference.MutedUntil = nullTimePtr(mutedUntil)
+	preference.ArchivedAt = nullTimePtr(archivedAt)
+	if err := json.Unmarshal([]byte(tags), &preference.Tags); err != nil {
+		return notificationsdomain.ChannelPreference{}, err
+	}
+	if preference.Tags == nil {
+		preference.Tags = []string{}
+	}
 	return preference, nil
+}
+
+func mustJSON(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
 }
 
 func scanNotification(row rowScanner) (notificationsdomain.Notification, error) {
