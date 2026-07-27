@@ -149,17 +149,14 @@ import { parseChatRoute } from "@/lib/chat-route";
 
 const railItems = [
   { id: "messages", label: "Tin nhắn", icon: ConversationSolidIcon },
-  { id: "channels", label: "Kênh & Bot", icon: GroupSolidIcon },
+  { id: "channels", label: "Kênh", icon: GroupSolidIcon },
   { id: "contacts", label: "Bạn bè", icon: AddContactSolidIcon },
-  { id: "departments", label: "Phòng ban", icon: Archive },
-  { id: "tickets", label: "Ticket", icon: Ticket },
-  { id: "files", label: "File", icon: FileText },
-  { id: "bots", label: "Bot", icon: Bot },
-  { id: "automation", label: "Automation", icon: Workflow },
+  { id: "tickets", label: "Hỗ trợ", icon: Ticket },
+  { id: "files", label: "Tài liệu", icon: FileText },
   { id: "settings", label: "Cài đặt", icon: SettingsSolidIcon }
 ] as const;
 
-type RailItemId = (typeof railItems)[number]["id"];
+type RailItemId = (typeof railItems)[number]["id"] | "departments" | "bots" | "automation";
 type MessageSidebarTab = "conversations" | "channels";
 type ContactsTab = "employees" | "friends" | "discover";
 type ChatWorkspaceData = ReturnType<typeof useChatWorkspaceData>;
@@ -703,11 +700,6 @@ export function ChatWorkspace() {
     () => (selectedChannelMembersQuery.data ?? []).filter((member) => member.status === "active" || member.status === "muted"),
     [selectedChannelMembersQuery.data]
   );
-  const sidebarBotsQuery = useQuery({
-    enabled: Boolean(data.workspaceId && data.can("bot.manage") && activeRailItem === "messages"),
-    queryFn: () => api.bots.list(data.workspaceId),
-    queryKey: queryKeys.integrations.bots(data.workspaceId)
-  });
   const chatTargets = useMemo(() => {
     return buildChatTargets(data.channels, data.directConversations);
   }, [data.channels, data.directConversations]);
@@ -802,15 +794,6 @@ export function ChatWorkspace() {
     });
   }, [channelFilter, conversationPreferenceFor, data.directConversations, favoriteChatIds, locallyReadChatIds, manuallyUnreadChatIds, searchQuery, unfavoriteChatIds]);
 
-  const sidebarBots = useMemo(() => {
-    const normalizedQuery = searchQuery.trim().toLowerCase();
-    return (sidebarBotsQuery.data ?? []).filter((bot) =>
-      !normalizedQuery ||
-      bot.name.toLowerCase().includes(normalizedQuery) ||
-      bot.slug.toLowerCase().includes(normalizedQuery) ||
-      (bot.description ?? "").toLowerCase().includes(normalizedQuery)
-    );
-  }, [searchQuery, sidebarBotsQuery.data]);
 
   const sidebarConversationUnreadCount = data.directConversations.reduce(
     (total, conversation) => total + (effectiveUnreadCount(conversation.id, conversation.unreadCount) > 0 ? 1 : 0),
@@ -2523,7 +2506,6 @@ export function ChatWorkspace() {
           brandLabel={(zoneRuntime?.app_name ?? "O").slice(0, 1).toUpperCase()}
           brandLogoAlt={zoneRuntime?.app_name ?? "Tổ chức"}
           brandLogoSrc={zoneRuntime?.logo_url}
-          brandTitle={zoneRuntime?.app_name}
           isProfileMenuOpen={isProfileMenuOpen}
           items={visibleRailItems}
           onProfileClick={() => setIsProfileMenuOpen((current) => !current)}
@@ -2564,7 +2546,7 @@ export function ChatWorkspace() {
             <div className="message-panel-heading__primary">
               <div className="channel-search channel-search--heading">
                 <Input
-                  aria-label="Tìm kiếm hội thoại, kênh hoặc bot"
+                  aria-label="Tìm kiếm hội thoại hoặc kênh"
                   leftAddon={<Search size={16} />}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder="Tìm kiếm..."
@@ -2667,12 +2649,12 @@ export function ChatWorkspace() {
                 <span>{sidebarConversationUnreadCount || data.directConversations.length}</span>
               </button>
               <button
-                aria-label="Kênh và bot"
+                aria-label="Kênh"
                 aria-selected={messageSidebarTab === "channels"}
                 className={messageSidebarTab === "channels" ? "collapsed-channel-list__tab collapsed-channel-list__tab--active" : "collapsed-channel-list__tab"}
                 onClick={() => handleMessageSidebarTabChange("channels")}
                 role="tab"
-                title="Kênh và bot"
+                title="Kênh"
                 type="button"
               >
                 <GroupSolidIcon size={20} />
@@ -2715,17 +2697,6 @@ export function ChatWorkspace() {
                       </button>
                     );
                   })}
-              {messageSidebarTab === "channels" && data.can("bot.manage") ? (
-                <button
-                  aria-label="Quản lý bot"
-                  className="collapsed-channel-list__item collapsed-channel-list__item--bot"
-                  onClick={() => handleRailSelect("bots")}
-                  title="Quản lý bot"
-                  type="button"
-                >
-                  <Bot size={22} />
-                </button>
-              ) : null}
             </div>
           </div>
         ) : null}
@@ -2881,43 +2852,12 @@ export function ChatWorkspace() {
                     })
                   ) : (
                     <EmptyState
-                      description={channelFilter === "all" ? "Kênh dùng cho nhóm, bot và thông báo chung." : "Không có kênh nào phù hợp với bộ lọc hiện tại."}
+                      description={channelFilter === "all" ? "Tạo kênh để trao đổi theo nhóm, phòng ban hoặc chủ đề chung." : "Không có kênh nào phù hợp với bộ lọc hiện tại."}
                       title={channelFilter === "unread" ? "Không có kênh chưa đọc" : channelFilter === "favorite" ? "Chưa có kênh yêu thích" : "Chưa có kênh"}
                     />
                   )}
                 </div>
 
-                {channelFilter === "all" && data.can("bot.manage") ? (
-                  <div className="list-section sidebar-bots-section">
-                    <span className="section-label">Bot workspace</span>
-                    {sidebarBotsQuery.isLoading ? (
-                      <PanelSkeleton />
-                    ) : sidebarBots.length ? (
-                      sidebarBots.map((bot) => (
-                        <button className="sidebar-bot-row" key={bot.id} onClick={() => handleRailSelect("bots")} title={isChannelPanelCollapsed ? bot.name : undefined} type="button">
-                          <span className="sidebar-bot-row__avatar">
-                            {bot.avatar_url ? <img alt="" src={bot.avatar_url} /> : <Bot size={20} />}
-                            <i />
-                          </span>
-                          <span className="sidebar-bot-row__body">
-                            <strong>{bot.name}</strong>
-                            <small>{bot.description || `@${bot.slug}`}</small>
-                          </span>
-                          <span className="sidebar-bot-row__status">{bot.status === "active" ? "Bật" : "Tắt"}</span>
-                        </button>
-                      ))
-                    ) : (
-                      <button className="sidebar-bot-row sidebar-bot-row--module" onClick={() => handleRailSelect("bots")} title={isChannelPanelCollapsed ? "Quản lý bot" : undefined} type="button">
-                        <span className="sidebar-bot-row__avatar"><Bot size={20} /></span>
-                        <span className="sidebar-bot-row__body">
-                          <strong>Quản lý bot</strong>
-                          <small>Tạo bot đầu tiên cho workspace</small>
-                        </span>
-                        <span className="sidebar-bot-row__arrow">›</span>
-                      </button>
-                    )}
-                  </div>
-                ) : null}
               </div>
             )}
             </>
@@ -5307,6 +5247,7 @@ function SettingsPage({
     [currentSessionId, sessionsQuery.data]
   );
   const activeSessionCount = sessions.filter((session) => !session.revoked_at).length;
+  const recentSessions = sessions.slice(0, 4);
   const isDesktopRuntime = getPlatformServices().lifecycle.isDesktop;
 
   async function handleAvatarFile(event: ChangeEvent<HTMLInputElement>) {
@@ -5363,11 +5304,20 @@ function SettingsPage({
 
   return (
     <div className="workspace-page settings-page">
+      <header className="settings-page__intro">
+        <div>
+          <span className="settings-page__eyebrow">Tài khoản của bạn</span>
+          <h1>Cài đặt</h1>
+          <p>Quản lý thông tin cá nhân, cách nhận thông báo và các thiết bị đã đăng nhập.</p>
+        </div>
+        <span className="settings-page__status"><ShieldCheck size={16} /> Tài khoản đang được bảo vệ</span>
+      </header>
       <div className="settings-grid">
         <section className="settings-card settings-card--profile">
           <div className="settings-card__heading">
             <div>
               <h2>Hồ sơ cá nhân</h2>
+              <p>Thông tin đồng nghiệp sẽ nhìn thấy khi trò chuyện với bạn.</p>
             </div>
           </div>
           <form className="profile-form" onSubmit={handleSubmit}>
@@ -5405,8 +5355,8 @@ function SettingsPage({
           <section className="settings-card settings-card--branding">
             <div className="settings-card__heading">
               <div>
-                <h2>Thương hiệu & truy cập</h2>
-                <p>Thiết lập này thay thế tên và logo mặc định trên web, desktop và mobile.</p>
+                <h2>Thông tin doanh nghiệp</h2>
+                <p>Tên và logo sẽ được dùng thống nhất trên mọi thiết bị.</p>
               </div>
             </div>
             <form
@@ -5453,13 +5403,13 @@ function SettingsPage({
                   ref={brandLogoInputRef}
                   type="file"
                 />
-                <small>PNG, JPEG hoặc WebP, tối đa 4 MB. File được lưu trên server và dùng ở màn hình đăng nhập.</small>
+                <small>Chọn ảnh PNG, JPEG hoặc WebP, dung lượng tối đa 4 MB.</small>
               </div>
               <label>
                 Đăng ký tài khoản
                 <select onChange={(event) => setRegistrationMode(event.target.value as typeof registrationMode)} value={registrationMode}>
                   <option value="open">Mở — người dùng có thể tự đăng ký</option>
-                  <option value="invite_only">Chỉ mã mời — owner tạo lời mời trước</option>
+                  <option value="invite_only">Chỉ người được mời mới có thể đăng ký</option>
                   <option value="closed">Đóng — không nhận tài khoản mới</option>
                 </select>
               </label>
@@ -5474,11 +5424,11 @@ function SettingsPage({
           <section className="settings-card settings-card--admin-link">
             <div>
               <Monitor size={22} />
-              <h2>Admin Panel</h2>
+              <h2>Trang quản lý</h2>
             </div>
-            <p>Mở bảng quản trị đầy đủ trong một cửa sổ trình duyệt riêng.</p>
+            <p>Quản lý thành viên, phòng ban và thông tin doanh nghiệp.</p>
             <Button onClick={handleOpenAdminPanel} size="sm" type="button" variant="secondary">
-              <Share2 size={15} /> Mở bảng quản trị
+              <Share2 size={15} /> Mở trang quản lý
             </Button>
           </section>
         ) : null}
@@ -5496,7 +5446,7 @@ function SettingsPage({
           <section className={`settings-card settings-card--desktop-version settings-card--desktop-version-${desktopVersionStatus.status}`}>
           <div>
             <Cloud size={22} />
-            <h2>Phiên bản desktop</h2>
+            <h2>Ứng dụng trên máy tính</h2>
           </div>
           <p>{desktopVersionStatus.label}</p>
           {desktopVersionStatus.detail ? <small className="settings-card__muted">{desktopVersionStatus.detail}</small> : null}
@@ -5539,7 +5489,7 @@ function SettingsPage({
           <section className="settings-card settings-card--notifications">
           <div>
             <Bell size={22} />
-            <h2>Thông báo desktop</h2>
+            <h2>Thông báo</h2>
           </div>
           <SegmentedControl
             aria-label="Chế độ thông báo"
@@ -5550,7 +5500,7 @@ function SettingsPage({
           <label className="settings-toggle-row">
             <span>
               <strong>Hiển thị nội dung xem trước</strong>
-              <small>{notificationPreferences.preview ? "Thông báo native hiện tiêu đề và nội dung." : "Thông báo native chỉ báo có tin mới."}</small>
+              <small>{notificationPreferences.preview ? "Thông báo sẽ hiện tên người gửi và nội dung tin nhắn." : "Thông báo chỉ cho biết bạn có tin nhắn mới."}</small>
             </span>
             <input
               checked={notificationPreferences.preview}
@@ -5561,7 +5511,7 @@ function SettingsPage({
           <label className="settings-toggle-row">
             <span>
               <strong>Không làm phiền theo giờ</strong>
-              <small>Không phát native notification trong khoảng giờ đã chọn.</small>
+              <small>Tạm dừng thông báo trong khoảng thời gian bạn chọn.</small>
             </span>
             <input
               checked={notificationPreferences.quietHours}
@@ -5591,8 +5541,8 @@ function SettingsPage({
           </div>
           <label className="settings-toggle-row">
             <span>
-              <strong>Tự khởi động cùng hệ điều hành</strong>
-              <small>Mặc định tắt; chỉ áp dụng cho bản desktop.</small>
+              <strong>Mở ứng dụng khi bật máy</strong>
+              <small>Giúp bạn sẵn sàng nhận tin nhắn ngay sau khi mở máy tính.</small>
             </span>
             <input
               checked={isAutoStartEnabled}
@@ -5608,6 +5558,7 @@ function SettingsPage({
             <span className="sessions-heading__icon"><ShieldCheck size={22} /></span>
             <div>
               <h2>Phiên đăng nhập</h2>
+              <p>4 thiết bị hoạt động gần đây nhất.</p>
             </div>
             <span className="sessions-count"><strong>{activeSessionCount}</strong> phiên đang hoạt động</span>
             <Button
@@ -5642,7 +5593,7 @@ function SettingsPage({
                 <thead>
                   <tr>
                     <th scope="col">Thiết bị</th>
-                    <th scope="col">Địa chỉ IP</th>
+                    <th scope="col">Mạng truy cập</th>
                     <th scope="col">Hoạt động</th>
                     <th scope="col">Hết hạn</th>
                     <th scope="col">Trạng thái</th>
@@ -5650,7 +5601,7 @@ function SettingsPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {sessions.map((session: AuthSession) => {
+                  {recentSessions.map((session: AuthSession) => {
                     const isCurrent = session.id === currentSessionId;
                     const isRevoked = Boolean(session.revoked_at);
                     const isMobile = isMobileSession(session);
@@ -5667,7 +5618,7 @@ function SettingsPage({
                             </span>
                           </div>
                         </td>
-                        <td data-label="Địa chỉ IP">{session.ip_address || "Không xác định"}</td>
+                        <td data-label="Mạng truy cập">{session.ip_address || "Không xác định"}</td>
                         <td data-label="Hoạt động">{formatRelativeSessionDate(session.last_seen_at || session.created_at)}</td>
                         <td data-label="Hết hạn">{session.expires_at ? formatSessionDate(session.expires_at) : "Không xác định"}</td>
                         <td data-label="Trạng thái">
@@ -5681,14 +5632,14 @@ function SettingsPage({
                               <Button
                                 disabled={revokeSessionMutation.isPending || revokeAllSessionsMutation.isPending}
                                 onClick={() => {
-                                  if (window.confirm(`Thu hồi phiên trên ${session.device_name || sessionDeviceLabel(session)}?`)) {
+                                  if (window.confirm(`Đăng xuất khỏi ${session.device_name || sessionDeviceLabel(session)}?`)) {
                                     revokeSessionMutation.mutate(session.id);
                                   }
                                 }}
                                 size="sm"
                                 variant="secondary"
                               >
-                                {revokeSessionMutation.isPending && revokeSessionMutation.variables === session.id ? "Đang thu hồi..." : "Thu hồi phiên"}
+                                {revokeSessionMutation.isPending && revokeSessionMutation.variables === session.id ? "Đang đăng xuất..." : "Đăng xuất"}
                               </Button>
                             ) : <span className="session-table__no-action">—</span>}
                           </div>

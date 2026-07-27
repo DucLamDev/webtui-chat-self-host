@@ -5129,6 +5129,214 @@
     grid-column: 1 / -1;
   }
 }
+
+/* Friendly settings experience */
+.chat-app-shell--zalo .settings-page {
+  background:
+    radial-gradient(circle at 92% 0, rgb(38 125 255 / 8%), transparent 28rem),
+    var(--zalo-canvas);
+  padding: clamp(20px, 3vw, 36px);
+}
+
+.chat-app-shell--zalo .settings-page__intro {
+  align-items: flex-end;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  margin: 0 auto 22px;
+  max-width: 1180px;
+}
+
+.chat-app-shell--zalo .settings-page__eyebrow {
+  color: var(--zalo-primary);
+  display: block;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+.chat-app-shell--zalo .settings-page__intro h1 {
+  color: var(--zalo-text);
+  font-size: clamp(26px, 3vw, 34px);
+  letter-spacing: -.035em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.chat-app-shell--zalo .settings-page__intro p {
+  color: var(--zalo-text-muted);
+  margin: 8px 0 0;
+}
+
+.chat-app-shell--zalo .settings-page__status {
+  align-items: center;
+  background: rgb(31 171 106 / 10%);
+  border: 1px solid rgb(31 171 106 / 20%);
+  border-radius: 999px;
+  color: #148452;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 7px;
+  padding: 9px 13px;
+}
+
+.chat-app-shell--zalo .settings-grid {
+  gap: 18px;
+  margin: 0 auto;
+  max-width: 1180px;
+}
+
+.chat-app-shell--zalo .settings-card {
+  border-color: rgb(132 151 178 / 20%);
+  border-radius: 18px;
+  box-shadow: 0 12px 34px rgb(24 52 88 / 6%);
+  padding: 22px;
+}
+
+.chat-app-shell--zalo .settings-card h2 {
+  font-size: 17px;
+  letter-spacing: -.015em;
+}
+
+.chat-app-shell--zalo .settings-card__heading p,
+.chat-app-shell--zalo .sessions-heading p {
+  color: var(--zalo-text-muted);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
+.chat-app-shell--zalo .settings-grid {
+  grid-template-areas:
+    "profile profile"
+    "branding branding"
+    "appearance admin"
+    "desktop desktop"
+    "sessions sessions";
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.chat-app-shell--zalo .settings-grid:not(:has(.settings-card--admin-link)) {
+  grid-template-areas:
+    "profile profile"
+    "appearance appearance"
+    "desktop desktop"
+    "sessions sessions";
+}
+
+.chat-app-shell--zalo .settings-card--branding { grid-area: branding; }
+
+.chat-app-shell--zalo .settings-desktop-grid {
+  gap: 18px;
+  grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr);
+}
+
+.chat-app-shell--zalo .sessions-heading {
+  row-gap: 5px;
+}
+
+@media (max-width: 767px) {
+  .chat-app-shell--zalo .settings-page {
+    padding: 18px 12px 90px;
+  }
+
+  .chat-app-shell--zalo .settings-page__intro {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 13px;
+  }
+
+  .chat-app-shell--zalo .settings-card {
+    border-radius: 15px;
+    padding: 17px;
+  }
+
+  .chat-app-shell--zalo .settings-grid,
+  .chat-app-shell--zalo .settings-grid:not(:has(.settings-card--admin-link)) {
+    grid-template-areas:
+      "profile"
+      "branding"
+      "appearance"
+      "admin"
+      "desktop"
+      "sessions";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-app-shell--zalo .settings-grid:not(:has(.settings-card--admin-link)) {
+    grid-template-areas:
+      "profile"
+      "appearance"
+      "desktop"
+      "sessions";
+  }
+}
+
+@media (min-width: 768px) {
+  .chat-app-shell--zalo .ui-navigation-rail__brand-wrap {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+    width: 100%;
+  }
+
+  .chat-app-shell--zalo .ui-navigation-rail__brand {
+    background: rgb(255 255 255 / 96%);
+    border: 1px solid rgb(255 255 255 / 82%);
+    border-radius: 16px;
+    box-shadow: 0 10px 24px rgb(0 32 96 / 22%), inset 0 1px 0 rgb(255 255 255 / 90%);
+    height: 48px;
+    margin: 0;
+    padding: 7px;
+    width: 48px;
+  }
+
+  .chat-app-shell--zalo .ui-navigation-rail__brand img {
+    border-radius: 10px;
+    object-fit: contain;
+  }
+
+  .chat-app-shell--zalo .ui-navigation-rail__brand-wrap > strong {
+    display: none;
+  }
+}
+
+/* Compact brand mark: the organization name lives in the workspace, not the rail. */
+@media (min-width: 768px) {
+  .chat-app-shell--zalo .ui-navigation-rail__brand-wrap {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+    width: 100%;
+  }
+
+  .chat-app-shell--zalo .ui-navigation-rail__brand {
+    background: rgb(255 255 255 / 96%);
+    border: 1px solid rgb(255 255 255 / 82%);
+    border-radius: 16px;
+    box-shadow:
+      0 10px 24px rgb(0 32 96 / 22%),
+      inset 0 1px 0 rgb(255 255 255 / 90%);
+    height: 48px;
+    margin: 0;
+    padding: 7px;
+    width: 48px;
+  }
+
+  .chat-app-shell--zalo .ui-navigation-rail__brand img {
+    border-radius: 10px;
+    object-fit: contain;
+  }
+
+  .chat-app-shell--zalo .ui-navigation-rail__brand-wrap > strong {
+    display: none;
+  }
+}
 .message-toolbar__search {
   display: grid;
   flex: 1 1 auto;
@@ -15229,5 +15437,67 @@ button.message-reply-preview:hover {
     bottom: 0;
     max-height: 88dvh;
     position: fixed;
+  }
+}
+
+/* Keep the settings hierarchy authoritative after legacy responsive rules. */
+.chat-app-shell--zalo .settings-page {
+  background:
+    radial-gradient(circle at 92% 0, rgb(38 125 255 / 8%), transparent 28rem),
+    var(--zalo-canvas);
+  padding: clamp(20px, 3vw, 36px);
+}
+
+.chat-app-shell--zalo .settings-grid {
+  gap: 18px;
+  grid-template-areas:
+    "profile profile"
+    "branding branding"
+    "appearance admin"
+    "desktop desktop"
+    "sessions sessions";
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin: 0 auto;
+  max-width: 1180px;
+}
+
+.chat-app-shell--zalo .settings-grid:not(:has(.settings-card--admin-link)) {
+  grid-template-areas:
+    "profile profile"
+    "appearance appearance"
+    "desktop desktop"
+    "sessions sessions";
+}
+
+.chat-app-shell--zalo .settings-card--branding { grid-area: branding; }
+
+.chat-app-shell--zalo .settings-desktop-grid {
+  gap: 18px;
+  grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr);
+}
+
+@media (max-width: 767px) {
+  .chat-app-shell--zalo .settings-page {
+    padding: 18px 12px 90px;
+  }
+
+  .chat-app-shell--zalo .settings-grid,
+  .chat-app-shell--zalo .settings-grid:not(:has(.settings-card--admin-link)) {
+    grid-template-areas:
+      "profile"
+      "branding"
+      "appearance"
+      "admin"
+      "desktop"
+      "sessions";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-app-shell--zalo .settings-grid:not(:has(.settings-card--admin-link)) {
+    grid-template-areas:
+      "profile"
+      "appearance"
+      "desktop"
+      "sessions";
   }
 }

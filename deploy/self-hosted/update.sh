@@ -13,7 +13,10 @@ fi
 git pull --ff-only
 
 cd "$SCRIPT_DIR"
-docker compose --env-file .env -f compose.yml build --pull
+# The customer VPS may only contain this self-host repository. Build the
+# deployable services explicitly so an optional sibling portal source does not
+# block updates to the chat application.
+docker compose --env-file .env -f compose.yml build --pull api worker web admin
 docker compose --env-file .env -f compose.yml run --rm migrate
-docker compose --env-file .env -f compose.yml up -d
+docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate api worker web admin
 sh "$SCRIPT_DIR/check.sh"
