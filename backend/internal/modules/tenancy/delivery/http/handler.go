@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	tenancyapp "github.com/duclamdev/application-chat/backend/internal/modules/tenancy/application"
+	tenantstorage "github.com/duclamdev/application-chat/backend/internal/platform/storage/tenant"
 	"github.com/duclamdev/application-chat/backend/internal/shared/middleware"
 	"github.com/duclamdev/application-chat/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,7 @@ import (
 
 type Handler struct {
 	brandingStoragePath     string
+	storageResolver         *tenantstorage.Resolver
 	service                 *tenancyapp.Service
 	caddyAskSecret          string
 	saasProvisioningEnabled bool
@@ -45,6 +47,10 @@ func (h *Handler) SetSaaSProvisioningEnabled(enabled bool) {
 
 func (h *Handler) SetBrandingStoragePath(path string) {
 	h.brandingStoragePath = strings.TrimSpace(path)
+}
+
+func (h *Handler) SetStorageResolver(resolver *tenantstorage.Resolver) {
+	h.storageResolver = resolver
 }
 
 type createDomainClaimRequest struct {
@@ -135,12 +141,15 @@ func (h *Handler) RegisterRoutes(
 	}
 	v1.GET("/discovery", h.Discovery)
 	v1.GET("/capabilities", h.Capabilities)
+	v1.GET("/branding/:zone_id/:file_name", h.ServeZoneBrandingLogo)
 
 	private := v1.Group("/zones")
 	private.Use(authMiddleware)
 	private.GET("/current", h.GetCurrentZone)
 	private.PATCH("/current", h.UpdateCurrentZone)
 	private.POST("/current/logo", h.UploadCurrentZoneLogo)
+	private.GET("/current/storage", h.GetCurrentZoneStorage)
+	private.PUT("/current/storage", h.UpdateCurrentZoneStorage)
 	private.GET("/current/quota", h.GetZoneQuota)
 	private.PUT("/current/quota", h.UpdateZoneQuota)
 	private.GET("/current/oidc-providers", h.ListOIDCProviders)
@@ -173,6 +182,10 @@ func (h *Handler) RegisterRoutes(
 }
 
 func (h *Handler) UploadCurrentZoneLogo(c *gin.Context) {
+	if h.storageResolver != nil {
+		h.uploadCurrentZoneLogoToObjectStorage(c)
+		return
+	}
 	zoneID := strings.TrimSpace(middleware.CurrentZoneID(c))
 	if h.brandingStoragePath == "" {
 		response.Fail(c, nethttp.StatusServiceUnavailable, "BRANDING_STORAGE_UNAVAILABLE", "Máy chủ chưa bật storage local cho logo.", nil)

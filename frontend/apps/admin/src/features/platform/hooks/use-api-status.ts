@@ -33,9 +33,9 @@ export function useApiStatus(): ApiStatusState {
       })
     );
 
-    client
-      .ready()
-      .then((payload) => {
+    const checkApi = async () => {
+      try {
+        const payload = await client.ready();
         if (!active) {
           return;
         }
@@ -48,8 +48,7 @@ export function useApiStatus(): ApiStatusState {
           payload,
           status: isOnline ? "online" : "offline"
         });
-      })
-      .catch(() => {
+      } catch {
         if (!active) {
           return;
         }
@@ -59,10 +58,25 @@ export function useApiStatus(): ApiStatusState {
           label: "Không kết nối được API",
           status: "offline"
         });
-      });
+      }
+    };
+
+    const checkWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void checkApi();
+      }
+    };
+
+    void checkApi();
+    const pollTimer = window.setInterval(() => void checkApi(), 30_000);
+    window.addEventListener("online", checkApi);
+    document.addEventListener("visibilitychange", checkWhenVisible);
 
     return () => {
       active = false;
+      window.clearInterval(pollTimer);
+      window.removeEventListener("online", checkApi);
+      document.removeEventListener("visibilitychange", checkWhenVisible);
     };
   }, []);
 

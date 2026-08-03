@@ -216,6 +216,10 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 	if err != nil {
 		return UploadSessionDTO{}, mapFileError(err)
 	}
+	storageLocation, err := s.storageForWorkspace(ctx, session.WorkspaceID)
+	if err != nil {
+		return UploadSessionDTO{}, err
+	}
 	if session.Status != "uploading" || session.ExpiresAt.Before(time.Now().UTC()) {
 		return UploadSessionDTO{}, apperrors.Conflict("UPLOAD_NOT_ACTIVE", "Phiên upload không còn hoạt động.")
 	}
@@ -231,7 +235,7 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 	}
 	objectKey := "uploads/" + session.WorkspaceID + "/" + session.ID + "/parts/" + paddedPartNumber(input.PartNumber)
 	hash := sha256.New()
-	object, err := s.store.Put(ctx, PutObjectInput{
+	object, err := storageLocation.Store.Put(ctx, PutObjectInput{
 		Key: objectKey, Body: io.TeeReader(input.Body, hash),
 		ContentType: "application/octet-stream", Size: input.Size,
 	})
@@ -241,7 +245,7 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 	checksum := hex.EncodeToString(hash.Sum(nil))
 	expectedChecksum := strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))
 	if expectedChecksum != "" && expectedChecksum != checksum {
-		_ = s.store.Delete(ctx, object.Key)
+		_ = storageLocation.Store.Delete(ctx, object.Key)
 		return UploadSessionDTO{}, apperrors.BadRequest("CHECKSUM_MISMATCH", "Checksum của chunk không khớp.")
 	}
 	session, err = s.resumableRepository().UpsertUploadPart(ctx, UpsertUploadPartParams{
@@ -250,7 +254,7 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 		ChecksumSHA256: checksum,
 	})
 	if err != nil {
-		_ = s.store.Delete(ctx, object.Key)
+		_ = storageLocation.Store.Delete(ctx, object.Key)
 		return UploadSessionDTO{}, err
 	}
 	parts, err := s.resumableRepository().ListUploadParts(ctx, session.WorkspaceID, session.ID, session.OwnerID)
@@ -264,6 +268,10 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 	session, err := s.resumableRepository().MarkUploadCompleting(ctx, strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.UploadID), strings.TrimSpace(input.ActorUserID))
 	if err != nil {
 		return FileDTO{}, mapFileError(err)
+	}
+	storageLocation, err := s.storageForWorkspace(ctx, session.WorkspaceID)
+	if err != nil {
+		return FileDTO{}, err
 	}
 	failSession := func() {
 		_ = s.resumableRepository().FailUploadSession(ctx, session.WorkspaceID, session.ID, session.OwnerID)
@@ -280,9 +288,9 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 	if err != nil {
 		return FileDTO{}, apperrors.Internal("Không tạo được khóa lưu trữ file.")
 	}
-	reader := &uploadPartSequenceReader{ctx: ctx, store: s.store, parts: parts}
+	reader := &uploadPartSequenceReader{ctx: ctx, store: storageLocation.Store, parts: parts}
 	hash := sha256.New()
-	object, err := s.store.Put(ctx, PutObjectInput{
+	object, err := storageLocation.Store.Put(ctx, PutObjectInput{
 		Key: objectKey, Body: io.TeeReader(reader, hash),
 		ContentType: session.MimeType, Size: session.TotalSize,
 	})
@@ -297,18 +305,18 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 	checksum := hex.EncodeToString(hash.Sum(nil))
 	expectedChecksum := strings.ToLower(strings.TrimSpace(input.ChecksumSHA256))
 	if expectedChecksum != "" && expectedChecksum != checksum {
-		_ = s.store.Delete(ctx, object.Key)
+		_ = storageLocation.Store.Delete(ctx, object.Key)
 		failSession()
 		return FileDTO{}, apperrors.BadRequest("CHECKSUM_MISMATCH", "Checksum của file hoàn chỉnh không khớp.")
 	}
 	file, err := s.repo.CreateFile(ctx, CreateFileParams{
 		WorkspaceID: session.WorkspaceID, OwnerID: session.OwnerID,
-		StorageProvider: s.storageProvider, Bucket: s.bucket, ObjectKey: object.Key,
+		StorageProvider: storageLocation.Provider, Bucket: storageLocation.Bucket, ObjectKey: object.Key,
 		OriginalName: session.OriginalName, MimeType: session.MimeType,
 		ByteSize: object.Size, ChecksumSHA256: checksum, Metadata: session.Metadata,
 	})
 	if err != nil {
-		_ = s.store.Delete(ctx, object.Key)
+		_ = storageLocation.Store.Delete(ctx, object.Key)
 		failSession()
 		return FileDTO{}, err
 	}
@@ -331,7 +339,7 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		return FileDTO{}, err
 	}
 	for _, part := range parts {
-		_ = s.store.Delete(ctx, part.ObjectKey)
+		_ = storageLocation.Store.Delete(ctx, part.ObjectKey)
 	}
 	_ = s.repo.RecordAudit(ctx, AuditEvent{
 		WorkspaceID: session.WorkspaceID, ActorUserID: session.OwnerID,
@@ -346,6 +354,10 @@ func (s *Service) CancelUpload(ctx context.Context, actorUserID string, workspac
 	if err != nil {
 		return mapFileError(err)
 	}
+	storageLocation, err := s.storageForWorkspace(ctx, session.WorkspaceID)
+	if err != nil {
+		return err
+	}
 	parts, err := s.resumableRepository().ListUploadParts(ctx, session.WorkspaceID, session.ID, session.OwnerID)
 	if err != nil {
 		return err
@@ -354,7 +366,7 @@ func (s *Service) CancelUpload(ctx context.Context, actorUserID string, workspac
 		return err
 	}
 	for _, part := range parts {
-		_ = s.store.Delete(ctx, part.ObjectKey)
+		_ = storageLocation.Store.Delete(ctx, part.ObjectKey)
 	}
 	return nil
 }
@@ -468,7 +480,7 @@ func toUploadSessionDTO(session UploadSession, parts []UploadPart) UploadSession
 func (s *Service) resumableRepository() ResumableRepository {
 	repository, ok := s.repo.(ResumableRepository)
 	if !ok {
-		panic("files repository does not implement resumable uploads")
+		return unavailableResumableRepository{}
 	}
 	return repository
 }

@@ -51,7 +51,7 @@ MVP dùng `AuthTokenStore` dạng adapter để có thể thay đổi nơi lưu 
 Frontend mặc định dùng:
 
 ```ts
-new WebSocket(`wss://chat.vpsttt.com/ws?access_token=${encodeURIComponent(accessToken)}`);
+new WebSocket("wss://chat.vpsttt.com/ws", "webtui.jwt." + accessToken);
 ```
 
 Quy ước triển khai:

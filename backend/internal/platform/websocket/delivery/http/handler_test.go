@@ -1,16 +1,27 @@
 package http
 
 import (
+	"context"
 	nethttp "net/http"
 	"net/http/httptest"
-	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	platformws "github.com/duclamdev/application-chat/backend/internal/platform/websocket"
 	sharedauth "github.com/duclamdev/application-chat/backend/internal/shared/auth"
+	"github.com/duclamdev/application-chat/backend/internal/shared/constants"
 	"github.com/gin-gonic/gin"
+	xwebsocket "golang.org/x/net/websocket"
 )
+
+type fakeActiveUserChecker struct {
+	active bool
+}
+
+func (checker fakeActiveUserChecker) UserIsActive(context.Context, string) (bool, error) {
+	return checker.active, nil
+}
 
 func TestRegistersDiscoveryAndAPIV1WebSocketRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -31,6 +42,43 @@ func TestRegistersDiscoveryAndAPIV1WebSocketRoutes(t *testing.T) {
 	}
 }
 
+func TestRootWebSocketRouteUsesResolvedZoneContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tokens := sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour)
+	accessToken, _, err := tokens.CreateZoneAccessToken(
+		"user-1", "user@example.com", "user", "zone-1", "workspace-1", "chat.example.com",
+	)
+	if err != nil {
+		t.Fatalf("CreateZoneAccessToken() error = %v", err)
+	}
+	manager := platformws.NewManager()
+	handler := NewHandler(manager, tokens)
+	handler.SetActiveUserChecker(fakeActiveUserChecker{active: true})
+	router := gin.New()
+	root := router.Group("")
+	root.Use(func(c *gin.Context) {
+		c.Set(constants.ContextResolvedZoneID, "zone-1")
+		c.Next()
+	})
+	handler.RegisterPublicRoute(root)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	config, err := xwebsocket.NewConfig(
+		strings.Replace(server.URL, "http://", "ws://", 1)+"/ws",
+		server.URL,
+	)
+	if err != nil {
+		t.Fatalf("NewConfig() error = %v", err)
+	}
+	config.Header.Set("Authorization", "Bearer "+accessToken)
+	connection, err := xwebsocket.DialConfig(config)
+	if err != nil {
+		t.Fatalf("DialConfig() error = %v", err)
+	}
+	_ = connection.Close()
+}
+
 func TestAccessTokenFromRequest(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -47,14 +95,14 @@ func TestAccessTokenFromRequest(t *testing.T) {
 			expect: "header-token",
 		},
 		{
-			name:   "access token query",
+			name:   "access token query is rejected",
 			req:    httptest.NewRequest(nethttp.MethodGet, "/api/v1/ws?access_token=query-token", nil),
-			expect: "query-token",
+			expect: "",
 		},
 		{
-			name:   "token query fallback",
+			name:   "token query is rejected",
 			req:    httptest.NewRequest(nethttp.MethodGet, "/api/v1/ws?token=query-token", nil),
-			expect: "query-token",
+			expect: "",
 		},
 		{
 			name: "subprotocol pair",
@@ -95,14 +143,15 @@ func TestAccessTokenFromRequest(t *testing.T) {
 	}
 }
 
-func TestAuthenticateRequestFromBrowserQueryToken(t *testing.T) {
+func TestAuthenticateRequestFromBrowserSubprotocolToken(t *testing.T) {
 	tokens := sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour)
 	accessToken, _, err := tokens.CreateAccessToken("user-1", "user@example.com", "user")
 	if err != nil {
 		t.Fatalf("CreateAccessToken() error = %v", err)
 	}
 
-	req := httptest.NewRequest(nethttp.MethodGet, "/api/v1/ws?access_token="+url.QueryEscape(accessToken), nil)
+	req := httptest.NewRequest(nethttp.MethodGet, "/api/v1/ws", nil)
+	req.Header.Set("Sec-WebSocket-Protocol", "webtui.jwt."+accessToken)
 	handler := NewHandler(platformws.NewManager(), tokens)
 
 	claims, err := handler.authenticateRequest(req)
@@ -111,6 +160,22 @@ func TestAuthenticateRequestFromBrowserQueryToken(t *testing.T) {
 	}
 	if claims.Subject != "user-1" {
 		t.Fatalf("authenticateRequest() userID = %q, want user-1", claims.Subject)
+	}
+}
+
+func TestAuthenticateRequestRejectsDeletedUser(t *testing.T) {
+	tokens := sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour)
+	accessToken, _, err := tokens.CreateAccessToken("user-1", "user@example.com", "user")
+	if err != nil {
+		t.Fatalf("CreateAccessToken() error = %v", err)
+	}
+	req := httptest.NewRequest(nethttp.MethodGet, "/api/v1/ws", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	handler := NewHandler(platformws.NewManager(), tokens)
+	handler.SetActiveUserChecker(fakeActiveUserChecker{active: false})
+
+	if _, err := handler.authenticateRequest(req); err == nil {
+		t.Fatal("authenticateRequest() accepted a deleted user")
 	}
 }
 

@@ -1,0 +1,15 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: local-dashboard
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+# Alerts remain visible in Alertmanager even before an outbound receiver is
+# configured. Add email, Slack, Teams or a generic webhook in a local override;
+# never commit its credential to this repository.
+receivers:
+  - name: local-dashboard

@@ -389,7 +389,7 @@ func (s *Service) ProcessDueReminders(ctx context.Context, limit int) (int, erro
 func (s *Service) productivityRepository() ProductivityRepository {
 	repository, ok := s.repo.(ProductivityRepository)
 	if !ok {
-		panic("messages repository does not implement productivity features")
+		return unavailableProductivityRepository{}
 	}
 	return repository
 }

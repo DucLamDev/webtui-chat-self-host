@@ -2,7 +2,6 @@
 
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useParams } from "next/navigation";
 import { Badge, Button, ErrorState } from "@webtui/ui";
 import {
   CheckCircle2,
@@ -23,8 +22,7 @@ type StoredGuestSession = {
 };
 
 export default function PublicConversationJoinPage() {
-  const params = useParams<{ token: string }>();
-  const token = typeof params.token === "string" ? params.token : "";
+  const [token, setToken] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [guestSession, setGuestSession] = useState<StoredGuestSession | null>(null);
@@ -35,6 +33,11 @@ export default function PublicConversationJoinPage() {
     queryKey: ["public-conversation", token],
     retry: false
   });
+
+  useEffect(() => {
+    const value = new URL(window.location.href).searchParams.get("token")?.trim() ?? "";
+    setToken(value);
+  }, []);
 
   useEffect(() => {
     if (!token) return;

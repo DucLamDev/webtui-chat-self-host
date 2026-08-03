@@ -1,0 +1,14 @@
+# Explicit opt-in override. The normal backup/restore services cannot read .env.
+# backup.sh/restore.sh add this file only when the operator exports
+# OFFSITE_BACKUP_INCLUDE_INSTANCE_ENV=true for that command.
+services:
+  offsite-backup:
+    environment:
+      OFFSITE_BACKUP_INCLUDE_INSTANCE_ENV: "true"
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /source/config/.env
+        read_only: true
+        bind:
+          create_host_path: false

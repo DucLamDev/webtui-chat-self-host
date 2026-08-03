@@ -72,6 +72,16 @@ type RangeObjectStore interface {
 	GetRange(ctx context.Context, key string, start int64, end int64) (StoredObjectReader, error)
 }
 
+type StorageLocation struct {
+	Store    ObjectStore
+	Provider string
+	Bucket   string
+}
+
+type StorageResolver interface {
+	ResolveWorkspace(ctx context.Context, workspaceID string) (StorageLocation, error)
+}
+
 type PutObjectInput struct {
 	Key         string
 	Body        io.Reader
@@ -96,6 +106,7 @@ type Service struct {
 	checker         PermissionChecker
 	storageProvider string
 	bucket          string
+	storageResolver StorageResolver
 	now             func() time.Time
 	realtime        RealtimePublisher
 }
@@ -276,6 +287,44 @@ func (s *Service) SetRealtimePublisher(publisher RealtimePublisher) {
 	s.realtime = publisher
 }
 
+func (s *Service) SetStorageResolver(resolver StorageResolver) {
+	s.storageResolver = resolver
+}
+
+func (s *Service) storageForWorkspace(ctx context.Context, workspaceID string) (StorageLocation, error) {
+	if s.storageResolver != nil {
+		return s.storageResolver.ResolveWorkspace(ctx, strings.TrimSpace(workspaceID))
+	}
+	return StorageLocation{Store: s.store, Provider: s.storageProvider, Bucket: s.bucket}, nil
+}
+
+func (s *Service) storageForExistingFile(
+	ctx context.Context,
+	workspaceID string,
+	provider string,
+	bucket *string,
+) (StorageLocation, error) {
+	location, err := s.storageForWorkspace(ctx, workspaceID)
+	if err != nil {
+		return StorageLocation{}, err
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	bucketValue := ""
+	if bucket != nil {
+		bucketValue = strings.TrimSpace(*bucket)
+	}
+	if provider == "" || (location.Provider == provider && location.Bucket == bucketValue) {
+		return location, nil
+	}
+	// Preserve downloads created before per-host storage settings existed. The
+	// instance-level store remains a read-only compatibility fallback whenever
+	// its provider/bucket match the file's persisted storage location.
+	if s.store != nil && strings.EqualFold(s.storageProvider, provider) && strings.TrimSpace(s.bucket) == bucketValue {
+		return StorageLocation{Store: s.store, Provider: s.storageProvider, Bucket: s.bucket}, nil
+	}
+	return location, nil
+}
+
 func (s *Service) Upload(ctx context.Context, input UploadInput) (FileDTO, error) {
 	attachedUpload := strings.TrimSpace(input.ChannelID) != "" && strings.TrimSpace(input.MessageID) != ""
 	if attachedUpload {
@@ -299,9 +348,13 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (FileDTO, error
 	if err != nil {
 		return FileDTO{}, apperrors.Internal("Không tạo được khóa lưu trữ file.")
 	}
+	storageLocation, err := s.storageForWorkspace(ctx, input.WorkspaceID)
+	if err != nil {
+		return FileDTO{}, err
+	}
 	hash := sha256.New()
 	reader := io.TeeReader(input.Body, hash)
-	object, err := s.store.Put(ctx, PutObjectInput{
+	object, err := storageLocation.Store.Put(ctx, PutObjectInput{
 		Key:         objectKey,
 		Body:        reader,
 		ContentType: mimeType,
@@ -315,8 +368,8 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (FileDTO, error
 	file, err := s.repo.CreateFile(ctx, CreateFileParams{
 		WorkspaceID:     strings.TrimSpace(input.WorkspaceID),
 		OwnerID:         strings.TrimSpace(input.ActorUserID),
-		StorageProvider: s.storageProvider,
-		Bucket:          s.bucket,
+		StorageProvider: storageLocation.Provider,
+		Bucket:          storageLocation.Bucket,
 		ObjectKey:       object.Key,
 		OriginalName:    originalName,
 		MimeType:        mimeType,
@@ -325,7 +378,7 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (FileDTO, error
 		Metadata:        metadata,
 	})
 	if err != nil {
-		_ = s.store.Delete(ctx, object.Key)
+		_ = storageLocation.Store.Delete(ctx, object.Key)
 		return FileDTO{}, err
 	}
 	if attachedUpload {
@@ -338,7 +391,7 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (FileDTO, error
 			SortOrder:   input.SortOrder,
 		})
 		if err != nil {
-			_ = s.store.Delete(ctx, object.Key)
+			_ = storageLocation.Store.Delete(ctx, object.Key)
 			return FileDTO{}, mapFileError(err)
 		}
 		s.publishAttachmentCreated(ctx, strings.TrimSpace(input.ActorUserID), strings.TrimSpace(input.ChannelID), attachment)
@@ -377,8 +430,12 @@ func (s *Service) CreateVersion(ctx context.Context, input UploadInput, fileID s
 	if err != nil {
 		return VersionDTO{}, apperrors.Internal("Không tạo được khóa lưu trữ file.")
 	}
+	storageLocation, err := s.storageForWorkspace(ctx, input.WorkspaceID)
+	if err != nil {
+		return VersionDTO{}, err
+	}
 	hash := sha256.New()
-	object, err := s.store.Put(ctx, PutObjectInput{
+	object, err := storageLocation.Store.Put(ctx, PutObjectInput{
 		Key:         objectKey,
 		Body:        io.TeeReader(input.Body, hash),
 		ContentType: mimeType,
@@ -393,15 +450,15 @@ func (s *Service) CreateVersion(ctx context.Context, input UploadInput, fileID s
 		WorkspaceID:     strings.TrimSpace(input.WorkspaceID),
 		FileID:          fileID,
 		CreatedBy:       strings.TrimSpace(input.ActorUserID),
-		StorageProvider: s.storageProvider,
-		Bucket:          s.bucket,
+		StorageProvider: storageLocation.Provider,
+		Bucket:          storageLocation.Bucket,
 		ObjectKey:       object.Key,
 		MimeType:        mimeType,
 		ByteSize:        object.Size,
 		ChecksumSHA256:  checksum,
 	})
 	if err != nil {
-		_ = s.store.Delete(ctx, object.Key)
+		_ = storageLocation.Store.Delete(ctx, object.Key)
 		return VersionDTO{}, mapFileError(err)
 	}
 	return toVersionDTO(version), nil
@@ -451,22 +508,28 @@ func (s *Service) Download(ctx context.Context, input DownloadInput) (DownloadDT
 	if err != nil {
 		return DownloadDTO{}, mapFileError(err)
 	}
+	storageLocation, err := s.storageForExistingFile(
+		ctx, input.WorkspaceID, file.StorageProvider, file.Bucket,
+	)
+	if err != nil {
+		return DownloadDTO{}, err
+	}
 	start, end, partial, err := resolveDownloadRange(input.Range, file.ByteSize)
 	if err != nil {
 		return DownloadDTO{}, err
 	}
 	var object StoredObjectReader
 	if partial {
-		if rangeStore, ok := s.store.(RangeObjectStore); ok {
+		if rangeStore, ok := storageLocation.Store.(RangeObjectStore); ok {
 			object, err = rangeStore.GetRange(ctx, file.ObjectKey, start, end)
 			if errors.Is(err, ErrRangeUnsupported) {
-				object, err = s.getRangeFallback(ctx, file.ObjectKey, start, end)
+				object, err = getRangeFallback(ctx, storageLocation.Store, file.ObjectKey, start, end)
 			}
 		} else {
-			object, err = s.getRangeFallback(ctx, file.ObjectKey, start, end)
+			object, err = getRangeFallback(ctx, storageLocation.Store, file.ObjectKey, start, end)
 		}
 	} else {
-		object, err = s.store.Get(ctx, file.ObjectKey)
+		object, err = storageLocation.Store.Get(ctx, file.ObjectKey)
 	}
 	if err != nil {
 		return DownloadDTO{}, err
@@ -496,8 +559,8 @@ func (s *Service) Download(ctx context.Context, input DownloadInput) (DownloadDT
 	}, nil
 }
 
-func (s *Service) getRangeFallback(ctx context.Context, key string, start int64, end int64) (StoredObjectReader, error) {
-	object, err := s.store.Get(ctx, key)
+func getRangeFallback(ctx context.Context, store ObjectStore, key string, start int64, end int64) (StoredObjectReader, error) {
+	object, err := store.Get(ctx, key)
 	if err != nil {
 		return StoredObjectReader{}, err
 	}

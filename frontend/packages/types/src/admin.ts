@@ -72,6 +72,45 @@ export type AdminMessageOverview = {
   created_at: ISODateTime;
 };
 
+export type AdminPushDeadLetter = {
+  id: Id;
+  attempt_count: number;
+  error: string;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+};
+
+export type AdminPushQueue = {
+  workspace_id: Id;
+  queue_depth: number;
+  pending: number;
+  processing: number;
+  failed: number;
+  sent_24h: number;
+  skipped_24h: number;
+  dead_24h: number;
+  delivery_rate_percent_24h?: number | null;
+  oldest_queued_at?: ISODateTime;
+  oldest_queue_age_seconds?: number;
+  provider_deliveries_24h: Array<{
+    provider: string;
+    count: number;
+  }>;
+  hourly_activity: Array<{
+    hour: ISODateTime;
+    sent: number;
+    dead: number;
+  }>;
+  dead_letters: AdminPushDeadLetter[];
+  generated_at: ISODateTime;
+};
+
+export type AdminPushReplay = {
+  original_job_id: Id;
+  replay_job_id: Id;
+  created: boolean;
+};
+
 export type AuditLog = {
   id: Id;
   workspace_id?: Id;

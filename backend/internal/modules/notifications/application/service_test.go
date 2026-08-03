@@ -2,6 +2,9 @@ package application
 
 import (
 	"context"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -9,6 +12,26 @@ import (
 	notificationsdomain "github.com/duclamdev/application-chat/backend/internal/modules/notifications/domain"
 	outboxdomain "github.com/duclamdev/application-chat/backend/internal/modules/outbox/domain"
 )
+
+func TestNormalizeWebPushSubscriptionValidatesP256Point(t *testing.T) {
+	privateKey, x, y, err := elliptic.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil || len(privateKey) == 0 {
+		t.Fatalf("generate P-256 key: %v", err)
+	}
+	publicKey := base64.RawURLEncoding.EncodeToString(elliptic.Marshal(elliptic.P256(), x, y))
+	auth := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	base := WebPushSubscriptionInput{
+		ZoneID: "zone-1", UserID: "user-1", WorkspaceID: "workspace-1",
+		Endpoint: "https://push.example.test/subscription", P256DH: publicKey, Auth: auth,
+	}
+	if _, err := normalizeWebPushSubscription(base); err != nil {
+		t.Fatalf("valid subscription rejected: %v", err)
+	}
+	base.P256DH = base64.RawURLEncoding.EncodeToString(append([]byte{4}, make([]byte, 64)...))
+	if _, err := normalizeWebPushSubscription(base); err == nil {
+		t.Fatal("off-curve P-256 key was accepted")
+	}
+}
 
 type fakeNotificationRepo struct {
 	mentionParams       MentionParams
@@ -19,6 +42,7 @@ type fakeNotificationRepo struct {
 	upsertCalled        bool
 	channelPreference   notificationsdomain.ChannelPreference
 	channelUpsertCalled bool
+	webPushSubscription notificationsdomain.WebPushSubscription
 }
 
 func (r *fakeNotificationRepo) CreateMentionNotifications(_ context.Context, params MentionParams) error {
@@ -99,6 +123,19 @@ func (r *fakeNotificationRepo) UpsertChannelPreference(_ context.Context, _ stri
 		r.channelPreference.UpdatedAt = r.channelPreference.CreatedAt
 	}
 	return r.channelPreference, nil
+}
+
+func (r *fakeNotificationRepo) UpsertWebPushSubscription(_ context.Context, params WebPushSubscriptionParams) (notificationsdomain.WebPushSubscription, error) {
+	now := time.Now().UTC()
+	r.webPushSubscription = notificationsdomain.WebPushSubscription{
+		ID: "subscription-1", UserID: params.UserID,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	return r.webPushSubscription, nil
+}
+
+func (r *fakeNotificationRepo) RevokeWebPushSubscription(context.Context, string, string, string) error {
+	return nil
 }
 
 func TestHandleCreatesMentionNotificationsFromMessageCreatedEvent(t *testing.T) {

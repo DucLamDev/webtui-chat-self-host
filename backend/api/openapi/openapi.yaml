@@ -297,6 +297,107 @@ paths:
       responses:
         "200":
           description: Zone da duoc cap nhat
+  /api/v1/zones/current/logo:
+    post:
+      summary: Upload logo của host vào object storage riêng
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [logo]
+              properties:
+                logo:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Logo đã được lưu; dùng logo_path để cập nhật zone
+  /api/v1/branding/{zone_id}/{file_name}:
+    get:
+      summary: Đọc logo công khai của host từ object storage
+      security: []
+      parameters:
+        - name: zone_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: file_name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Nội dung ảnh logo
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "404":
+          description: Không tìm thấy logo
+  /api/v1/zones/current/storage:
+    get:
+      summary: Lấy cấu hình object storage riêng của host hiện tại
+      responses:
+        "200":
+          description: Cấu hình đã che Secret Key
+    put:
+      summary: Kiểm tra kết nối và lưu cấu hình MinIO/S3 riêng cho host
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateZoneStorageRequest"
+      responses:
+        "200":
+          description: Kết nối thành công và cấu hình đã được mã hóa để lưu
+        "400":
+          description: Cấu hình không hợp lệ hoặc không kết nối được bucket
+  /api/v1/users/me/avatar:
+    post:
+      summary: Upload ảnh đại diện vào object storage riêng của host
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [avatar]
+              properties:
+                avatar:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Ảnh đã lưu; avatar_path dùng để cập nhật hồ sơ
+  /api/v1/users/avatars/{zone_id}/{user_id}/{file_name}:
+    get:
+      summary: Đọc ảnh đại diện công khai từ object storage của host
+      security: []
+      parameters:
+        - name: zone_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: file_name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Nội dung ảnh đại diện
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "404":
+          description: Không tìm thấy ảnh đại diện
   /api/v1/zones/current/lifecycle:
     post:
       summary: Suspend, resume hoac archive zone
@@ -539,27 +640,70 @@ paths:
     get:
       summary: Kết nối WebSocket realtime
       description: >-
-        Kết nối WebSocket realtime. Client có thể xác thực bằng header
-        `Authorization: Bearer {access_token}`, query `access_token={access_token}`
-        hoặc browser subprotocol `["webtui.jwt", accessToken]`. Sau khi kết nối,
-        client gửi JSON `{"type":"join","room":"workspace:{workspace_id}:channel:{channel_id}"}`
+        Kết nối WebSocket realtime. Native client xác thực bằng Authorization
+        Bearer header. Browser dùng một subprotocol webtui.jwt.{access_token}
+        vì WebSocket API không cho đặt Authorization. Token trong query string
+        bị từ chối để tránh rò rỉ qua access log và history. Sau khi kết nối,
+        client gửi JSON join room workspace/channel
         để nhận event của channel.
       parameters:
-        - name: access_token
-          in: query
-          required: false
-          schema:
-            type: string
-          description: Access token JWT cho browser WebSocket khi không set được header Authorization.
         - name: Sec-WebSocket-Protocol
           in: header
           required: false
           schema:
             type: string
-          description: Có thể gửi `webtui.jwt, {access_token}` bằng WebSocket subprotocol.
+          description: Browser gửi đúng một subprotocol webtui.jwt.{access_token}.
       responses:
         "101":
           description: Nâng cấp kết nối WebSocket thành công
+        "401":
+          description: Thiếu hoặc sai access token
+  /api/v1/calls/ice-servers:
+    get:
+      tags: [Calls]
+      summary: Lấy cấu hình STUN/TURN cho WebRTC
+      description: >-
+        Trả về STUN public và TURN REST credentials ngắn hạn, được tạo riêng
+        cho user hiện tại. Client không được cache quá expires_at.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Danh sách ICE server và thời điểm hết hạn credential
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [ice_servers, expires_at]
+                        properties:
+                          ice_servers:
+                            type: array
+                            items:
+                              type: object
+                              required: [urls]
+                              properties:
+                                urls:
+                                  oneOf:
+                                    - type: string
+                                      format: uri
+                                    - type: array
+                                      items:
+                                        type: string
+                                        format: uri
+                                username:
+                                  type: string
+                                credential:
+                                  type: string
+                          expires_at:
+                            type: string
+                            format: date-time
+        "401":
+          description: Chưa xác thực
   /api/v1/auth/register:
     post:
       security: []
@@ -872,9 +1016,48 @@ paths:
       responses:
         "200":
           description: Hồ sơ đã cập nhật
+    delete:
+      summary: Xóa vĩnh viễn tài khoản của user hiện tại
+      description: >-
+        Xóa tài khoản, phiên đăng nhập, push token và dữ liệu cá nhân liên kết.
+        Nội dung thuộc hồ sơ của tổ chức như tin nhắn có thể được giữ lại nhưng
+        không còn liên kết tới hồ sơ người dùng. User đang sở hữu workspace phải
+        chuyển quyền sở hữu trước để không làm instance rơi vào trạng thái có
+        thể bị người đăng ký kế tiếp chiếm quyền.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation:
+                  type: string
+                  enum: [DELETE]
+                ownership_successor_email:
+                  type: string
+                  format: email
+                  description: >-
+                    Bắt buộc khi user còn sở hữu workspace. Tài khoản đích phải
+                    active và là thành viên của mọi workspace đang được chuyển.
+      responses:
+        "204":
+          description: Tài khoản đã được xóa
+        "400":
+          description: Thiếu xác nhận DELETE
+        "401":
+          description: Phiên đăng nhập không hợp lệ
+        "409":
+          description: Thiếu hoặc không hợp lệ người kế nhiệm quyền sở hữu workspace
   /api/v1/users:
     get:
       summary: Danh sách user
+      description: >-
+        User có `user.manage` trong một workspace active của zone được xem directory
+        toàn zone. User thông thường chỉ thấy tài khoản có ít nhất một workspace
+        active chung trong zone. Metadata IP và thiết bị chỉ trả cho chính chủ hoặc
+        user quản trị.
       parameters:
         - name: q
           in: query
@@ -895,6 +1078,10 @@ paths:
   /api/v1/users/{user_id}:
     get:
       summary: Xem hồ sơ user theo id
+      description: >-
+        Chỉ trả user thuộc zone hiện tại khi actor là chính user, có `user.manage`
+        trong zone, hoặc có ít nhất một workspace active chung với user đích.
+        Tài khoản không nằm trong scope trả 404 để tránh dò ID.
       parameters:
         - name: user_id
           in: path
@@ -908,9 +1095,14 @@ paths:
   /api/v1/rbac/permissions:
     get:
       summary: Danh mục permission hệ thống
+      description: >-
+        Cần `admin.view` hoặc `role.manage` trong ít nhất một workspace active
+        thuộc zone của phiên đăng nhập.
       responses:
         "200":
           description: Danh sách permission
+        "403":
+          description: Actor không có quyền đọc RBAC trong zone hiện tại
   /api/v1/rbac/me:
     get:
       summary: Danh sách permission của user trong workspace
@@ -945,15 +1137,21 @@ paths:
   /api/v1/rbac/roles:
     get:
       summary: Danh sách role hệ thống và role của workspace
+      description: >-
+        Workspace phải thuộc zone của phiên đăng nhập và actor cần `admin.view`
+        hoặc `role.manage` trong chính workspace đó.
       parameters:
         - name: workspace_id
           in: query
+          required: true
           schema:
             type: string
             format: uuid
       responses:
         "200":
           description: Danh sách role
+        "403":
+          description: Workspace ngoài zone hoặc actor không có quyền đọc role
     post:
       summary: Tạo role riêng cho workspace
       responses:
@@ -962,12 +1160,17 @@ paths:
   /api/v1/rbac/workspaces/{workspace_id}/members/{user_id}/roles:
     get:
       summary: Danh sách role của một thành viên workspace
+      description: >-
+        Workspace phải thuộc zone của phiên đăng nhập và actor cần `admin.view`
+        hoặc `role.manage` trong chính workspace đó.
       parameters:
         - $ref: "#/components/parameters/WorkspaceID"
         - $ref: "#/components/parameters/UserID"
       responses:
         "200":
           description: Danh sách role
+        "403":
+          description: Workspace ngoài zone hoặc actor không có quyền đọc role
     post:
       summary: Gán role cho thành viên workspace
       parameters:
@@ -1545,6 +1748,60 @@ paths:
                     properties:
                       data:
                         $ref: "#/components/schemas/NotificationChannelPreference"
+  /api/v1/notifications/web-push/config:
+    get:
+      security: []
+      summary: Discover per-instance Web Push capability and VAPID public key
+      responses:
+        "200":
+          description: Web Push is explicitly enabled or disabled for this instance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WebPushConfig"
+  /api/v1/notifications/web-push/subscriptions:
+    post:
+      summary: Register or refresh the authenticated browser's PushSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebPushSubscriptionRequest"
+      responses:
+        "201":
+          description: Subscription registered without echoing endpoint credentials
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WebPushSubscription"
+        "409":
+          description: Endpoint is already owned by another authenticated account
+        "503":
+          description: Web Push is disabled for the instance
+  /api/v1/notifications/web-push/subscriptions/{subscription_id}:
+    delete:
+      summary: Revoke one Web Push subscription owned by the authenticated user
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Subscription revoked
   /api/v1/notifications/{notification_id}/read:
     put:
       summary: Đánh dấu một thông báo là đã đọc
@@ -2424,6 +2681,98 @@ paths:
           description: Hệ thống sẵn sàng
         "503":
           description: Một hoặc nhiều dependency chưa sẵn sàng
+  /api/v1/workspaces/{workspace_id}/admin/messages:
+    get:
+      summary: Danh sách tin nhắn gần nhất phục vụ kiểm duyệt
+      description: >-
+        Cần đồng thời quyền `admin.view` và `message.manage` trong workspace.
+        Nội dung phiên bot riêng tư được redacted.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: limit
+          in: query
+          description: Số tin nhắn gần nhất; giá trị ngoài 1–200 dùng mặc định 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        "200":
+          description: Danh sách tin nhắn gần nhất trong workspace
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [messages]
+                        properties:
+                          messages:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/AdminMessageOverview"
+        "403":
+          description: Thiếu `admin.view` hoặc `message.manage`
+  /api/v1/workspaces/{workspace_id}/admin/push:
+    get:
+      summary: Theo dõi hàng đợi và delivery rate push của workspace
+      description: Cần quyền `admin.view`. Không trả device token, user ID hoặc payload notification.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: dead_letter_limit
+          in: query
+          description: Số dead-letter gần nhất cần trả; giá trị ngoài 1–100 dùng mặc định 50.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Queue depth, delivery rate 24 giờ, provider, lịch sử theo giờ và dead-letter đã redacted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AdminPushQueue"
+        "403":
+          description: Không có quyền `admin.view`
+  /api/v1/workspaces/{workspace_id}/admin/push/dead-letters/{job_id}/replay:
+    post:
+      summary: Replay có kiểm soát một push dead-letter
+      description: Cần quyền `notification.manage`. Mỗi dead-letter chỉ tạo tối đa một replay job.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Replay mới hoặc kết quả idempotent của replay đã tồn tại
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AdminPushReplay"
+        "403":
+          description: Không có quyền `notification.manage`
+        "404":
+          description: Job không phải dead-letter của workspace này
   /api/v1/workspaces/{workspace_id}/audit-logs:
     get:
       summary: Danh sách audit log
@@ -2621,7 +2970,8 @@ paths:
         "200":
           description: Talk integration settings
     put:
-      summary: Configure local AI, federation, E2EE, SIP and bridge gates
+      summary: Configure local AI, federation, SIP and bridge gates
+      description: e2ee_calls_enabled is reserved and currently rejected until verified device key agreement is implemented.
       parameters:
         - $ref: "#/components/parameters/WorkspaceID"
       responses:
@@ -3019,6 +3369,52 @@ components:
         logo_url:
           type: string
           maxLength: 2048
+    ZoneStorageSettings:
+      type: object
+      required: [provider, has_secret_access_key, configured]
+      properties:
+        provider:
+          type: string
+          enum: [local, minio, s3]
+        endpoint:
+          type: string
+          format: uri
+        region:
+          type: string
+        bucket:
+          type: string
+        access_key_id:
+          type: string
+        has_secret_access_key:
+          type: boolean
+        configured:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+    UpdateZoneStorageRequest:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          enum: [local, minio, s3]
+        endpoint:
+          type: string
+          format: uri
+        region:
+          type: string
+          default: us-east-1
+        bucket:
+          type: string
+          minLength: 3
+          maxLength: 63
+        access_key_id:
+          type: string
+        secret_access_key:
+          type: string
+          format: password
+          description: Bỏ trống khi muốn giữ Secret Key đã mã hóa hiện tại.
     CreateZoneDeploymentRequest:
       type: object
       required: [requested_mode, requested_database_mode]
@@ -3626,6 +4022,55 @@ components:
           type: string
           enum: [all, mentions, muted]
         muted_until:
+          type: string
+          format: date-time
+    WebPushConfig:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        vapid_public_key:
+          type: string
+          description: URL-safe base64 VAPID public key; omitted while disabled.
+    WebPushSubscriptionRequest:
+      type: object
+      additionalProperties: false
+      required: [workspace_id, endpoint, keys]
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+          description: Authorization proof for an active workspace membership; the subscription itself is account-wide for the instance/zone.
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 4096
+        expiration_time:
+          type: string
+          format: date-time
+        keys:
+          type: object
+          additionalProperties: false
+          required: [p256dh, auth]
+          properties:
+            p256dh:
+              type: string
+              writeOnly: true
+            auth:
+              type: string
+              writeOnly: true
+    WebPushSubscription:
+      type: object
+      required: [id, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
           type: string
           format: date-time
     PushDevice:
@@ -4423,6 +4868,163 @@ components:
         generated_at:
           type: string
           format: date-time
+    AdminMessageOverview:
+      type: object
+      required: [id, channel_id, channel_name, sender_name, kind, body, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel_id:
+          type: string
+          format: uuid
+        channel_name:
+          type: string
+        sender_name:
+          type: string
+        kind:
+          type: string
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AdminPushQueue:
+      type: object
+      required:
+        - workspace_id
+        - queue_depth
+        - pending
+        - processing
+        - failed
+        - sent_24h
+        - skipped_24h
+        - dead_24h
+        - provider_deliveries_24h
+        - hourly_activity
+        - dead_letters
+        - generated_at
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        queue_depth:
+          type: integer
+          format: int64
+          minimum: 0
+        pending:
+          type: integer
+          format: int64
+          minimum: 0
+        processing:
+          type: integer
+          format: int64
+          minimum: 0
+        failed:
+          type: integer
+          format: int64
+          minimum: 0
+        sent_24h:
+          type: integer
+          format: int64
+          minimum: 0
+        skipped_24h:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Job không có destination push đủ điều kiện; không nằm trong mẫu số delivery rate.
+        dead_24h:
+          type: integer
+          format: int64
+          minimum: 0
+        delivery_rate_percent_24h:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          nullable: true
+        oldest_queued_at:
+          type: string
+          format: date-time
+          nullable: true
+        oldest_queue_age_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+        provider_deliveries_24h:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPushProviderDelivery"
+        hourly_activity:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPushHourlyActivity"
+        dead_letters:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPushDeadLetter"
+        generated_at:
+          type: string
+          format: date-time
+    AdminPushProviderDelivery:
+      type: object
+      required: [provider, count]
+      properties:
+        provider:
+          type: string
+          enum: [fcm, apns, webpush]
+        count:
+          type: integer
+          format: int64
+          minimum: 0
+    AdminPushHourlyActivity:
+      type: object
+      required: [hour, sent, dead]
+      properties:
+        hour:
+          type: string
+          format: date-time
+        sent:
+          type: integer
+          format: int64
+          minimum: 0
+        dead:
+          type: integer
+          format: int64
+          minimum: 0
+    AdminPushDeadLetter:
+      type: object
+      required: [id, attempt_count, error, created_at, updated_at]
+      description: Error bị giới hạn độ dài và không kèm token, user ID hoặc payload.
+      properties:
+        id:
+          type: string
+          format: uuid
+        attempt_count:
+          type: integer
+          minimum: 0
+        error:
+          type: string
+          maxLength: 500
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AdminPushReplay:
+      type: object
+      required: [original_job_id, replay_job_id, created]
+      properties:
+        original_job_id:
+          type: string
+          format: uuid
+        replay_job_id:
+          type: string
+          format: uuid
+        created:
+          type: boolean
     AuditLog:
       type: object
       properties:

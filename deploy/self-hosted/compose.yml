@@ -73,10 +73,18 @@ services:
       context: ../../backend
       target: api
     image: vpsttt-chat-api:${APP_VERSION:-self-hosted}
-    env_file:
-      - path: .env
-        required: false
     command: ["migrate", "up"]
+    # Deliberately do not inject .env; migrations need only app/logging + DB.
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_NAME: ${APP_NAME:-webtui-chat}
+      APP_VERSION: ${APP_VERSION:-self-hosted}
+      DATABASE_ENABLED: ${DATABASE_ENABLED:-true}
+      DATABASE_MIGRATIONS_PATH: ${DATABASE_MIGRATIONS_PATH:-db/migrations}
+      DATABASE_URL: ${DATABASE_URL:-}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SERVICE_NAME: migrate
     networks: [backend]
     depends_on:
       postgres:
@@ -98,6 +106,103 @@ services:
       - backup_data:/var/lib/vpsttt-chat/backups
     restart: "no"
 
+  offsite-backup:
+    profiles: ["backup"]
+    build:
+      context: ./backup
+    image: vpsttt-chat-offsite-backup:${APP_VERSION:-self-hosted}
+    restart: on-failure:5
+    env_file:
+      # Only the dedicated DR credential file is injected wholesale. App
+      # settings required to read PostgreSQL/storage are allowlisted below.
+      - path: offsite-backup.env
+        required: false
+    environment:
+      APP_NAME: ${APP_NAME:-webtui-self-host}
+      APP_VERSION: ${APP_VERSION:-self-hosted}
+      DATABASE_URL: ${DATABASE_URL:-}
+      INSTANCE_DOMAIN: ${INSTANCE_DOMAIN:-}
+      MINIO_BUCKET: ${MINIO_BUCKET:-}
+      OFFSITE_RESTORE_ALLOW_APPLY: "false"
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      SOURCE_CONFIG_PATH: /source/config
+      SOURCE_STORAGE_PATH: /source/storage
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+    command: ["schedule"]
+    volumes:
+      - storage_data:/source/storage:ro
+      - backup_data:/var/lib/vpsttt-chat/backups
+      - type: bind
+        source: ./compose.yml
+        target: /source/config/compose.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./Caddyfile
+        target: /source/config/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [backend]
+    depends_on:
+      storage-permissions:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  # This service is never started by the normal stack or backup profile. The
+  # guarded restore wrapper invokes it explicitly after staging and checksum
+  # verification, with the application already in maintenance mode.
+  offsite-restore:
+    profiles: ["restore"]
+    build:
+      context: ./backup
+    image: vpsttt-chat-offsite-backup:${APP_VERSION:-self-hosted}
+    restart: "no"
+    env_file:
+      - path: offsite-backup.env
+        required: false
+    environment:
+      APP_NAME: ${APP_NAME:-webtui-self-host}
+      APP_VERSION: ${APP_VERSION:-self-hosted}
+      DATABASE_URL: ${DATABASE_URL:-}
+      INSTANCE_DOMAIN: ${INSTANCE_DOMAIN:-}
+      MINIO_BUCKET: ${MINIO_BUCKET:-}
+      OFFSITE_RESTORE_ALLOW_APPLY: "true"
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      SOURCE_CONFIG_PATH: /source/config
+      SOURCE_STORAGE_PATH: /source/storage
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+    command: ["--help"]
+    volumes:
+      - storage_data:/source/storage
+      - backup_data:/var/lib/vpsttt-chat/backups
+      - type: bind
+        source: ./compose.yml
+        target: /source/config/compose.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./Caddyfile
+        target: /source/config/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [backend]
+    depends_on:
+      storage-permissions:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: ../../backend
@@ -108,9 +213,23 @@ services:
       - path: .env
         required: false
     environment:
-      JITSI_BASE_URL: ${JITSI_BASE_URL:-https://meet.jit.si}
-      RATE_LIMIT_ENABLED: "false"
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       SERVICE_NAME: api
+      # The API serves only the public VAPID key; keep the signing key in the worker.
+      WEB_PUSH_VAPID_PRIVATE_KEY: ""
+      # Provider and publisher credentials are delivery-only secrets.
+      FIREBASE_PROJECT_ID: ""
+      FIREBASE_SERVICE_ACCOUNT_FILE: ""
+      FIREBASE_SERVICE_ACCOUNT_JSON_BASE64: ""
+      APNS_KEY_ID: ""
+      APNS_TEAM_ID: ""
+      APNS_BUNDLE_ID: ""
+      APNS_PRIVATE_KEY_FILE: ""
+      APNS_PRIVATE_KEY_BASE64: ""
+      PUSH_RELAY_URL: ""
+      PUSH_RELAY_TOKEN: ""
+      PUSH_RELAY_INSTANCE_ID: ""
+      PUSH_RELAY_PUBLISHERS: ""
     volumes:
       - storage_data:/var/lib/vpsttt-chat/storage
       - backup_data:/var/lib/vpsttt-chat/backups
@@ -145,6 +264,8 @@ services:
         required: false
     environment:
       SERVICE_NAME: worker
+      # Publisher authentication belongs only to the standalone relay process.
+      PUSH_RELAY_PUBLISHERS: ""
     volumes:
       - storage_data:/var/lib/vpsttt-chat/storage
       - backup_data:/var/lib/vpsttt-chat/backups
@@ -161,6 +282,59 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  push-relay:
+    profiles: ["push-relay"]
+    build:
+      context: ../../backend
+      target: push-relay
+    image: vpsttt-chat-push-relay:${APP_VERSION:-self-hosted}
+    restart: unless-stopped
+    # Provider credentials are required here, but unrelated application secrets
+    # stay out of the relay process. Keep this explicit allowlist instead of .env.
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_NAME: ${APP_NAME:-webtui-chat}
+      APP_VERSION: ${APP_VERSION:-self-hosted}
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_PRIVATE_KEY_BASE64: ${APNS_PRIVATE_KEY_BASE64:-}
+      APNS_PRIVATE_KEY_FILE: ${APNS_PRIVATE_KEY_FILE:-}
+      APNS_SANDBOX: ${APNS_SANDBOX:-false}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      DATABASE_ENABLED: ${DATABASE_ENABLED:-true}
+      DATABASE_URL: ${DATABASE_URL:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_SERVICE_ACCOUNT_FILE: ${FIREBASE_SERVICE_ACCOUNT_FILE:-}
+      FIREBASE_SERVICE_ACCOUNT_JSON_BASE64: ${FIREBASE_SERVICE_ACCOUNT_JSON_BASE64:-}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_TRACE_SAMPLE_RATIO: ${OTEL_TRACE_SAMPLE_RATIO:-0.10}
+      PUSH_RELAY_HTTP_HOST: ${PUSH_RELAY_HTTP_HOST:-0.0.0.0}
+      PUSH_RELAY_HTTP_PORT: ${PUSH_RELAY_HTTP_PORT:-8090}
+      PUSH_RELAY_MAX_BODY_BYTES: ${PUSH_RELAY_MAX_BODY_BYTES:-32768}
+      PUSH_RELAY_POLL_INTERVAL: ${PUSH_RELAY_POLL_INTERVAL:-1s}
+      PUSH_RELAY_PUBLISHERS: ${PUSH_RELAY_PUBLISHERS:-}
+      PUSH_RELAY_RATE_LIMIT_BURST: ${PUSH_RELAY_RATE_LIMIT_BURST:-60}
+      PUSH_RELAY_RATE_LIMIT_PER_MINUTE: ${PUSH_RELAY_RATE_LIMIT_PER_MINUTE:-240}
+      PUSH_RELAY_SERVER_ENABLED: ${PUSH_RELAY_SERVER_ENABLED:-false}
+      PUSH_RELAY_WORKER_CONCURRENCY: ${PUSH_RELAY_WORKER_CONCURRENCY:-4}
+      SERVICE_NAME: push-relay
+    expose: ["8090"]
+    networks: [backend]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:$${PUSH_RELAY_HTTP_PORT}/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   web:
     build:
       context: ../../frontend
@@ -170,7 +344,7 @@ services:
         NEXT_PUBLIC_APP_NAME: ${INSTANCE_NAME}
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS}
-        NEXT_PUBLIC_JITSI_BASE_URL: ${NEXT_PUBLIC_JITSI_BASE_URL:-https://meet.jit.si}
+        NEXT_PUBLIC_JITSI_BASE_URL: ${NEXT_PUBLIC_JITSI_BASE_URL:-}
         NEXT_PUBLIC_WS_BASE_URL: wss://${INSTANCE_DOMAIN}/ws
     image: vpsttt-chat-web:${APP_VERSION:-self-hosted}
     restart: unless-stopped
@@ -193,19 +367,87 @@ services:
     expose: ["3001"]
     networks: [backend]
 
-  portal:
-    build:
-      context: ../../../webtui-chat-portal
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL: ${DESKTOP_DOWNLOAD_URL:-https://download.vpsttt.com/download/}
-        NEXT_PUBLIC_DOCUMENTATION_URL: ${DOCUMENTATION_URL:-https://download.vpsttt.com/#self-host}
-        NEXT_PUBLIC_MOBILE_DOWNLOAD_URL: ${MOBILE_DOWNLOAD_URL:-https://download.vpsttt.com/download/}
-        NEXT_PUBLIC_PORTAL_BASE_PATH: ""
-    image: vpsttt-chat-portal:${PORTAL_VERSION:-self-hosted}
+  tempo:
+    profiles: ["observability"]
+    image: grafana/tempo:2.10.5
     restart: unless-stopped
-    expose: ["3002"]
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    expose: ["3200", "4317", "4318"]
     networks: [backend]
+
+  otel-collector:
+    profiles: ["observability"]
+    image: otel/opentelemetry-collector-contrib:0.153.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yml"]
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol-contrib/config.yml:ro
+    expose: ["4317", "4318", "8888", "13133"]
+    networks: [backend]
+    depends_on:
+      tempo:
+        condition: service_started
+
+  alertmanager:
+    profiles: ["observability"]
+    image: prom/alertmanager:v0.32.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    expose: ["9093"]
+    networks: [backend]
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v3.13.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    expose: ["9090"]
+    networks: [backend]
+    depends_on:
+      api:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:13.1.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-CHANGE_ME_RANDOM_GRAFANA_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3300}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks: [backend]
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
 
   caddy:
     image: caddy:2.10-alpine
@@ -213,14 +455,12 @@ services:
     environment:
       INSTANCE_DOMAIN: ${INSTANCE_DOMAIN}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
-      PORTAL_DOMAIN: ${PORTAL_DOMAIN:-download.vpsttt.com}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../../../webtui-chat-portal/download:/srv/portal-download:ro
       - storage_data:/srv/vpsttt-storage:ro
       - caddy_data:/data
       - caddy_config:/config
@@ -232,8 +472,6 @@ services:
         condition: service_started
       admin:
         condition: service_started
-      portal:
-        condition: service_started
 
   coturn:
     image: coturn/coturn:4.14.0-alpine
@@ -243,9 +481,9 @@ services:
       - --min-port=49160
       - --max-port=49200
       - --realm=${INSTANCE_DOMAIN}
-      - --user=${TURN_USERNAME}:${TURN_PASSWORD}
       - --external-ip=${TURN_EXTERNAL_IP}
-      - --lt-cred-mech
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SHARED_SECRET}
       - --fingerprint
       - --no-cli
       - --no-tls
@@ -290,3 +528,11 @@ volumes:
     name: vpsttt_chat_caddy_config
   coturn_data:
     name: vpsttt_chat_coturn_data
+  tempo_data:
+    name: vpsttt_chat_tempo_data
+  prometheus_data:
+    name: vpsttt_chat_prometheus_data
+  alertmanager_data:
+    name: vpsttt_chat_alertmanager_data
+  grafana_data:
+    name: vpsttt_chat_grafana_data

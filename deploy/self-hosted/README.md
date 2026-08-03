@@ -65,22 +65,23 @@ sudo sh deploy/self-hosted/bootstrap-ubuntu.sh \
 Nếu customer chạy trực tiếp từ một máy trống và muốn script tự clone source:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<tag-or-branch>/deploy/self-hosted/bootstrap-ubuntu.sh \
+curl -fsSL https://raw.githubusercontent.com/DucLamDev/webtui-chat-self-host/master/deploy/self-hosted/bootstrap-ubuntu.sh \
   | sudo sh -s -- \
     --domain chat.company.com \
     --email admin@company.com \
     --name "Company Chat" \
-    --repo-url https://github.com/<org>/<repo>.git
+    --repo-url https://github.com/DucLamDev/webtui-chat-self-host.git
 ```
 
-Thay `<org>/<repo>/<tag-or-branch>` bằng repository/release thật khi phát hành.
+Khi có release ổn định, nên thay `master` trong URL raw bằng tag release để
+bootstrap luôn dùng đúng phiên bản đã kiểm thử.
 Bootstrap sẽ mở các port cần thiết: `22`, `80`, `443`, `3478/tcp`,
 `3478/udp`, `443/udp` và `49160-49200/udp`.
 
 Ví dụ trên VPS:
 
 ```sh
-git clone <repository-url> vpsttt-chat
+git clone https://github.com/DucLamDev/webtui-chat-self-host.git vpsttt-chat
 cd vpsttt-chat
 sh deploy/self-hosted/install.sh \
   --domain chat.company.com \
@@ -106,7 +107,7 @@ Installer sẽ:
 - tự phát sinh secret cho PostgreSQL, Redis, RabbitMQ, JWT, webhook, OIDC và TURN;
 - ghi secret vào `deploy/self-hosted/.env` với quyền file `0600`;
 - build image API, worker, web và admin;
-- build portal download trong cùng Docker Compose và dùng chung Caddy;
+- không build hay mount portal; stack self-host chỉ chứa dịch vụ thuộc instance;
 - chạy migration database;
 - bật PostgreSQL, Redis, RabbitMQ, API, worker, web, admin, Caddy và coturn;
 - chờ `https://chat.company.com/ready` sẵn sàng.
@@ -201,18 +202,30 @@ OS kill, push cần FCM/APNs. Một app official dùng chung được ký với 
 push cố định; không thể yêu cầu mỗi customer đưa Firebase riêng vào binary đã
 phát hành trên store.
 
-MVP phải chọn rõ một trong ba chính sách:
+Production phải chọn rõ một trong ba chính sách:
 
 - không dùng push relay: self-host thuần, nhưng notification nền bị giới hạn;
-- dùng push relay tối thiểu do WebTUI vận hành cho app official;
+- dùng push relay do publisher vận hành cho app official;
 - customer tự build/sign app riêng với Firebase/APNs riêng.
 
 Không phân phát service account của Firebase project dùng cho app official tới
 các instance customer. Dù chọn chính sách nào, mobile vẫn phải catch-up bằng
 sync cursor khi mở lại để không mất sự kiện.
 
-Đây là phần khác biệt lớn so với web: web có thể sống nhờ WebSocket khi tab mở,
-mobile cần push + sync cursor để không mất sự kiện sau background.
+Relay client mặc định tắt. Chỉ điền đủ `PUSH_RELAY_URL`, `PUSH_RELAY_TOKEN` và
+`PUSH_RELAY_INSTANCE_ID` khi publisher đã cấp token riêng cho instance.
+Repository cũng có relay server tự host với queue PostgreSQL, auth publisher,
+idempotency, rate limit và retry; service này chỉ chạy khi bật compose profile
+`push-relay` và `PUSH_RELAY_SERVER_ENABLED=true`. Relay và migrator không load
+toàn bộ `.env`; Compose chỉ cấp allowlist database/provider/relay cần cho từng
+role, nên JWT, webhook, bot/OIDC, TURN và storage secret không nằm trong relay.
+
+Web Push/VAPID theo từng instance cũng mặc định tắt. Sau khi tạo VAPID key và bật
+`WEB_PUSH_ENABLED`, browser chỉ xin quyền từ thao tác opt-in của người dùng;
+service worker có thể nhận notification khi tab đóng. Mobile/web vẫn cần sync
+cursor để không mất sự kiện. Xem hướng dẫn cấu hình, xoay key, hợp đồng relay và
+kiểm thử thiết bị thật tại
+[`docs/operations/push-notifications.md`](../../docs/operations/push-notifications.md).
 
 ## Bot AI theo nghiệp vụ của tổ chức
 
@@ -245,13 +258,16 @@ Cuộc gọi 1:1 dùng WebRTC và coturn trong stack. Mặc định installer t�
 - TURN UDP/TCP: `turn:chat.company.com:3478`
 - port media UDP: `49160-49200`
 
-TURN đang dùng credential tĩnh riêng của instance. Nếu credential bị lộ, đổi
-`TURN_PASSWORD`, cập nhật `NEXT_PUBLIC_RTC_ICE_SERVERS` và `RTC_ICE_SERVERS`,
-sau đó build lại web/admin và restart stack.
+TURN dùng cơ chế coturn REST với username/HMAC ngắn hạn được cấp qua endpoint
+`GET /api/v1/calls/ice-servers` có xác thực. Secret `TURN_SHARED_SECRET` chỉ nằm
+ở API và coturn, không xuất hiện trong discovery, HTML hay bundle client. Khi xoay
+secret, cập nhật cùng lúc API/coturn và restart hai service; client tự lấy
+credential mới, không cần build lại ứng dụng.
 
 Phòng nhóm, guest link, webinar và breakout room dùng Jitsi self-host làm SFU.
 Jitsi không được nhúng vào compose mặc định để instance chat nhỏ không phải gánh
-thêm media stack. Cài một Jitsi riêng (ví dụ `https://meet.chat.company.com`) và
+thêm media stack. Tính năng nhóm mặc định bị tắt và không tự chuyển media qua
+một Jitsi public. Cài một Jitsi riêng (ví dụ `https://meet.chat.company.com`) và
 đặt trong `.env`:
 
 ```dotenv
@@ -284,10 +300,29 @@ cd deploy/self-hosted
 docker compose --env-file .env -f compose.yml logs -f api worker caddy
 ```
 
-Backup:
+Bật stack quan sát tùy chọn (Grafana mặc định chỉ nghe `127.0.0.1:3300`):
 
 ```sh
-sh deploy/self-hosted/backup.sh
+docker compose --env-file .env -f compose.yml --profile observability up -d
+ssh -L 3300:127.0.0.1:3300 operator@your-vps
+```
+
+Dashboard Grafana có HTTP p95/p99, queue/dead-letter push và trạng thái backup;
+Admin Panel → **Push** cho phép operator xem chi tiết theo workspace và replay job
+dead khi có `notification.manage`. Hãy nối Alertmanager tới webhook/email nội bộ
+theo [runbook observability](../../docs/operations/observability.md); cấu hình mặc
+định không gửi telemetry ra khỏi VPS.
+
+Backup off-site đã mã hóa (mặc định tắt; cấu hình S3/MinIO trước):
+
+```sh
+cd deploy/self-hosted
+cp offsite-backup.env.example offsite-backup.env
+chmod 600 offsite-backup.env
+# Điền bucket/credential/password rồi mới chạy:
+./backup.sh plan
+./backup.sh init
+./backup.sh backup --maintenance
 ```
 
 Update:
@@ -296,21 +331,39 @@ Update:
 sh deploy/self-hosted/update.sh
 ```
 
-Restore:
+Restore từ một snapshot ID cụ thể:
 
 ```sh
-sh deploy/self-hosted/restore.sh /absolute/path/to/backup --yes
+cd deploy/self-hosted
+./restore.sh 0123abcd --apply --confirm RESTORE:0123abcd
 ```
 
-Backup cần bao gồm PostgreSQL dump, storage volume và file `.env`. Nếu mất
-`.env`, secret JWT/webhook/TURN/OIDC cũ không thể khôi phục nguyên trạng.
+Backup mới bao gồm PostgreSQL custom dump, file/object storage, manifest và
+SHA-256 từng file trong một repository Restic mã hóa phía client. Scheduler chỉ
+chạy khi bật Compose profile `backup`; quickstart không tự upload dữ liệu. File
+`.env` mặc định không được đưa vào snapshot và không bao giờ tự ghi đè khi
+restore. Credential off-site nằm riêng trong `offsite-backup.env` (tạo từ
+`offsite-backup.env.example`), nên API/worker không nhận access key hoặc password
+Restic. Container DR cũng không nạp toàn bộ `.env` hay mount cả thư mục deploy;
+chỉ các biến app cần thiết và hai file `compose.yml`/`Caddyfile` được cấp rõ
+ràng. `.env` chỉ được mount khi operator opt-in cho từng lệnh theo runbook. Lưu
+secret cùng password Restic trong password manager/escrow độc lập.
+
+Xem [runbook backup/restore đầy đủ](../../docs/operations/offsite-backup-restore.md)
+để cấu hình retention, verify, safety snapshot, restore drill và giới hạn PITR.
+Restore tự stage và kiểm checksum trước maintenance, tạo safety snapshot rồi tự
+rollback khi migration/health check thất bại; thao tác phá hủy vẫn đòi snapshot
+ID và chuỗi xác nhận chính xác, không tự chọn `latest`.
+
+Web client có offline outbox cho tin nhắn text và delta-sync bền vững. File/voice
+chưa được tự xếp hàng khi offline; xem [phạm vi và conflict policy](../../docs/operations/offline-outbox-and-sync.md).
 
 ## Bảo mật tối thiểu
 
 - Không commit hoặc gửi `deploy/self-hosted/.env` cho VPSTTT.
 - Chỉ cấp SSH cho người vận hành thật sự cần.
 - Bật firewall và chỉ mở các port đã liệt kê.
-- Backup ra nơi khác VPS, có mã hóa.
+- Backup ra bucket/account khác VPS, có mã hóa; verify và restore drill định kỳ.
 - Theo dõi dung lượng disk vì file/media nằm trong storage của instance.
 - Khi nhân sự rời công ty, revoke session và khóa tài khoản trong Admin Panel.
 - Nếu public lên store mobile, cần chính sách privacy/account deletion riêng

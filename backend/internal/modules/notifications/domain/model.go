@@ -9,6 +9,10 @@ var ErrNotificationNotFound = errors.New("không tìm thấy thông báo")
 
 var ErrNotificationPreferenceUnavailable = errors.New("notification preference unavailable")
 
+var ErrWebPushSubscriptionNotFound = errors.New("web push subscription not found")
+
+var ErrWebPushSubscriptionConflict = errors.New("web push endpoint belongs to another account")
+
 type Notification struct {
 	ID          string
 	UserID      string
@@ -53,4 +57,11 @@ type ChannelPreference struct {
 	ArchivedAt  *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type WebPushSubscription struct {
+	ID        string
+	UserID    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

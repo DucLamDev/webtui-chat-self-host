@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/pusherror"
 )
 
 type Config struct {
@@ -80,6 +82,13 @@ func (s *Sender) Enabled() bool {
 	return s != nil && s.initErr == nil && s.key != nil
 }
 
+func (s *Sender) InitializationError() error {
+	if s == nil {
+		return errors.New("APNs sender is nil")
+	}
+	return s.initErr
+}
+
 func (s *Sender) Send(ctx context.Context, deviceToken string, payload map[string]any) error {
 	if eventType(payload) != "call_invite" {
 		// VoIP tokens must only be used to initiate calls.
@@ -124,7 +133,15 @@ func (s *Sender) Send(ctx context.Context, deviceToken string, payload map[strin
 		return nil
 	}
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-	return fmt.Errorf("APNs returned %s: %s", response.Status, strings.TrimSpace(string(raw)))
+	deliveryErr := fmt.Errorf("APNs returned %s: %s", response.Status, strings.TrimSpace(string(raw)))
+	reason := strings.ToLower(string(raw))
+	if response.StatusCode == http.StatusGone ||
+		strings.Contains(reason, "baddevicetoken") ||
+		strings.Contains(reason, "devicetokennotfortopic") ||
+		strings.Contains(reason, "unregistered") {
+		return pusherror.PermanentError(deliveryErr)
+	}
+	return deliveryErr
 }
 
 func (s *Sender) providerToken() (string, error) {

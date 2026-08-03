@@ -522,6 +522,14 @@ func normalizeOIDCReturnTo(value string, domain string) (string, error) {
 		return "/", nil
 	}
 	parsed, err := url.Parse(value)
+	if err == nil && strings.EqualFold(parsed.Scheme, "webtui") {
+		server := normalizeOIDCDomain(parsed.Query().Get("server"))
+		if parsed.User == nil && strings.EqualFold(parsed.Host, "oidc") && parsed.Path == "/callback" &&
+			parsed.Fragment == "" && server != "" && subtle.ConstantTimeCompare([]byte(server), []byte(domain)) == 1 {
+			return parsed.String(), nil
+		}
+		return "", apperrors.BadRequest("INVALID_RETURN_TO", "Native OIDC callback không hợp lệ.")
+	}
 	if err != nil || parsed.User != nil || !strings.HasPrefix(parsed.Path, "/") ||
 		strings.HasPrefix(parsed.Path, "//") {
 		return "", apperrors.BadRequest("INVALID_RETURN_TO", "return_to phải là đường dẫn tương đối cùng origin.")

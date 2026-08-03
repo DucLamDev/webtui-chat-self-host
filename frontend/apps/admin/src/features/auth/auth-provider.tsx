@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Skeleton } from "@webtui/ui";
 import { LockKeyhole, Send, ShieldCheck } from "@webtui/icons";
 import type { AuthUser, LoginInput, OIDCProviderSummary } from "@webtui/types";
-import { queryKeys } from "@webtui/api-client";
+import { ApiClientError, queryKeys } from "@webtui/api-client";
 import { api, runtimeEnvironment } from "@/lib/api";
 import { useAuthStore } from "./auth-store";
 
@@ -29,6 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [isCompletingOIDC, setIsCompletingOIDC] = useState(false);
   const oidcCompletionStarted = useRef(false);
+  const previousAccessToken = useRef<string | null>(null);
   const discoveryQuery = useQuery({
     enabled: hydrated && !accessToken,
     queryFn: () => api.tenancy.discover(browserDomain()),
@@ -104,10 +105,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [meQuery.data, setUser]);
 
   useEffect(() => {
-    if (meQuery.isError) {
+    if (
+      meQuery.error instanceof ApiClientError &&
+      (meQuery.error.status === 401 || meQuery.error.status === 403)
+    ) {
       clearSession();
     }
-  }, [clearSession, meQuery.isError]);
+  }, [clearSession, meQuery.error]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+
+    if (previousAccessToken.current && !accessToken) {
+      queryClient.clear();
+    }
+    previousAccessToken.current = accessToken;
+  }, [accessToken, hydrated, queryClient]);
 
   const loginMutation = useMutation({
     mutationFn: async (input: LoginInput) => {
@@ -202,6 +217,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   if ((meQuery.isLoading && !user) || adminAccessQuery.isLoading) {
     return <AuthLoadingState label="Đang tải hồ sơ quản trị..." />;
+  }
+
+  const accessCheckError = meQuery.error || adminAccessQuery.error;
+  if (accessCheckError) {
+    return (
+      <main className="admin-access-denied" role="alert">
+        <span><ShieldCheck size={32} /></span>
+        <h1>Chưa thể kiểm tra quyền quản trị</h1>
+        <p>{accessCheckError instanceof Error ? accessCheckError.message : "Kết nối API đang gián đoạn. Phiên đăng nhập của bạn vẫn được giữ an toàn."}</p>
+        <div className="admin-actions">
+          <Button onClick={() => void Promise.all([meQuery.refetch(), adminAccessQuery.refetch()])}>Thử lại</Button>
+          <Button onClick={() => logoutMutation.mutate()} variant="secondary">Đăng xuất</Button>
+        </div>
+      </main>
+    );
   }
 
   if (adminAccessQuery.data !== true) {

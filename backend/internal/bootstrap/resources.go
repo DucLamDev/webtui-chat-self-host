@@ -13,15 +13,17 @@ import (
 	"github.com/duclamdev/application-chat/backend/internal/platform/storage"
 	"github.com/duclamdev/application-chat/backend/internal/platform/storage/local"
 	"github.com/duclamdev/application-chat/backend/internal/platform/storage/minio"
+	tenantstorage "github.com/duclamdev/application-chat/backend/internal/platform/storage/tenant"
 	"github.com/duclamdev/application-chat/backend/internal/platform/websocket"
 )
 
 type Resources struct {
-	Database  *database.Postgres
-	Redis     *redis.Client
-	RabbitMQ  *rabbitmq.Client
-	Storage   storage.Store
-	WebSocket *websocket.Manager
+	Database      *database.Postgres
+	Redis         *redis.Client
+	RabbitMQ      *rabbitmq.Client
+	Storage       storage.Store
+	TenantStorage *tenantstorage.Resolver
+	WebSocket     *websocket.Manager
 }
 
 func NewResources(ctx context.Context, cfg *config.Config) (*Resources, error) {
@@ -63,12 +65,32 @@ func NewResources(ctx context.Context, cfg *config.Config) (*Resources, error) {
 		return nil, err
 	}
 
+	var tenantStore *tenantstorage.Resolver
+	if db != nil {
+		tenantStore, err = tenantstorage.New(
+			db.Pool(),
+			cfg.Storage.LocalPath,
+			cfg.Security.StorageCredentialsKey,
+		)
+		if err != nil {
+			if rabbitClient != nil {
+				_ = rabbitClient.Close()
+			}
+			if redisClient != nil {
+				_ = redisClient.Close()
+			}
+			db.Close()
+			return nil, err
+		}
+	}
+
 	return &Resources{
-		Database:  db,
-		Redis:     redisClient,
-		RabbitMQ:  rabbitClient,
-		Storage:   store,
-		WebSocket: websocket.NewManager(),
+		Database:      db,
+		Redis:         redisClient,
+		RabbitMQ:      rabbitClient,
+		Storage:       store,
+		TenantStorage: tenantStore,
+		WebSocket:     websocket.NewManagerWithRedis(redisClient),
 	}, nil
 }
 
@@ -86,6 +108,9 @@ func newStorage(cfg config.StorageConfig) (storage.Store, error) {
 func (r *Resources) Close() {
 	if r == nil {
 		return
+	}
+	if r.WebSocket != nil {
+		r.WebSocket.Close()
 	}
 	if r.RabbitMQ != nil {
 		if err := r.RabbitMQ.Close(); err != nil {

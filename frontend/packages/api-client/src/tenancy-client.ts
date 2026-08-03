@@ -6,15 +6,17 @@ import type {
   CreateDomainClaimInput,
   CreateZoneOIDCProviderInput,
   DomainClaim,
+  UpdateAutomationInstallationInput,
   UpdateZoneOIDCProviderInput,
   UpdateZoneQuotaInput,
-  UpdateAutomationInstallationInput,
+  UpdateZoneStorageInput,
   ZoneAdminOverview,
   ZoneCapabilities,
   ZoneDeploymentRequest,
   ZoneDiscovery,
   ZoneOIDCProvider,
-  ZoneQuotaOverview
+  ZoneQuotaOverview,
+  ZoneStorageSettings
 } from "@webtui/types";
 import type { HttpClient } from "./http-client";
 import { collectionFrom, itemFrom } from "./response-utils";
@@ -96,6 +98,14 @@ export function createTenancyClient(http: HttpClient) {
       form.append("logo", file, file.name);
       const data = await http.post<unknown>("/api/v1/zones/current/logo", form);
       return requiredItem<{ content_type: string; logo_path: string; size: number }>(data, "logo");
+    },
+    async currentZoneStorage() {
+      const data = await http.get<unknown>("/api/v1/zones/current/storage");
+      return requiredItem<ZoneStorageSettings>(data, "storage");
+    },
+    async updateCurrentZoneStorage(input: UpdateZoneStorageInput) {
+      const data = await http.put<unknown>("/api/v1/zones/current/storage", input);
+      return requiredItem<ZoneStorageSettings>(data, "storage");
     },
     async setZoneLifecycle(
       action: "suspend" | "resume" | "archive",

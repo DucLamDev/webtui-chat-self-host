@@ -43,7 +43,11 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 }
 
 func (h *Handler) ListPermissions(c *gin.Context) {
-	permissions, err := h.service.ListPermissions(c.Request.Context())
+	permissions, err := h.service.ListPermissions(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		middleware.CurrentZoneID(c),
+	)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -52,7 +56,12 @@ func (h *Handler) ListPermissions(c *gin.Context) {
 }
 
 func (h *Handler) ListRoles(c *gin.Context) {
-	roles, err := h.service.ListRoles(c.Request.Context(), c.Query("workspace_id"))
+	roles, err := h.service.ListRoles(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		middleware.CurrentZoneID(c),
+		c.Query("workspace_id"),
+	)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -102,7 +111,13 @@ func (h *Handler) Check(c *gin.Context) {
 }
 
 func (h *Handler) ListMemberRoles(c *gin.Context) {
-	roles, err := h.service.ListWorkspaceMemberRoles(c.Request.Context(), c.Param("workspace_id"), c.Param("user_id"))
+	roles, err := h.service.ListWorkspaceMemberRoles(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		middleware.CurrentZoneID(c),
+		c.Param("workspace_id"),
+		c.Param("user_id"),
+	)
 	if err != nil {
 		response.Error(c, err)
 		return

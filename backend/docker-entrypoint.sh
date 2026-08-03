@@ -8,6 +8,12 @@ case "${1:-api}" in
   worker)
     exec webtui-worker
     ;;
+  push-relay)
+    exec webtui-push-relay
+    ;;
+  vapid-keygen)
+    exec webtui-vapid-keygen
+    ;;
   migrate)
     shift
     exec webtui-migrate "$@"

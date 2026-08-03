@@ -57,6 +57,27 @@ export type ModuleRecord = Record<string, unknown> & {
   name?: string;
 };
 
+export type WebPushConfig = {
+  enabled: boolean;
+  vapid_public_key?: string;
+};
+
+export type WebPushSubscriptionInput = {
+  endpoint: string;
+  expiration_time?: string;
+  keys: {
+    auth: string;
+    p256dh: string;
+  };
+  workspace_id: string;
+};
+
+export type WebPushSubscriptionRecord = {
+  created_at: string;
+  id: string;
+  updated_at: string;
+};
+
 export function createNotificationsClient(http: HttpClient) {
   return {
     async listMine(params: QueryParams = {}) {
@@ -87,6 +108,17 @@ export function createNotificationsClient(http: HttpClient) {
       return http.put<ChannelNotificationPreference>(
         `/api/v1/notifications/preferences/channels/${encodeURIComponent(channelId)}`,
         input
+      );
+    },
+    getWebPushConfig() {
+      return http.get<WebPushConfig>("/api/v1/notifications/web-push/config", { auth: false });
+    },
+    registerWebPushSubscription(input: WebPushSubscriptionInput) {
+      return http.post<WebPushSubscriptionRecord>("/api/v1/notifications/web-push/subscriptions", input);
+    },
+    revokeWebPushSubscription(subscriptionId: string) {
+      return http.delete<void>(
+        `/api/v1/notifications/web-push/subscriptions/${encodeURIComponent(subscriptionId)}`
       );
     }
   };

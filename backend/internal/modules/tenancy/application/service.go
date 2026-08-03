@@ -43,6 +43,8 @@ type Repository interface {
 	CanManageZone(ctx context.Context, zoneID string, userID string) (bool, error)
 	GetZoneAdminOverview(ctx context.Context, zoneID string) (tenancydomain.ZoneAdminOverview, error)
 	UpdateZoneSettings(ctx context.Context, params UpdateZoneSettingsParams) (tenancydomain.ZoneAdminOverview, error)
+	GetZoneStorageConfig(ctx context.Context, zoneID string) (tenancydomain.ZoneStorageConfig, error)
+	UpsertZoneStorageConfig(ctx context.Context, params UpsertZoneStorageConfigParams) (tenancydomain.ZoneStorageConfig, error)
 	SetZoneLifecycle(ctx context.Context, params SetZoneLifecycleParams) error
 	SetPrimaryDomain(ctx context.Context, zoneID string, domainID string, actorUserID string) error
 	DeleteZoneDomain(ctx context.Context, zoneID string, domainID string, actorUserID string) error
@@ -67,20 +69,21 @@ type TXTResolver interface {
 }
 
 type Options struct {
-	AppName              string
-	AppVersion           string
-	DefaultLocale        string
-	ReleaseChannel       string
-	DeploymentMode       string
-	RTCICEServers        []map[string]any
-	RoutingDNSType       string
-	RoutingDNSTarget     string
-	VerificationTTL      time.Duration
-	TXTResolver          TXTResolver
-	Now                  func() time.Time
-	WebhookSigningSecret string
-	OIDCEnabled          bool
-	OIDCClientSecrets    map[string]string
+	AppName               string
+	AppVersion            string
+	DefaultLocale         string
+	ReleaseChannel        string
+	DeploymentMode        string
+	RTCICEServers         []map[string]any
+	RoutingDNSType        string
+	RoutingDNSTarget      string
+	VerificationTTL       time.Duration
+	TXTResolver           TXTResolver
+	Now                   func() time.Time
+	WebhookSigningSecret  string
+	StorageCredentialsKey string
+	OIDCEnabled           bool
+	OIDCClientSecrets     map[string]string
 }
 
 type Service struct {
@@ -89,6 +92,7 @@ type Service struct {
 	now             func() time.Time
 	txtResolver     TXTResolver
 	verificationTTL time.Duration
+	storageTester   ZoneStorageTester
 }
 
 type CreateDomainClaimInput struct {
@@ -351,6 +355,9 @@ type CreatedAutomationInstallationDTO struct {
 }
 
 func NewService(repo Repository, options Options) *Service {
+	if strings.TrimSpace(options.StorageCredentialsKey) == "" {
+		options.StorageCredentialsKey = options.WebhookSigningSecret
+	}
 	if strings.TrimSpace(options.AppName) == "" {
 		options.AppName = "Ứng dụng chat"
 	}

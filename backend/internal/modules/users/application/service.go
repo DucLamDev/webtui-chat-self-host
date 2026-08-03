@@ -13,28 +13,37 @@ import (
 
 type Repository interface {
 	FindByID(ctx context.Context, id string) (usersdomain.User, error)
-	FindByIDInZone(ctx context.Context, id string, zoneID string) (usersdomain.User, error)
+	FindByIDInZone(ctx context.Context, id string, zoneID string, actorUserID string, allowZoneWide bool) (usersdomain.User, error)
 	List(ctx context.Context, params ListUsersParams) ([]usersdomain.User, error)
 	UserBelongsToWorkspace(ctx context.Context, userID string, workspaceID string) (bool, error)
 	UpdateProfile(ctx context.Context, params UpdateProfileParams) (usersdomain.User, error)
 	UpdateUser(ctx context.Context, params UpdateUserParams) (usersdomain.User, error)
 	DeleteUser(ctx context.Context, userID string) error
+	DeleteOwnAccount(ctx context.Context, userID string, ownershipSuccessorEmail string) error
 }
 
 type PermissionChecker interface {
 	HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error)
+	HasAnyZonePermission(ctx context.Context, userID string, zoneID string, permissionCode string) (bool, error)
+}
+
+type AccountConnectionRevoker interface {
+	DisconnectUser(ctx context.Context, userID string) error
 }
 
 type Service struct {
-	checker PermissionChecker
-	repo    Repository
+	checker        PermissionChecker
+	repo           Repository
+	accountRevoker AccountConnectionRevoker
 }
 
 type ListUsersParams struct {
-	Query  string
-	Status string
-	ZoneID string
-	Limit  int
+	ActorUserID   string
+	AllowZoneWide bool
+	Query         string
+	Status        string
+	ZoneID        string
+	Limit         int
 }
 
 type UpdateProfileParams struct {
@@ -105,6 +114,10 @@ func NewService(repo Repository, checker ...PermissionChecker) *Service {
 	return &Service{repo: repo, checker: resolvedChecker}
 }
 
+func (s *Service) SetAccountConnectionRevoker(revoker AccountConnectionRevoker) {
+	s.accountRevoker = revoker
+}
+
 func (s *Service) Me(ctx context.Context, userID string) (UserDTO, error) {
 	user, err := s.repo.FindByID(ctx, strings.TrimSpace(userID))
 	if err != nil {
@@ -113,18 +126,42 @@ func (s *Service) Me(ctx context.Context, userID string) (UserDTO, error) {
 	return toDTO(user), nil
 }
 
-func (s *Service) Get(ctx context.Context, userID string, zoneID string) (UserDTO, error) {
-	user, err := s.repo.FindByIDInZone(ctx, strings.TrimSpace(userID), strings.TrimSpace(zoneID))
+func (s *Service) Get(ctx context.Context, actorUserID string, userID string, zoneID string) (UserDTO, error) {
+	actorUserID, zoneID, err := validateDirectoryScope(actorUserID, zoneID)
+	if err != nil {
+		return UserDTO{}, err
+	}
+	allowZoneWide, err := s.canManageZoneUsers(ctx, actorUserID, zoneID)
+	if err != nil {
+		return UserDTO{}, err
+	}
+	user, err := s.repo.FindByIDInZone(
+		ctx,
+		strings.TrimSpace(userID),
+		zoneID,
+		actorUserID,
+		allowZoneWide,
+	)
 	if err != nil {
 		return UserDTO{}, mapUserError(err)
 	}
-	return toDTO(user), nil
+	return toDirectoryDTO(user, allowZoneWide || user.ID == actorUserID), nil
 }
 
 func (s *Service) List(ctx context.Context, params ListUsersParams) ([]UserDTO, pagination.Meta, error) {
+	actorUserID, zoneID, err := validateDirectoryScope(params.ActorUserID, params.ZoneID)
+	if err != nil {
+		return nil, pagination.Meta{}, err
+	}
+	allowZoneWide, err := s.canManageZoneUsers(ctx, actorUserID, zoneID)
+	if err != nil {
+		return nil, pagination.Meta{}, err
+	}
+	params.ActorUserID = actorUserID
+	params.AllowZoneWide = allowZoneWide
 	params.Query = strings.TrimSpace(params.Query)
 	params.Status = strings.TrimSpace(params.Status)
-	params.ZoneID = strings.TrimSpace(params.ZoneID)
+	params.ZoneID = zoneID
 	params.Limit = pagination.NormalizeLimit(params.Limit)
 
 	users, err := s.repo.List(ctx, params)
@@ -134,9 +171,40 @@ func (s *Service) List(ctx context.Context, params ListUsersParams) ([]UserDTO, 
 
 	dtos := make([]UserDTO, 0, len(users))
 	for _, user := range users {
-		dtos = append(dtos, toDTO(user))
+		dtos = append(dtos, toDirectoryDTO(user, allowZoneWide || user.ID == actorUserID))
 	}
 	return dtos, pagination.Meta{HasMore: len(users) == params.Limit}, nil
+}
+
+func validateDirectoryScope(actorUserID string, zoneID string) (string, string, error) {
+	actorUserID = strings.TrimSpace(actorUserID)
+	zoneID = strings.TrimSpace(zoneID)
+	if actorUserID == "" {
+		return "", "", apperrors.Unauthorized("Phiên đăng nhập không hợp lệ.")
+	}
+	if zoneID == "" {
+		return "", "", apperrors.BadRequest("ZONE_REQUIRED", "Không xác định được vùng máy chủ hiện tại.")
+	}
+	return actorUserID, zoneID, nil
+}
+
+func (s *Service) canManageZoneUsers(ctx context.Context, actorUserID string, zoneID string) (bool, error) {
+	if s.checker == nil {
+		return false, nil
+	}
+	return s.checker.HasAnyZonePermission(ctx, actorUserID, zoneID, "user.manage")
+}
+
+func toDirectoryDTO(user usersdomain.User, includeSecurityMetadata bool) UserDTO {
+	dto := toDTO(user)
+	if includeSecurityMetadata {
+		return dto
+	}
+	dto.RegistrationIP = nil
+	dto.RegistrationDev = nil
+	dto.LastIPAddress = nil
+	dto.DeviceName = nil
+	return dto
 }
 
 func (s *Service) UpdateMe(ctx context.Context, input UpdateProfileInput) (UserDTO, error) {
@@ -195,6 +263,9 @@ func (s *Service) Update(ctx context.Context, input UpdateUserInput) (UserDTO, e
 		}
 		return UserDTO{}, err
 	}
+	if status != nil && (*status == "locked" || *status == "disabled") && s.accountRevoker != nil {
+		_ = s.accountRevoker.DisconnectUser(ctx, strings.TrimSpace(input.UserID))
+	}
 	return toDTO(user), nil
 }
 
@@ -210,6 +281,58 @@ func (s *Service) Delete(ctx context.Context, actorUserID string, workspaceID st
 			return apperrors.NotFound("USER_NOT_FOUND", "Không tìm thấy người dùng.")
 		}
 		return err
+	}
+	if s.accountRevoker != nil {
+		_ = s.accountRevoker.DisconnectUser(ctx, strings.TrimSpace(userID))
+	}
+	return nil
+}
+
+// DeleteOwnAccount permanently removes the authenticated account and all
+// records that are configured with ON DELETE CASCADE (sessions, push tokens,
+// memberships and preferences). Content that an organisation may need to
+// retain, such as messages and audit records, keeps no live user reference
+// because those foreign keys use ON DELETE SET NULL.
+func (s *Service) DeleteOwnAccount(
+	ctx context.Context,
+	userID string,
+	confirmation string,
+	ownershipSuccessorEmail string,
+) error {
+	if strings.TrimSpace(confirmation) != "DELETE" {
+		return apperrors.BadRequest(
+			"ACCOUNT_DELETION_CONFIRMATION_REQUIRED",
+			"Nhập DELETE để xác nhận xóa vĩnh viễn tài khoản.",
+		)
+	}
+
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return apperrors.Unauthorized("Phiên đăng nhập không hợp lệ.")
+	}
+	if err := s.repo.DeleteOwnAccount(ctx, userID, strings.TrimSpace(ownershipSuccessorEmail)); err != nil {
+		if errors.Is(err, usersdomain.ErrUserNotFound) {
+			return apperrors.NotFound("USER_NOT_FOUND", "Không tìm thấy người dùng.")
+		}
+		if errors.Is(err, usersdomain.ErrUserOwnsWorkspace) {
+			return apperrors.Conflict(
+				"ACCOUNT_OWNERSHIP_TRANSFER_REQUIRED",
+				"Nhập email của một thành viên đang hoạt động để chuyển quyền sở hữu trước khi xóa tài khoản.",
+			)
+		}
+		if errors.Is(err, usersdomain.ErrOwnershipSuccessorNotEligible) {
+			return apperrors.Conflict(
+				"ACCOUNT_OWNERSHIP_SUCCESSOR_INVALID",
+				"Người nhận quyền phải là một tài khoản khác và là thành viên đang hoạt động của mọi workspace bạn sở hữu.",
+			)
+		}
+		return err
+	}
+	if s.accountRevoker != nil {
+		// The database deletion is irreversible and has already revoked durable
+		// sessions. Disconnect realtime clients best-effort; remote nodes also
+		// perform periodic active-user checks if the Redis control publish fails.
+		_ = s.accountRevoker.DisconnectUser(ctx, userID)
 	}
 	return nil
 }
@@ -238,7 +361,10 @@ func mapUserError(err error) error {
 
 func (s *Service) ensureUserManagePermission(ctx context.Context, actorUserID string, workspaceID string) error {
 	if s.checker == nil {
-		return nil
+		return apperrors.ServiceUnavailable(
+			"RBAC_CHECKER_UNAVAILABLE",
+			"Dịch vụ phân quyền chưa sẵn sàng.",
+		)
 	}
 	actorUserID = strings.TrimSpace(actorUserID)
 	workspaceID = strings.TrimSpace(workspaceID)

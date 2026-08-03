@@ -11,19 +11,26 @@ import (
 
 	notificationsapp "github.com/duclamdev/application-chat/backend/internal/modules/notifications/application"
 	notificationsdomain "github.com/duclamdev/application-chat/backend/internal/modules/notifications/domain"
+	"github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/pusherror"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Repository struct {
-	pool        *pgxpool.Pool
-	pushSenders map[string]PushSender
+	pool          *pgxpool.Pool
+	pushSenders   map[string]PushSender
+	webPushSender WebPushSender
 }
 
 type PushSender interface {
 	Provider() string
 	Enabled() bool
 	Send(ctx context.Context, token string, payload map[string]any) error
+}
+
+type WebPushSender interface {
+	Enabled() bool
+	Send(ctx context.Context, endpoint string, p256dh string, auth string, payload map[string]any) error
 }
 
 func NewRepository(pool *pgxpool.Pool, pushSenders ...PushSender) *Repository {
@@ -40,14 +47,24 @@ func NewRepository(pool *pgxpool.Pool, pushSenders ...PushSender) *Repository {
 	return repository
 }
 
+func (r *Repository) SetWebPushSender(sender WebPushSender) {
+	if r != nil {
+		r.webPushSender = sender
+	}
+}
+
 func (r *Repository) CreateMentionNotifications(ctx context.Context, params notificationsapp.MentionParams) error {
 	for _, userID := range uniqueMentions(params.MentionedUserIDs, params.SenderID) {
 		data, err := json.Marshal(map[string]any{
 			"event_id":     params.EventID,
+			"event_type":   "mention",
+			"target_type":  "message",
 			"workspace_id": params.WorkspaceID,
 			"channel_id":   params.ChannelID,
 			"message_id":   params.MessageID,
 			"sender_id":    params.SenderID,
+			"title":        "Bạn được nhắc trong một tin nhắn",
+			"body":         "",
 		})
 		if err != nil {
 			return err
@@ -567,6 +584,120 @@ FROM upserted
 	return scanChannelPreference(row)
 }
 
+func (r *Repository) UpsertWebPushSubscription(ctx context.Context, params notificationsapp.WebPushSubscriptionParams) (notificationsdomain.WebPushSubscription, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return notificationsdomain.WebPushSubscription{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Serialize registration and quota trimming per account. Without this lock,
+	// concurrent transactions can each miss the other's uncommitted endpoint
+	// and leave more active subscriptions than the configured limit.
+	if _, err := tx.Exec(ctx, `
+SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+`, params.ZoneID+":"+params.UserID); err != nil {
+		return notificationsdomain.WebPushSubscription{}, err
+	}
+
+	var subscription notificationsdomain.WebPushSubscription
+	var eligible bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM workspace_members member
+    JOIN workspaces workspace
+      ON workspace.id = member.workspace_id
+     AND workspace.zone_id = $1::uuid
+     AND workspace.status = 'active'
+     AND workspace.deleted_at IS NULL
+    WHERE member.user_id = $2::uuid
+      AND member.workspace_id = $3::uuid
+      AND member.status IN ('active', 'muted')
+)
+`, params.ZoneID, params.UserID, params.WorkspaceID).Scan(&eligible); err != nil {
+		return notificationsdomain.WebPushSubscription{}, err
+	}
+	if !eligible {
+		return notificationsdomain.WebPushSubscription{}, notificationsdomain.ErrNotificationPreferenceUnavailable
+	}
+
+	err = tx.QueryRow(ctx, `
+INSERT INTO web_push_subscriptions (
+    zone_id, user_id, endpoint, p256dh, auth_secret,
+    expiration_time, status, last_seen_at, revoked_at
+)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'active', statement_timestamp(), NULL)
+ON CONFLICT (endpoint_hash) DO UPDATE SET
+    endpoint = EXCLUDED.endpoint,
+    p256dh = EXCLUDED.p256dh,
+    auth_secret = EXCLUDED.auth_secret,
+    expiration_time = EXCLUDED.expiration_time,
+    status = 'active',
+    last_seen_at = statement_timestamp(),
+    revoked_at = NULL
+WHERE web_push_subscriptions.zone_id = EXCLUDED.zone_id
+  AND web_push_subscriptions.user_id = EXCLUDED.user_id
+RETURNING id::text, user_id::text, created_at, updated_at
+`, params.ZoneID, params.UserID, params.Endpoint, params.P256DH, params.Auth, params.ExpirationTime).Scan(
+		&subscription.ID,
+		&subscription.UserID,
+		&subscription.CreatedAt,
+		&subscription.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return notificationsdomain.WebPushSubscription{}, notificationsdomain.ErrWebPushSubscriptionConflict
+	}
+	if err != nil {
+		return notificationsdomain.WebPushSubscription{}, err
+	}
+
+	maxSubscriptions := params.MaxSubscriptionsPerUser
+	if maxSubscriptions <= 0 {
+		maxSubscriptions = 10
+	}
+	_, err = tx.Exec(ctx, `
+WITH stale AS (
+    SELECT id
+    FROM web_push_subscriptions
+    WHERE zone_id = $1::uuid
+      AND user_id = $2::uuid
+      AND status = 'active'
+    ORDER BY (id = $4::uuid) DESC, last_seen_at DESC, created_at DESC, id
+    OFFSET $3
+)
+UPDATE web_push_subscriptions subscription
+SET status = 'revoked', revoked_at = statement_timestamp()
+FROM stale
+WHERE subscription.id = stale.id
+`, params.ZoneID, params.UserID, maxSubscriptions, subscription.ID)
+	if err != nil {
+		return notificationsdomain.WebPushSubscription{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return notificationsdomain.WebPushSubscription{}, err
+	}
+	return subscription, nil
+}
+
+func (r *Repository) RevokeWebPushSubscription(ctx context.Context, zoneID string, userID string, subscriptionID string) error {
+	command, err := r.pool.Exec(ctx, `
+UPDATE web_push_subscriptions
+SET status = 'revoked', revoked_at = now()
+WHERE id = $3::uuid
+  AND zone_id = $1::uuid
+  AND user_id = $2::uuid
+  AND status = 'active'
+`, zoneID, userID, subscriptionID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 0 {
+		return notificationsdomain.ErrWebPushSubscriptionNotFound
+	}
+	return nil
+}
+
 func (r *Repository) ProcessPendingJobs(ctx context.Context, limit int) (int, error) {
 	rows, err := r.pool.Query(ctx, `
 WITH picked AS (
@@ -574,6 +705,7 @@ WITH picked AS (
     FROM notification_jobs
     WHERE status = 'pending'
        OR (status = 'failed' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))
+       OR (status = 'processing' AND updated_at <= now() - interval '5 minutes')
     ORDER BY created_at ASC
     LIMIT $1
     FOR UPDATE SKIP LOCKED
@@ -585,9 +717,10 @@ updated AS (
         error = NULL
     FROM picked
     WHERE nj.id = picked.id
-    RETURNING nj.id::text, nj.notification_id::text, nj.user_id::text, nj.channel, nj.payload::text
+    RETURNING nj.id::text, nj.notification_id::text, nj.workspace_id::text,
+              nj.user_id::text, nj.channel, nj.payload::text
 )
-SELECT id, notification_id, user_id, channel, payload FROM updated
+SELECT id, notification_id, workspace_id, user_id, channel, payload FROM updated
 `, limit)
 	if err != nil {
 		return 0, err
@@ -597,6 +730,7 @@ SELECT id, notification_id, user_id, channel, payload FROM updated
 	type pendingJob struct {
 		id             string
 		notificationID string
+		workspaceID    string
 		userID         string
 		channel        string
 		payload        map[string]any
@@ -605,7 +739,7 @@ SELECT id, notification_id, user_id, channel, payload FROM updated
 	for rows.Next() {
 		var job pendingJob
 		var payload string
-		if err := rows.Scan(&job.id, &job.notificationID, &job.userID, &job.channel, &payload); err != nil {
+		if err := rows.Scan(&job.id, &job.notificationID, &job.workspaceID, &job.userID, &job.channel, &payload); err != nil {
 			return 0, err
 		}
 		if err := json.Unmarshal([]byte(payload), &job.payload); err != nil {
@@ -621,9 +755,23 @@ SELECT id, notification_id, user_id, channel, payload FROM updated
 
 	processed := 0
 	for _, job := range jobs {
-		if err := r.deliverJob(ctx, job.userID, job.channel, job.payload); err != nil {
+		if err := r.deliverJob(ctx, job.id, job.workspaceID, job.userID, job.channel, job.payload); err != nil {
 			_ = r.markJobFailed(ctx, job.id, err)
 			continue
+		}
+		if job.channel == "push" {
+			delivered, err := r.hasAcceptedDestination(ctx, job.id)
+			if err != nil {
+				_ = r.markJobFailed(ctx, job.id, fmt.Errorf("inspect push delivery ledger: %w", err))
+				continue
+			}
+			if !delivered {
+				if err := r.markJobSkipped(ctx, job.id); err != nil {
+					return processed, err
+				}
+				processed++
+				continue
+			}
 		}
 		if err := r.markJobSent(ctx, job.id, job.notificationID); err != nil {
 			return processed, err
@@ -633,52 +781,225 @@ SELECT id, notification_id, user_id, channel, payload FROM updated
 	return processed, nil
 }
 
-func (r *Repository) deliverJob(ctx context.Context, userID string, channel string, payload map[string]any) error {
+func (r *Repository) deliverJob(ctx context.Context, jobID string, workspaceID string, userID string, channel string, payload map[string]any) error {
 	if channel != "push" {
 		return nil
 	}
+	webPushEnabled := r.webPushSender != nil && r.webPushSender.Enabled()
+	if len(r.pushSenders) == 0 && !webPushEnabled {
+		// Push is an explicit optional mode for self-hosted installations. The
+		// durable in-app notification remains available without creating dead
+		// jobs when the operator intentionally leaves all providers disabled.
+		return nil
+	}
+	var deliveryErrors []error
+	if len(r.pushSenders) > 0 {
+		deliveryErrors = append(deliveryErrors, r.deliverNativeJob(ctx, jobID, workspaceID, userID, payload)...)
+	}
+	if webPushEnabled {
+		if _, exists := payload["event_id"]; !exists {
+			payload["event_id"] = "notification-job:" + jobID
+		}
+		deliveryErrors = append(deliveryErrors, r.deliverWebPushJob(ctx, jobID, workspaceID, userID, payload)...)
+	}
+	return errors.Join(deliveryErrors...)
+}
+
+func (r *Repository) deliverNativeJob(ctx context.Context, jobID string, workspaceID string, userID string, payload map[string]any) []error {
 	rows, err := r.pool.Query(ctx, `
-SELECT push_provider, push_token
-FROM push_devices
-WHERE user_id = $1::uuid
-  AND status = 'active'
-  AND push_provider IN ('fcm', 'apns')
-  AND notification_permission IN ('granted', 'provisional')
-  AND push_token IS NOT NULL
-  AND length(trim(push_token)) > 0
-`, userID)
+SELECT device.id::text, device.push_provider, device.push_token
+FROM push_devices device
+JOIN workspaces workspace
+  ON workspace.id = $2::uuid
+ AND workspace.zone_id = device.zone_id
+ AND workspace.deleted_at IS NULL
+JOIN workspace_members member
+  ON member.workspace_id = workspace.id
+ AND member.user_id = device.user_id
+ AND member.status IN ('active', 'muted')
+WHERE device.user_id = $1::uuid
+  AND device.workspace_id = $2::uuid
+  AND device.status = 'active'
+  AND device.push_provider IN ('fcm', 'apns')
+  AND device.notification_permission IN ('granted', 'provisional')
+  AND device.push_token IS NOT NULL
+  AND length(trim(device.push_token)) > 0
+  AND NOT EXISTS (
+      SELECT 1
+      FROM notification_job_deliveries delivered
+      WHERE delivered.job_id = $3::uuid
+        AND delivered.device_id = device.id
+  )
+`, userID, workspaceID, jobID)
 	if err != nil {
-		return err
+		return []error{err}
 	}
 	defer rows.Close()
 
 	type destination struct {
+		id       string
 		provider string
 		token    string
 	}
 	destinations := make([]destination, 0)
 	for rows.Next() {
 		var item destination
-		if err := rows.Scan(&item.provider, &item.token); err != nil {
-			return err
+		if err := rows.Scan(&item.id, &item.provider, &item.token); err != nil {
+			return []error{err}
 		}
 		destinations = append(destinations, item)
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return []error{err}
 	}
 	var deliveryErrors []error
 	for _, destination := range destinations {
 		sender := r.pushSenders[strings.ToLower(strings.TrimSpace(destination.provider))]
 		if sender == nil || !sender.Enabled() {
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("%s push sender is not configured", destination.provider))
+			// Providers are opt-in for self-hosters. A token for an intentionally
+			// disabled provider is not a failed delivery destination.
+			continue
+		}
+		eventType, _ := payload["event_type"].(string)
+		if strings.EqualFold(destination.provider, "apns") &&
+			!strings.EqualFold(strings.TrimSpace(eventType), "call_invite") {
+			// Native iOS registrations in this project are PushKit VoIP tokens and
+			// may only be used to initiate an incoming call.
 			continue
 		}
 		if err := sender.Send(ctx, destination.token, payload); err != nil {
+			if pusherror.IsPermanent(err) {
+				revoked, revokeErr := r.pool.Exec(ctx, `
+UPDATE push_devices
+SET status = 'revoked', revoked_at = now()
+WHERE id = $1::uuid
+  AND push_token = $2
+`, destination.id, destination.token)
+				if revokeErr != nil {
+					deliveryErrors = append(deliveryErrors, fmt.Errorf("revoke invalid %s token: %w", destination.provider, revokeErr))
+					continue
+				}
+				if revoked.RowsAffected() == 0 {
+					deliveryErrors = append(deliveryErrors, fmt.Errorf("%s push token changed during delivery", destination.provider))
+					continue
+				}
+				continue
+			}
 			deliveryErrors = append(deliveryErrors, fmt.Errorf("send %s notification: %w", destination.provider, err))
+			continue
+		}
+		if err := r.markDestinationDelivered(ctx, jobID, destination.id, destination.provider); err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("record delivered %s destination: %w", destination.provider, err))
 		}
 	}
-	return errors.Join(deliveryErrors...)
+	return deliveryErrors
+}
+
+func (r *Repository) deliverWebPushJob(ctx context.Context, jobID string, workspaceID string, userID string, payload map[string]any) []error {
+	rows, err := r.pool.Query(ctx, `
+SELECT subscription.id::text, subscription.endpoint, subscription.p256dh, subscription.auth_secret
+FROM web_push_subscriptions subscription
+JOIN workspaces workspace
+  ON workspace.id = $2::uuid
+ AND workspace.zone_id = subscription.zone_id
+ AND workspace.status = 'active'
+ AND workspace.deleted_at IS NULL
+JOIN workspace_members member
+  ON member.workspace_id = workspace.id
+ AND member.user_id = subscription.user_id
+ AND member.status IN ('active', 'muted')
+WHERE subscription.user_id = $1::uuid
+  AND subscription.status = 'active'
+  AND (subscription.expiration_time IS NULL OR subscription.expiration_time > now())
+  AND NOT EXISTS (
+      SELECT 1
+      FROM notification_web_push_deliveries delivered
+      WHERE delivered.job_id = $3::uuid
+        AND delivered.subscription_id = subscription.id
+  )
+`, userID, workspaceID, jobID)
+	if err != nil {
+		return []error{err}
+	}
+	defer rows.Close()
+
+	type destination struct {
+		id       string
+		endpoint string
+		p256dh   string
+		auth     string
+	}
+	destinations := make([]destination, 0)
+	for rows.Next() {
+		var item destination
+		if err := rows.Scan(&item.id, &item.endpoint, &item.p256dh, &item.auth); err != nil {
+			return []error{err}
+		}
+		destinations = append(destinations, item)
+	}
+	if err := rows.Err(); err != nil {
+		return []error{err}
+	}
+
+	var deliveryErrors []error
+	for _, destination := range destinations {
+		err := r.webPushSender.Send(ctx, destination.endpoint, destination.p256dh, destination.auth, payload)
+		if err != nil && pusherror.IsPermanent(err) {
+			revoked, revokeErr := r.pool.Exec(ctx, `
+UPDATE web_push_subscriptions
+SET status = 'revoked', revoked_at = now()
+WHERE id = $1::uuid
+  AND endpoint = $2
+`, destination.id, destination.endpoint)
+			if revokeErr != nil {
+				deliveryErrors = append(deliveryErrors, fmt.Errorf("revoke invalid Web Push subscription: %w", revokeErr))
+				continue
+			}
+			if revoked.RowsAffected() == 0 {
+				deliveryErrors = append(deliveryErrors, errors.New("Web Push subscription changed during delivery"))
+				continue
+			}
+			continue
+		}
+		if err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("send Web Push notification: %w", err))
+			continue
+		}
+		if err := r.markWebDestinationDelivered(ctx, jobID, destination.id); err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("record delivered Web Push subscription: %w", err))
+		}
+	}
+	return deliveryErrors
+}
+
+func (r *Repository) markDestinationDelivered(ctx context.Context, jobID string, deviceID string, provider string) error {
+	_, err := r.pool.Exec(ctx, `
+INSERT INTO notification_job_deliveries (job_id, device_id, provider)
+VALUES ($1::uuid, $2::uuid, $3)
+ON CONFLICT (job_id, device_id) DO NOTHING
+`, jobID, deviceID, strings.ToLower(strings.TrimSpace(provider)))
+	return err
+}
+
+func (r *Repository) markWebDestinationDelivered(ctx context.Context, jobID string, subscriptionID string) error {
+	_, err := r.pool.Exec(ctx, `
+INSERT INTO notification_web_push_deliveries (job_id, subscription_id)
+VALUES ($1::uuid, $2::uuid)
+ON CONFLICT (job_id, subscription_id) DO NOTHING
+`, jobID, subscriptionID)
+	return err
+}
+
+func (r *Repository) hasAcceptedDestination(ctx context.Context, jobID string) (bool, error) {
+	var delivered bool
+	err := r.pool.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM notification_job_deliveries WHERE job_id = $1::uuid
+    UNION ALL
+    SELECT 1 FROM notification_web_push_deliveries WHERE job_id = $1::uuid
+)
+`, jobID).Scan(&delivered)
+	return delivered, err
 }
 
 func (r *Repository) markJobSent(ctx context.Context, jobID string, notificationID string) error {
@@ -695,19 +1016,52 @@ WHERE id = $2::uuid
 	return err
 }
 
+func (r *Repository) markJobSkipped(ctx context.Context, jobID string) error {
+	_, err := r.pool.Exec(ctx, `
+UPDATE notification_jobs
+SET status = 'skipped', sent_at = NULL, next_attempt_at = NULL, error = NULL
+WHERE id = $1::uuid
+`, jobID)
+	return err
+}
+
 func (r *Repository) markJobFailed(ctx context.Context, jobID string, cause error) error {
 	reason := "push delivery failed"
 	if cause != nil {
 		reason = cause.Error()
 	}
+	terminal := pusherror.IsTerminal(cause) && !pusherror.HasRetryable(cause)
+	deferred := pusherror.IsDeferred(cause) && !pusherror.HasNonDeferredRetryable(cause)
+	deferredDelay := deferredRetryDelay(cause)
+	deferredDelaySeconds := int64((deferredDelay + time.Second - 1) / time.Second)
 	_, err := r.pool.Exec(ctx, `
 UPDATE notification_jobs
-SET status = CASE WHEN attempt_count >= 5 THEN 'dead' ELSE 'failed' END,
-    next_attempt_at = CASE WHEN attempt_count >= 5 THEN NULL ELSE now() + make_interval(secs => LEAST(300, attempt_count * 30)) END,
+SET attempt_count = CASE WHEN $4 THEN GREATEST(attempt_count - 1, 0) ELSE attempt_count END,
+    status = CASE WHEN $3 OR (NOT $4 AND attempt_count >= 5) THEN 'dead' ELSE 'failed' END,
+    next_attempt_at = CASE
+        WHEN $3 OR (NOT $4 AND attempt_count >= 5) THEN NULL
+        WHEN $4 THEN now() + make_interval(secs => $5::double precision)
+        ELSE now() + make_interval(secs => LEAST(300, attempt_count * 30))
+    END,
     error = left($2, 1000)
 WHERE id = $1::uuid
-`, jobID, reason)
+`, jobID, reason, terminal, deferred, deferredDelaySeconds)
 	return err
+}
+
+func deferredRetryDelay(cause error) time.Duration {
+	const (
+		minimum = 5 * time.Second
+		maximum = 5 * time.Minute
+	)
+	delay, ok := pusherror.Delay(cause)
+	if !ok || delay < minimum {
+		return minimum
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
 }
 
 func (r *Repository) createJob(ctx context.Context, notificationID string, workspaceID string, userID string, payload []byte) error {

@@ -1,9 +1,11 @@
 package application
 
 import (
+	"context"
 	"testing"
 
 	channelsdomain "github.com/duclamdev/application-chat/backend/internal/modules/channels/domain"
+	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
 func TestPublicRoomHidesMediaKeyUntilGuestIsApproved(t *testing.T) {
@@ -62,5 +64,20 @@ func TestCollaborationEnumNormalizationFailsClosed(t *testing.T) {
 	}
 	if normalizeDocumentKind("../notes") != "" {
 		t.Fatal("unknown document kind must be rejected")
+	}
+}
+
+func TestUpdateTalkIntegrationRejectsUnimplementedE2EE(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(&directConversationRepo{}, staticPermissionChecker{allowed: true})
+	_, err := service.UpdateTalkIntegration(context.Background(), UpdateTalkIntegrationInput{
+		ActorUserID:      "user-1",
+		WorkspaceID:      "workspace-1",
+		E2EECallsEnabled: true,
+	})
+	appErr, ok := err.(*apperrors.AppError)
+	if !ok || appErr.Code != "E2EE_CALLS_NOT_AVAILABLE" {
+		t.Fatalf("expected fail-closed E2EE conflict, got %#v", err)
 	}
 }

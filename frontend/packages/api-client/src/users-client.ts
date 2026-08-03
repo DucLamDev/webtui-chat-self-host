@@ -12,6 +12,11 @@ export type UpdateUserInput = Partial<AuthUser> & {
   workspace_id: string;
 };
 
+export type DeleteMeInput = {
+  confirmation: "DELETE";
+  ownership_successor_email?: string;
+};
+
 export function createUsersClient(http: HttpClient) {
   return {
     async me() {
@@ -20,6 +25,17 @@ export function createUsersClient(http: HttpClient) {
     },
     updateMe(input: Partial<AuthUser>) {
       return http.patch<AuthUser>("/api/v1/users/me", input);
+    },
+    async uploadMyAvatar(file: File) {
+      const form = new FormData();
+      form.append("avatar", file, file.name);
+      const data = await http.post<unknown>("/api/v1/users/me/avatar", form);
+      return requiredUserAvatar(data);
+    },
+    deleteMe(input: DeleteMeInput) {
+      return http.delete<void>("/api/v1/users/me", {
+        body: input
+      });
     },
     async list(params: ListUsersParams = {}) {
       const data = await http.get<unknown>("/api/v1/users", { query: params });
@@ -38,4 +54,12 @@ export function createUsersClient(http: HttpClient) {
       });
     }
   };
+}
+
+function requiredUserAvatar(data: unknown) {
+  const avatar = itemFrom<{ avatar_path: string; content_type: string; size: number }>(data, "avatar");
+  if (!avatar?.avatar_path) {
+    throw new Error("Không nhận được đường dẫn ảnh đại diện sau khi tải lên.");
+  }
+  return avatar;
 }

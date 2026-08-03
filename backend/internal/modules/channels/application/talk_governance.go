@@ -480,6 +480,12 @@ func (s *Service) UpdateTalkIntegration(ctx context.Context, input UpdateTalkInt
 	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "workspace.manage"); err != nil {
 		return TalkIntegrationDTO{}, err
 	}
+	if input.E2EECallsEnabled {
+		return TalkIntegrationDTO{}, apperrors.Conflict(
+			"E2EE_CALLS_NOT_AVAILABLE",
+			"E2EE cuộc gọi chưa có key agreement và xác minh thiết bị; không thể bật cờ bảo mật gây hiểu nhầm.",
+		)
+	}
 	config := input.Config
 	if len(config) == 0 {
 		config = json.RawMessage(`{}`)
@@ -592,7 +598,7 @@ func (s *Service) TransitionFederationInvite(ctx context.Context, actorUserID st
 func (s *Service) talkGovernanceRepository() TalkGovernanceRepository {
 	repository, ok := s.collab.(TalkGovernanceRepository)
 	if !ok {
-		panic("channels collaboration repository does not implement TalkGovernanceRepository")
+		return unavailableTalkRepository{}
 	}
 	return repository
 }

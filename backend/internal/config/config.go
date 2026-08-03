@@ -1,9 +1,13 @@
 package config
 
 import (
+	"bytes"
+	"crypto/elliptic"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/url"
 	"os"
@@ -29,26 +33,31 @@ var defaultCORSAllowedOrigins = []string{
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var oidcSecretAliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var instanceDomainPattern = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+var pushRelayInstancePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 type Config struct {
-	App          AppConfig
-	Client       ClientConfig
-	HTTP         HTTPConfig
-	Metrics      MetricsConfig
-	Worker       WorkerConfig
-	ModuleRunner ModuleRunnerConfig
-	Backup       BackupConfig
-	Database     DatabaseConfig
-	Redis        RedisConfig
-	RabbitMQ     RabbitMQConfig
-	Storage      StorageConfig
-	Security     SecurityConfig
-	Calls        CallsConfig
-	Firebase     FirebaseConfig
-	APNS         APNSConfig
-	Deployment   DeploymentConfig
-	Registration RegistrationConfig
-	Order        OrderConfig
+	App             AppConfig
+	Client          ClientConfig
+	HTTP            HTTPConfig
+	Metrics         MetricsConfig
+	Telemetry       TelemetryConfig
+	Worker          WorkerConfig
+	ModuleRunner    ModuleRunnerConfig
+	Backup          BackupConfig
+	Database        DatabaseConfig
+	Redis           RedisConfig
+	RabbitMQ        RabbitMQConfig
+	Storage         StorageConfig
+	Security        SecurityConfig
+	Calls           CallsConfig
+	Firebase        FirebaseConfig
+	APNS            APNSConfig
+	PushRelay       PushRelayConfig
+	PushRelayServer PushRelayServerConfig
+	WebPush         WebPushConfig
+	Deployment      DeploymentConfig
+	Registration    RegistrationConfig
+	Order           OrderConfig
 }
 
 type AppConfig struct {
@@ -95,6 +104,12 @@ type MetricsConfig struct {
 	Path    string
 }
 
+type TelemetryConfig struct {
+	Enabled      bool
+	OTLPEndpoint string
+	SampleRatio  float64
+}
+
 type WorkerConfig struct {
 	Concurrency int
 }
@@ -135,20 +150,24 @@ type StorageConfig struct {
 }
 
 type SecurityConfig struct {
-	JWTAccessSecret      string
-	JWTRefreshSecret     string
-	WebhookSigningSecret string
-	BotAISecretKey       string
-	GoogleClientID       string
-	CaddyAskSecret       string
-	OIDCStateSecret      string
-	OIDCClientSecrets    map[string]string
+	JWTAccessSecret       string
+	JWTRefreshSecret      string
+	WebhookSigningSecret  string
+	StorageCredentialsKey string
+	BotAISecretKey        string
+	GoogleClientID        string
+	CaddyAskSecret        string
+	OIDCStateSecret       string
+	OIDCClientSecrets     map[string]string
 }
 
 type CallsConfig struct {
-	RingTimeout  time.Duration
-	ICEServers   []map[string]any
-	JitsiBaseURL string
+	RingTimeout       time.Duration
+	ICEServers        []map[string]any
+	JitsiBaseURL      string
+	TURNURLs          []string
+	TURNSharedSecret  string
+	TURNCredentialTTL time.Duration
 }
 
 type FirebaseConfig struct {
@@ -164,6 +183,41 @@ type APNSConfig struct {
 	PrivateKeyFile   string
 	PrivateKeyBase64 string
 	Sandbox          bool
+}
+
+// PushRelayConfig lets a self-hosted instance deliver notifications through
+// the publisher-operated FCM/APNs relay. This keeps vendor signing keys out of
+// customer installations while the instance remains authoritative for access.
+type PushRelayConfig struct {
+	URL        string
+	Token      string
+	InstanceID string
+}
+
+// PushRelayServerConfig configures the optional, publisher-operated relay
+// service. It is disabled by default and never starts as part of the API or
+// worker processes.
+type PushRelayServerConfig struct {
+	Enabled            bool
+	Host               string
+	Port               int
+	Publishers         map[string]string
+	MaxBodyBytes       int64
+	RateLimitPerMinute int
+	RateLimitBurst     int
+	WorkerConcurrency  int
+	PollInterval       time.Duration
+}
+
+// WebPushConfig keeps VAPID ownership with each self-hosted instance. The
+// private key is consumed only by the worker; the API exposes the public key.
+type WebPushConfig struct {
+	Enabled                 bool
+	VAPIDPublicKey          string
+	VAPIDPrivateKey         string
+	VAPIDSubject            string
+	TTL                     int
+	MaxSubscriptionsPerUser int
 }
 
 type DeploymentConfig struct {
@@ -193,14 +247,25 @@ type OrderConfig struct {
 
 func Load() (*Config, error) {
 	appEnv := getEnv("APP_ENV", "dev")
+	serviceName := getEnv("SERVICE_NAME", "api")
 	deploymentMode := strings.ToLower(getEnv("DEPLOYMENT_MODE", "self_hosted"))
 	instanceDomainFallback := ""
 	orderAPIBaseURLFallback := ""
+	databaseURLFallback := "postgres://postgres:123456@localhost:5432/vpstttdb_chat?sslmode=disable"
+	if isOperationalService(serviceName) {
+		// Operational binaries must never silently connect to the development
+		// database when their deliberately small environment omits DATABASE_URL.
+		databaseURLFallback = ""
+	}
 	if deploymentMode == "self_hosted" && appEnv != "production" {
 		instanceDomainFallback = "localhost"
 	}
 	if deploymentMode == "saas" {
 		orderAPIBaseURLFallback = "https://order.vpsttt.com/api"
+	}
+	corsAllowedOrigins := getEnvCSV("CORS_ALLOWED_ORIGINS", []string{})
+	if appEnv != "production" {
+		corsAllowedOrigins = getEnvCSVWithDefaults("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins)
 	}
 
 	cfg := &Config{
@@ -212,7 +277,7 @@ func Load() (*Config, error) {
 			LogLevel:    getEnv("LOG_LEVEL", "info"),
 			LogFormat:   getEnv("LOG_FORMAT", "text"),
 			StartedAt:   time.Now().UTC(),
-			ServiceName: getEnv("SERVICE_NAME", "api"),
+			ServiceName: serviceName,
 		},
 		Client: ClientConfig{
 			DesktopMinimumVersion:     getEnv("DESKTOP_MIN_VERSION", "0.1.0"),
@@ -234,15 +299,20 @@ func Load() (*Config, error) {
 			IdleTimeout:          getEnvDuration("API_IDLE_TIMEOUT", 60*time.Second),
 			ShutdownTimeout:      getEnvDuration("API_SHUTDOWN_TIMEOUT", 10*time.Second),
 			TrustedProxies:       getEnvCSV("TRUSTED_PROXIES", []string{}),
-			CORSAllowedOrigins:   getEnvCSVWithDefaults("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins),
+			CORSAllowedOrigins:   corsAllowedOrigins,
 			SecureHeadersEnabled: getEnvBool("SECURE_HEADERS_ENABLED", true),
-			RateLimitEnabled:     getEnvBool("RATE_LIMIT_ENABLED", false),
+			RateLimitEnabled:     getEnvBool("RATE_LIMIT_ENABLED", appEnv == "production"),
 			RateLimitPerMinute:   getEnvInt("RATE_LIMIT_PER_MINUTE", 120),
 			RateLimitBurst:       getEnvInt("RATE_LIMIT_BURST", 60),
 		},
 		Metrics: MetricsConfig{
 			Enabled: getEnvBool("METRICS_ENABLED", true),
 			Path:    getEnv("METRICS_PATH", "/metrics"),
+		},
+		Telemetry: TelemetryConfig{
+			Enabled:      getEnvBool("OTEL_ENABLED", false),
+			OTLPEndpoint: strings.TrimRight(getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "/"),
+			SampleRatio:  getEnvFloat("OTEL_TRACE_SAMPLE_RATIO", 0.1),
 		},
 		Worker: WorkerConfig{
 			Concurrency: getEnvInt("WORKER_CONCURRENCY", 4),
@@ -256,7 +326,7 @@ func Load() (*Config, error) {
 		},
 		Database: DatabaseConfig{
 			Enabled:        getEnvBool("DATABASE_ENABLED", true),
-			URL:            getEnv("DATABASE_URL", "postgres://postgres:123456@localhost:5432/vpstttdb_chat?sslmode=disable"),
+			URL:            getEnv("DATABASE_URL", databaseURLFallback),
 			MigrationsPath: getEnv("DATABASE_MIGRATIONS_PATH", "db/migrations"),
 		},
 		Redis: RedisConfig{
@@ -277,18 +347,22 @@ func Load() (*Config, error) {
 			SecretAccessKey: getEnv("S3_SECRET_ACCESS_KEY", ""),
 		},
 		Security: SecurityConfig{
-			JWTAccessSecret:      getEnv("JWT_ACCESS_SECRET", "dev_access_secret_local_only_do_not_use_in_production"),
-			JWTRefreshSecret:     getEnv("JWT_REFRESH_SECRET", "dev_refresh_secret_local_only_do_not_use_in_production"),
-			WebhookSigningSecret: getEnv("WEBHOOK_SIGNING_SECRET", ""),
-			BotAISecretKey:       getEnv("BOT_AI_SECRET_KEY", ""),
-			GoogleClientID:       getEnv("GOOGLE_CLIENT_ID", ""),
-			CaddyAskSecret:       getEnv("CADDY_ASK_SECRET", ""),
-			OIDCStateSecret:      getEnv("OIDC_STATE_SECRET", ""),
-			OIDCClientSecrets:    getEnvMap("OIDC_CLIENT_SECRETS"),
+			JWTAccessSecret:       getEnv("JWT_ACCESS_SECRET", "dev_access_secret_local_only_do_not_use_in_production"),
+			JWTRefreshSecret:      getEnv("JWT_REFRESH_SECRET", "dev_refresh_secret_local_only_do_not_use_in_production"),
+			WebhookSigningSecret:  getEnv("WEBHOOK_SIGNING_SECRET", ""),
+			StorageCredentialsKey: getEnv("STORAGE_CREDENTIALS_KEY", getEnv("WEBHOOK_SIGNING_SECRET", "")),
+			BotAISecretKey:        getEnv("BOT_AI_SECRET_KEY", ""),
+			GoogleClientID:        getEnv("GOOGLE_CLIENT_ID", ""),
+			CaddyAskSecret:        getEnv("CADDY_ASK_SECRET", ""),
+			OIDCStateSecret:       getEnv("OIDC_STATE_SECRET", ""),
+			OIDCClientSecrets:     getEnvMap("OIDC_CLIENT_SECRETS"),
 		},
 		Calls: CallsConfig{
-			RingTimeout:  getEnvDuration("CALL_RING_TIMEOUT", 30*time.Second),
-			JitsiBaseURL: strings.TrimRight(getEnv("JITSI_BASE_URL", getEnv("NEXT_PUBLIC_JITSI_BASE_URL", "")), "/"),
+			RingTimeout:       getEnvDuration("CALL_RING_TIMEOUT", 30*time.Second),
+			JitsiBaseURL:      strings.TrimRight(getEnv("JITSI_BASE_URL", getEnv("NEXT_PUBLIC_JITSI_BASE_URL", "")), "/"),
+			TURNURLs:          getEnvCSV("TURN_URLS", []string{}),
+			TURNSharedSecret:  getEnv("TURN_SHARED_SECRET", ""),
+			TURNCredentialTTL: getEnvDuration("TURN_CREDENTIAL_TTL", 10*time.Minute),
 			ICEServers: getEnvJSONObjectList(
 				"RTC_ICE_SERVERS",
 				getEnvJSONObjectList(
@@ -309,6 +383,30 @@ func Load() (*Config, error) {
 			PrivateKeyFile:   getEnv("APNS_PRIVATE_KEY_FILE", ""),
 			PrivateKeyBase64: getEnv("APNS_PRIVATE_KEY_BASE64", ""),
 			Sandbox:          getEnvBool("APNS_SANDBOX", false),
+		},
+		PushRelay: PushRelayConfig{
+			URL:        strings.TrimRight(getEnv("PUSH_RELAY_URL", ""), "/"),
+			Token:      getEnv("PUSH_RELAY_TOKEN", ""),
+			InstanceID: getEnv("PUSH_RELAY_INSTANCE_ID", ""),
+		},
+		PushRelayServer: PushRelayServerConfig{
+			Enabled:            getEnvBool("PUSH_RELAY_SERVER_ENABLED", false),
+			Host:               getEnv("PUSH_RELAY_HTTP_HOST", "0.0.0.0"),
+			Port:               getEnvInt("PUSH_RELAY_HTTP_PORT", 8090),
+			Publishers:         getEnvMap("PUSH_RELAY_PUBLISHERS"),
+			MaxBodyBytes:       int64(getEnvInt("PUSH_RELAY_MAX_BODY_BYTES", 32768)),
+			RateLimitPerMinute: getEnvInt("PUSH_RELAY_RATE_LIMIT_PER_MINUTE", 240),
+			RateLimitBurst:     getEnvInt("PUSH_RELAY_RATE_LIMIT_BURST", 60),
+			WorkerConcurrency:  getEnvInt("PUSH_RELAY_WORKER_CONCURRENCY", 4),
+			PollInterval:       getEnvDuration("PUSH_RELAY_POLL_INTERVAL", time.Second),
+		},
+		WebPush: WebPushConfig{
+			Enabled:                 getEnvBool("WEB_PUSH_ENABLED", false),
+			VAPIDPublicKey:          getEnv("WEB_PUSH_VAPID_PUBLIC_KEY", ""),
+			VAPIDPrivateKey:         getEnv("WEB_PUSH_VAPID_PRIVATE_KEY", ""),
+			VAPIDSubject:            getEnv("WEB_PUSH_VAPID_SUBJECT", ""),
+			TTL:                     getEnvInt("WEB_PUSH_TTL_SECONDS", 300),
+			MaxSubscriptionsPerUser: getEnvInt("WEB_PUSH_MAX_SUBSCRIPTIONS_PER_USER", 10),
 		},
 		Deployment: DeploymentConfig{
 			Mode:                     deploymentMode,
@@ -334,6 +432,17 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	switch strings.ToLower(strings.TrimSpace(c.App.ServiceName)) {
+	case "push-relay":
+		return c.validatePushRelayService()
+	case "migrate":
+		return c.validateMigrateService()
+	default:
+		return c.validateApplicationService()
+	}
+}
+
+func (c *Config) validateApplicationService() error {
 	var problems []string
 
 	if c.App.Name == "" {
@@ -357,6 +466,141 @@ func (c *Config) Validate() error {
 			problems = append(problems, "MOBILE_STORE_URL must be a valid http/https URL")
 		}
 	}
+	relayURL := strings.TrimSpace(c.PushRelay.URL)
+	relayToken := strings.TrimSpace(c.PushRelay.Token)
+	relayInstanceID := strings.TrimSpace(c.PushRelay.InstanceID)
+	relayConfigured := relayURL != "" || relayToken != "" || relayInstanceID != ""
+	if relayConfigured {
+		parsed, err := url.Parse(relayURL)
+		validScheme := parsed != nil && (parsed.Scheme == "https" || (c.App.Env != "production" && parsed.Scheme == "http"))
+		if err != nil || !validScheme || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+			problems = append(problems, "PUSH_RELAY_URL must be an HTTPS URL without embedded credentials")
+		}
+		if relayToken == "" {
+			problems = append(problems, "PUSH_RELAY_TOKEN is required when push relay is configured")
+		} else if c.App.Env == "production" && isWeakSecret(relayToken) {
+			problems = append(problems, "PUSH_RELAY_TOKEN is not safe for production")
+		}
+		if !pushRelayInstancePattern.MatchString(relayInstanceID) {
+			problems = append(problems, "PUSH_RELAY_INSTANCE_ID is required and must contain only letters, digits, dot, underscore, colon or dash")
+		}
+	}
+	firebaseFile := strings.TrimSpace(c.Firebase.ServiceAccountFile)
+	firebaseBase64 := strings.TrimSpace(c.Firebase.ServiceAccountJSONBase64)
+	firebaseConfigured := strings.TrimSpace(c.Firebase.ProjectID) != "" || firebaseFile != "" || firebaseBase64 != ""
+	if firebaseConfigured {
+		if firebaseFile == "" && firebaseBase64 == "" {
+			problems = append(problems, "FIREBASE_SERVICE_ACCOUNT_FILE or FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 is required for direct FCM delivery")
+		}
+		if firebaseFile != "" && firebaseBase64 != "" {
+			problems = append(problems, "configure only one Firebase service account source")
+		}
+	}
+	apnsFile := strings.TrimSpace(c.APNS.PrivateKeyFile)
+	apnsBase64 := strings.TrimSpace(c.APNS.PrivateKeyBase64)
+	apnsConfigured := strings.TrimSpace(c.APNS.KeyID) != "" || strings.TrimSpace(c.APNS.TeamID) != "" ||
+		apnsFile != "" || apnsBase64 != ""
+	if apnsConfigured {
+		if strings.TrimSpace(c.APNS.KeyID) == "" || strings.TrimSpace(c.APNS.TeamID) == "" ||
+			strings.TrimSpace(c.APNS.BundleID) == "" {
+			problems = append(problems, "APNS_KEY_ID, APNS_TEAM_ID and APNS_BUNDLE_ID are required for direct APNs delivery")
+		}
+		if apnsFile == "" && apnsBase64 == "" {
+			problems = append(problems, "APNS_PRIVATE_KEY_FILE or APNS_PRIVATE_KEY_BASE64 is required for direct APNs delivery")
+		}
+		if apnsFile != "" && apnsBase64 != "" {
+			problems = append(problems, "configure only one APNs private key source")
+		}
+	}
+	if relayConfigured && (firebaseConfigured || apnsConfigured) {
+		problems = append(problems, "push relay and direct FCM/APNs credentials cannot be configured together")
+	}
+	if c.PushRelayServer.Enabled {
+		if relayConfigured {
+			problems = append(problems, "PUSH_RELAY_SERVER_ENABLED cannot be combined with PUSH_RELAY_URL client mode")
+		}
+		if !c.Database.Enabled || strings.TrimSpace(c.Database.URL) == "" {
+			problems = append(problems, "push relay server requires DATABASE_ENABLED=true and DATABASE_URL")
+		}
+		if net.ParseIP(c.PushRelayServer.Host) == nil && c.PushRelayServer.Host != "localhost" && c.PushRelayServer.Host != "" {
+			problems = append(problems, "PUSH_RELAY_HTTP_HOST is invalid")
+		}
+		if c.PushRelayServer.Port <= 0 || c.PushRelayServer.Port > 65535 {
+			problems = append(problems, "PUSH_RELAY_HTTP_PORT is invalid")
+		}
+		if c.PushRelayServer.MaxBodyBytes < 1024 || c.PushRelayServer.MaxBodyBytes > 1048576 {
+			problems = append(problems, "PUSH_RELAY_MAX_BODY_BYTES must be between 1024 and 1048576")
+		}
+		if c.PushRelayServer.RateLimitPerMinute <= 0 || c.PushRelayServer.RateLimitBurst < 0 {
+			problems = append(problems, "push relay rate limits must be positive")
+		}
+		if c.PushRelayServer.WorkerConcurrency <= 0 || c.PushRelayServer.WorkerConcurrency > 128 {
+			problems = append(problems, "PUSH_RELAY_WORKER_CONCURRENCY must be between 1 and 128")
+		}
+		if c.PushRelayServer.PollInterval < 100*time.Millisecond || c.PushRelayServer.PollInterval > time.Minute {
+			problems = append(problems, "PUSH_RELAY_POLL_INTERVAL must be between 100ms and 1m")
+		}
+		if strings.EqualFold(strings.TrimSpace(c.App.ServiceName), "push-relay") {
+			if len(c.PushRelayServer.Publishers) == 0 {
+				problems = append(problems, "PUSH_RELAY_PUBLISHERS is required when the relay server is enabled")
+			}
+			for publisherID, token := range c.PushRelayServer.Publishers {
+				if !pushRelayInstancePattern.MatchString(publisherID) {
+					problems = append(problems, "PUSH_RELAY_PUBLISHERS contains an invalid publisher ID")
+					break
+				}
+				if len(strings.TrimSpace(token)) < 32 || (c.App.Env == "production" && isWeakSecret(token)) {
+					problems = append(problems, "PUSH_RELAY_PUBLISHERS contains a weak token")
+					break
+				}
+			}
+			if !firebaseConfigured && !apnsConfigured {
+				problems = append(problems, "push relay server requires at least one direct FCM or APNs provider")
+			}
+		}
+	}
+	if c.WebPush.Enabled {
+		publicKeyValid := validVAPIDKey(c.WebPush.VAPIDPublicKey, 65)
+		if !publicKeyValid {
+			problems = append(problems, "WEB_PUSH_VAPID_PUBLIC_KEY must be a valid 65-byte URL-safe base64 key")
+		}
+		privateKey := strings.TrimSpace(c.WebPush.VAPIDPrivateKey)
+		privateKeyValid := privateKey == "" || validVAPIDKey(privateKey, 32)
+		if !privateKeyValid {
+			problems = append(problems, "WEB_PUSH_VAPID_PRIVATE_KEY must be a valid 32-byte URL-safe base64 key")
+		}
+		if publicKeyValid && privateKey != "" && privateKeyValid &&
+			!matchingVAPIDKeyPair(c.WebPush.VAPIDPublicKey, privateKey) {
+			problems = append(problems, "WEB_PUSH_VAPID_PUBLIC_KEY and WEB_PUSH_VAPID_PRIVATE_KEY must form a matching key pair")
+		}
+		subjectValue := strings.TrimSpace(c.WebPush.VAPIDSubject)
+		if subjectValue != "" {
+			subject, err := url.Parse(subjectValue)
+			validSubject := err == nil && subject != nil && subject.User == nil && subject.Fragment == ""
+			if validSubject {
+				switch subject.Scheme {
+				case "mailto":
+					validSubject = strings.Contains(subject.Opaque, "@") && !strings.ContainsAny(subject.Opaque, "\r\n")
+				case "https":
+					validSubject = subject.Host != ""
+				default:
+					validSubject = false
+				}
+			}
+			if !validSubject {
+				problems = append(problems, "WEB_PUSH_VAPID_SUBJECT must use mailto: or https:")
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(c.App.ServiceName), "worker") && (privateKey == "" || subjectValue == "") {
+			problems = append(problems, "WEB_PUSH_VAPID_PRIVATE_KEY and WEB_PUSH_VAPID_SUBJECT are required by the worker")
+		}
+		if c.WebPush.TTL < 0 || c.WebPush.TTL > 2419200 {
+			problems = append(problems, "WEB_PUSH_TTL_SECONDS must be between 0 and 2419200")
+		}
+		if c.WebPush.MaxSubscriptionsPerUser <= 0 || c.WebPush.MaxSubscriptionsPerUser > 100 {
+			problems = append(problems, "WEB_PUSH_MAX_SUBSCRIPTIONS_PER_USER must be between 1 and 100")
+		}
+	}
 	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
 		problems = append(problems, "API_HTTP_PORT không hợp lệ")
 	}
@@ -368,6 +612,16 @@ func (c *Config) Validate() error {
 	}
 	if c.Metrics.Enabled && !strings.HasPrefix(c.Metrics.Path, "/") {
 		problems = append(problems, "METRICS_PATH phải bắt đầu bằng /")
+	}
+	if c.Telemetry.Enabled {
+		endpoint, err := url.Parse(strings.TrimSpace(c.Telemetry.OTLPEndpoint))
+		if err != nil || endpoint == nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
+			endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			problems = append(problems, "OTEL_EXPORTER_OTLP_ENDPOINT must be a valid HTTP(S) base URL without credentials, query or fragment")
+		}
+		if c.Telemetry.SampleRatio <= 0 || c.Telemetry.SampleRatio > 1 {
+			problems = append(problems, "OTEL_TRACE_SAMPLE_RATIO must be greater than 0 and at most 1")
+		}
 	}
 	if net.ParseIP(c.HTTP.Host) == nil && c.HTTP.Host != "localhost" && c.HTTP.Host != "" {
 		problems = append(problems, "API_HTTP_HOST không hợp lệ")
@@ -395,6 +649,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Calls.RingTimeout <= 0 {
 		problems = append(problems, "CALL_RING_TIMEOUT must be greater than 0")
+	}
+	if c.Calls.TURNCredentialTTL != 0 && (c.Calls.TURNCredentialTTL < time.Second || c.Calls.TURNCredentialTTL > 24*time.Hour) {
+		problems = append(problems, "TURN_CREDENTIAL_TTL must be between 1s and 24h")
+	}
+	if len(c.Calls.TURNURLs) > 0 && len(strings.TrimSpace(c.Calls.TURNSharedSecret)) < 32 {
+		problems = append(problems, "TURN_SHARED_SECRET must contain at least 32 characters when TURN_URLS is configured")
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Deployment.Mode)) {
 	case "saas":
@@ -482,6 +742,9 @@ func (c *Config) Validate() error {
 		if isWeakSecret(c.Security.WebhookSigningSecret) {
 			problems = append(problems, "WEBHOOK_SIGNING_SECRET chưa an toàn")
 		}
+		if isWeakSecret(c.Security.StorageCredentialsKey) {
+			problems = append(problems, "STORAGE_CREDENTIALS_KEY chưa an toàn")
+		}
 		if isWeakSecret(c.Security.BotAISecretKey) {
 			problems = append(problems, "BOT_AI_SECRET_KEY chưa an toàn")
 		}
@@ -505,6 +768,140 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func (c *Config) validateMigrateService() error {
+	problems := c.validateOperationalServiceBase()
+	if strings.TrimSpace(c.Database.MigrationsPath) == "" {
+		problems = append(problems, "DATABASE_MIGRATIONS_PATH is required for SERVICE_NAME=migrate")
+	}
+	return validationProblems(problems)
+}
+
+func (c *Config) validatePushRelayService() error {
+	problems := c.validateOperationalServiceBase()
+	if c.Telemetry.Enabled {
+		endpoint, err := url.Parse(strings.TrimSpace(c.Telemetry.OTLPEndpoint))
+		if err != nil || endpoint == nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
+			endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			problems = append(problems, "OTEL_EXPORTER_OTLP_ENDPOINT must be a valid HTTP(S) base URL without credentials, query or fragment")
+		}
+		if c.Telemetry.SampleRatio <= 0 || c.Telemetry.SampleRatio > 1 {
+			problems = append(problems, "OTEL_TRACE_SAMPLE_RATIO must be greater than 0 and at most 1")
+		}
+	}
+
+	relayClientConfigured := strings.TrimSpace(c.PushRelay.URL) != "" ||
+		strings.TrimSpace(c.PushRelay.Token) != "" || strings.TrimSpace(c.PushRelay.InstanceID) != ""
+	if relayClientConfigured {
+		problems = append(problems, "SERVICE_NAME=push-relay cannot be combined with PUSH_RELAY_URL client mode")
+	}
+	if !c.PushRelayServer.Enabled {
+		problems = append(problems, "PUSH_RELAY_SERVER_ENABLED=true is required for SERVICE_NAME=push-relay")
+	}
+	if net.ParseIP(c.PushRelayServer.Host) == nil && c.PushRelayServer.Host != "localhost" && c.PushRelayServer.Host != "" {
+		problems = append(problems, "PUSH_RELAY_HTTP_HOST is invalid")
+	}
+	if c.PushRelayServer.Port <= 0 || c.PushRelayServer.Port > 65535 {
+		problems = append(problems, "PUSH_RELAY_HTTP_PORT is invalid")
+	}
+	if c.PushRelayServer.MaxBodyBytes < 1024 || c.PushRelayServer.MaxBodyBytes > 1048576 {
+		problems = append(problems, "PUSH_RELAY_MAX_BODY_BYTES must be between 1024 and 1048576")
+	}
+	if c.PushRelayServer.RateLimitPerMinute <= 0 || c.PushRelayServer.RateLimitBurst < 0 {
+		problems = append(problems, "push relay rate limits must be positive")
+	}
+	if c.PushRelayServer.WorkerConcurrency <= 0 || c.PushRelayServer.WorkerConcurrency > 128 {
+		problems = append(problems, "PUSH_RELAY_WORKER_CONCURRENCY must be between 1 and 128")
+	}
+	if c.PushRelayServer.PollInterval < 100*time.Millisecond || c.PushRelayServer.PollInterval > time.Minute {
+		problems = append(problems, "PUSH_RELAY_POLL_INTERVAL must be between 100ms and 1m")
+	}
+	if len(c.PushRelayServer.Publishers) == 0 {
+		problems = append(problems, "PUSH_RELAY_PUBLISHERS is required for SERVICE_NAME=push-relay")
+	}
+	production := strings.EqualFold(strings.TrimSpace(c.App.Env), "production")
+	for publisherID, token := range c.PushRelayServer.Publishers {
+		if !pushRelayInstancePattern.MatchString(publisherID) {
+			problems = append(problems, "PUSH_RELAY_PUBLISHERS contains an invalid publisher ID")
+			break
+		}
+		if len(strings.TrimSpace(token)) < 32 || (production && isWeakSecret(token)) {
+			problems = append(problems, "PUSH_RELAY_PUBLISHERS contains a weak token")
+			break
+		}
+	}
+
+	firebaseFile := strings.TrimSpace(c.Firebase.ServiceAccountFile)
+	firebaseBase64 := strings.TrimSpace(c.Firebase.ServiceAccountJSONBase64)
+	firebaseConfigured := strings.TrimSpace(c.Firebase.ProjectID) != "" || firebaseFile != "" || firebaseBase64 != ""
+	if firebaseConfigured {
+		if firebaseFile == "" && firebaseBase64 == "" {
+			problems = append(problems, "FIREBASE_SERVICE_ACCOUNT_FILE or FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 is required for relay FCM delivery")
+		}
+		if firebaseFile != "" && firebaseBase64 != "" {
+			problems = append(problems, "configure only one Firebase service account source")
+		}
+		if production && firebaseBase64 != "" && isWeakSecret(firebaseBase64) {
+			problems = append(problems, "FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 is not safe for production")
+		}
+	}
+	apnsFile := strings.TrimSpace(c.APNS.PrivateKeyFile)
+	apnsBase64 := strings.TrimSpace(c.APNS.PrivateKeyBase64)
+	apnsConfigured := strings.TrimSpace(c.APNS.KeyID) != "" || strings.TrimSpace(c.APNS.TeamID) != "" ||
+		apnsFile != "" || apnsBase64 != ""
+	if apnsConfigured {
+		if strings.TrimSpace(c.APNS.KeyID) == "" || strings.TrimSpace(c.APNS.TeamID) == "" ||
+			strings.TrimSpace(c.APNS.BundleID) == "" {
+			problems = append(problems, "APNS_KEY_ID, APNS_TEAM_ID and APNS_BUNDLE_ID are required for relay APNs delivery")
+		}
+		if apnsFile == "" && apnsBase64 == "" {
+			problems = append(problems, "APNS_PRIVATE_KEY_FILE or APNS_PRIVATE_KEY_BASE64 is required for relay APNs delivery")
+		}
+		if apnsFile != "" && apnsBase64 != "" {
+			problems = append(problems, "configure only one APNs private key source")
+		}
+		if production && apnsBase64 != "" && isWeakSecret(apnsBase64) {
+			problems = append(problems, "APNS_PRIVATE_KEY_BASE64 is not safe for production")
+		}
+	}
+	if !firebaseConfigured && !apnsConfigured {
+		problems = append(problems, "push relay server requires at least one direct FCM or APNs provider")
+	}
+
+	return validationProblems(problems)
+}
+
+func (c *Config) validateOperationalServiceBase() []string {
+	problems := make([]string, 0)
+	if strings.TrimSpace(c.App.Name) == "" {
+		problems = append(problems, "APP_NAME must not be empty")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.App.Env)) {
+	case "dev", "development", "test", "staging", "production":
+	default:
+		problems = append(problems, "APP_ENV must be dev, development, test, staging or production")
+	}
+	if !c.Database.Enabled || strings.TrimSpace(c.Database.URL) == "" {
+		problems = append(problems, "DATABASE_ENABLED=true and DATABASE_URL are required for "+strings.TrimSpace(c.App.ServiceName))
+	}
+	return problems
+}
+
+func validationProblems(problems []string) error {
+	if len(problems) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(problems, "; "))
+}
+
+func isOperationalService(serviceName string) bool {
+	switch strings.ToLower(strings.TrimSpace(serviceName)) {
+	case "push-relay", "migrate":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c HTTPConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
@@ -523,6 +920,18 @@ func getEnvInt(key string, fallback int) int {
 	}
 
 	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
 		return fallback
 	}
@@ -658,4 +1067,35 @@ func isWeakSecret(secret string) bool {
 		strings.Contains(normalized, "change_me") ||
 		strings.Contains(normalized, "local_only") ||
 		strings.Contains(normalized, "do_not_use_in_production")
+}
+
+func validVAPIDKey(value string, expectedBytes int) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(raw) != expectedBytes {
+		return false
+	}
+	switch expectedBytes {
+	case 65:
+		x, y := elliptic.Unmarshal(elliptic.P256(), raw)
+		return x != nil && y != nil
+	case 32:
+		scalar := new(big.Int).SetBytes(raw)
+		return scalar.Sign() > 0 && scalar.Cmp(elliptic.P256().Params().N) < 0
+	default:
+		return true
+	}
+}
+
+func matchingVAPIDKeyPair(publicValue string, privateValue string) bool {
+	publicKey, publicErr := base64.RawURLEncoding.DecodeString(strings.TrimSpace(publicValue))
+	privateKey, privateErr := base64.RawURLEncoding.DecodeString(strings.TrimSpace(privateValue))
+	if publicErr != nil || privateErr != nil || len(publicKey) != 65 || len(privateKey) != 32 {
+		return false
+	}
+	x, y := elliptic.P256().ScalarBaseMult(privateKey)
+	return bytes.Equal(publicKey, elliptic.Marshal(elliptic.P256(), x, y))
 }

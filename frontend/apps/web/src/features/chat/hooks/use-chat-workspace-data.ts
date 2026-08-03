@@ -16,7 +16,8 @@ import type {
   Notification as ApiNotification,
   WorkspaceMember
 } from "@webtui/types";
-import { api } from "@/lib/api";
+import { api, runtimeEnvironment } from "@/lib/api";
+import { useAuthStore } from "@/features/auth/auth-store";
 import { useWorkspaceContext } from "@/features/workspace/hooks/use-workspace-context";
 import { useChannelRealtime } from "./use-channel-realtime";
 import {
@@ -28,17 +29,24 @@ import {
 } from "./use-message-timeline";
 import { useNotificationPresence } from "./use-notification-presence";
 import {
-  createClientMessageId,
-  enqueueOutbox,
-  isLikelyOfflineError,
-  readOutbox,
+  discardLegacyOutbox,
   readWorkspaceChatCache,
-  removeOutboxItem,
-  updateOutboxItem,
   writeWorkspaceChatCache,
-  type MessageOutboxEntry,
   type WorkspaceChatCache
 } from "../model/offline-cache";
+import {
+  classifyOutboxError,
+  createClientMessageId,
+  enqueueMessageOutbox,
+  flushMessageOutbox,
+  isLikelyOfflineError,
+  listMessageOutbox,
+  outboxScopeKey,
+  retryMessageOutbox,
+  subscribeOutboxChanges,
+  type MessageOutboxEntry,
+  type MessageOutboxScope
+} from "../model/message-outbox";
 import type {
   ChannelTone,
   ChatChannel,
@@ -52,12 +60,14 @@ import type {
   PresenceStatus
 } from "../model/types";
 import { useUploadStore, type UploadQueueItem } from "../stores/upload-store";
+import { useRealtimeStore } from "../stores/realtime-store";
 import { buildChatRoute, buildWorkspaceSectionRoute, directIdPrefix, directRouteRef, parseChatRoute } from "@/lib/chat-route";
 
 const channelTones: ChannelTone[] = ["purple", "green", "orange", "red", "violet", "slate"];
-// WebSocket events invalidate these queries immediately. This interval is only
-// a fallback for clients that temporarily lose realtime connectivity.
+// WebSocket events invalidate these queries immediately. Poll quickly only
+// while realtime is unavailable and keep a slow safety refresh once connected.
 const contactRefetchMs = 30_000;
+const connectedSafetyRefetchMs = 5 * 60_000;
 
 export type SendMessagePayload = {
   body: string;
@@ -98,14 +108,33 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
   const queryClient = useQueryClient();
   const lastMarkedReadRef = useRef("");
   const isFlushingOutboxRef = useRef(false);
+  const zoneApiBaseUrl = useAuthStore((state) => state.zoneRuntime?.api_base_url);
   const [isViewportActive, setIsViewportActive] = useState(() =>
     typeof document === "undefined" ? true : document.visibilityState === "visible" && document.hasFocus()
   );
+  const realtimeStatus = useRealtimeStore((state) => state.status);
+  const fallbackRefetchInterval = !isViewportActive
+    ? false
+    : realtimeStatus === "connected"
+      ? connectedSafetyRefetchMs
+      : contactRefetchMs;
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const workspaceContext = useWorkspaceContext();
   const { workspaceId } = workspaceContext;
+  const outboxScope = useMemo<MessageOutboxScope | null>(
+    () =>
+      workspaceId && currentUser.id
+        ? {
+            serverId: zoneApiBaseUrl ?? runtimeEnvironment.apiBaseUrl,
+            userId: currentUser.id,
+            workspaceId
+          }
+        : null,
+    [currentUser.id, workspaceId, zoneApiBaseUrl]
+  );
+  const currentOutboxScopeKey = outboxScope ? outboxScopeKey(outboxScope) : "";
   const [cachedChatState, setCachedChatState] = useState<{ value: WorkspaceChatCache | null; workspaceId: string }>({
     value: null,
     workspaceId: ""
@@ -118,23 +147,37 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
 
   useEffect(() => {
     let disposed = false;
-    void readOutbox()
-      .then((items) => {
-        if (!disposed) {
-          setOutboxItems(items);
-        }
-      })
-      .catch(() => undefined);
+    if (!outboxScope) {
+      setOutboxItems([]);
+      return undefined;
+    }
+
+    const refresh = () => {
+      void listMessageOutbox(outboxScope)
+        .then((items) => {
+          if (!disposed) {
+            setOutboxItems(items);
+          }
+        })
+        .catch(() => undefined);
+    };
+    void discardLegacyOutbox().finally(refresh);
+    const unsubscribe = subscribeOutboxChanges((changedScopeKey) => {
+      if (!changedScopeKey || changedScopeKey === currentOutboxScopeKey) {
+        refresh();
+      }
+    });
     return () => {
       disposed = true;
+      unsubscribe();
     };
-  }, []);
+  }, [currentOutboxScopeKey, outboxScope]);
 
   const channelsQuery = useQuery({
     enabled: Boolean(workspaceId),
     queryFn: () => api.channels.list(workspaceId),
     queryKey: queryKeys.channels.all(workspaceId),
-    refetchInterval: contactRefetchMs
+    refetchInterval: fallbackRefetchInterval
   });
   useEffect(() => {
     let disposed = false;
@@ -172,12 +215,12 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
   const contactsQuery = useQuery({
     queryFn: () => api.contacts.list(),
     queryKey: queryKeys.contacts.all,
-    refetchInterval: contactRefetchMs
+    refetchInterval: fallbackRefetchInterval
   });
   const contactRequestsQuery = useQuery({
     queryFn: () => api.contacts.requests({ status: "all" }),
     queryKey: queryKeys.contacts.requests("all"),
-    refetchInterval: contactRefetchMs
+    refetchInterval: fallbackRefetchInterval
   });
   const contacts = contactsQuery.data ?? [];
   const contactRequests = contactRequestsQuery.data ?? [];
@@ -192,7 +235,7 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
     enabled: Boolean(workspaceId),
     queryFn: () => api.channels.directConversations(workspaceId),
     queryKey: queryKeys.channels.directConversations(workspaceId),
-    refetchInterval: contactRefetchMs
+    refetchInterval: fallbackRefetchInterval
   });
   const directConversationSource = directConversationsQuery.data ?? cachedChat?.directConversations ?? [];
   useEffect(() => {
@@ -211,9 +254,9 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
         enabled: Boolean(workspaceId && channelId && !conversation.last_message),
         queryFn: () => api.messages.list(workspaceId, channelId, { limit: 1 }),
         queryKey: ["direct-conversation-summary", workspaceId, channelId] as const,
-        refetchInterval: contactRefetchMs,
+        refetchInterval: fallbackRefetchInterval,
         retry: 2,
-        staleTime: 3_000
+        staleTime: 60_000
       };
     })
   });
@@ -326,18 +369,38 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
     enabled: Boolean(workspaceId),
     workspaceId
   });
-  const selectedOutboxMessages = useMemo(() => {
+  const selectedMessagesWithOutbox = useMemo(() => {
     if (!workspaceId || !selectedChannelId) {
-      return [];
+      return messageTimeline.messages;
     }
-    const existingIds = new Set(messageTimeline.messages.map((message) => message.id));
-    return outboxItems
+    const entriesByLocalId = new Map(
+      outboxItems.map((item) => [`local-${item.clientMessageId}`, item])
+    );
+    const timelineMessages = messageTimeline.messages.map((message) => {
+      const entry = entriesByLocalId.get(message.id);
+      return entry
+        ? {
+            ...message,
+            deliveryError: entry.lastError,
+            deliveryState: entry.status,
+            outboxEntryId: entry.id
+          }
+        : message;
+    });
+    const existingIds = new Set(timelineMessages.map((message) => message.id));
+    const existingClientIds = new Set(timelineMessages.map((message) => message.clientMessageId).filter(Boolean));
+    const missingMessages = outboxItems
       .filter((item) => item.workspaceId === workspaceId && item.channelId === selectedChannelId)
-      .filter((item) => !existingIds.has(`local-${item.clientMessageId}`))
+      .filter(
+        (item) =>
+          !existingIds.has(`local-${item.clientMessageId}`) &&
+          !existingClientIds.has(item.clientMessageId)
+      )
       .map((item) => outboxEntryToChatMessage(item, currentUser));
+    return [...timelineMessages, ...missingMessages];
   }, [currentUser, messageTimeline.messages, outboxItems, selectedChannelId, workspaceId]);
   const selectedChannelWithMessages = selectedChannelId
-    ? { ...(selectedChannel ?? placeholderChannel(selectedChannelId)), messages: [...messageTimeline.messages, ...selectedOutboxMessages] }
+    ? { ...(selectedChannel ?? placeholderChannel(selectedChannelId)), messages: selectedMessagesWithOutbox }
     : null;
   const managedChannelIds = channels.filter((channel) => channel.canManage).map((channel) => channel.id);
   const joinRequestQueries = useQueries({
@@ -345,7 +408,7 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
       enabled: Boolean(workspaceId),
       queryFn: () => api.channels.joinRequests(workspaceId, channelId),
       queryKey: queryKeys.channels.joinRequests(workspaceId, channelId),
-      refetchInterval: contactRefetchMs
+      refetchInterval: fallbackRefetchInterval
     }))
   });
   const joinRequestsByChannelId = useMemo(
@@ -507,19 +570,22 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
           },
           silent: input.silent
         });
-        await removeOutboxItem(clientMessageId).catch(() => undefined);
       } catch (error) {
-        if (!uploads.length && messageBody && isLikelyOfflineError(error)) {
-          const entry = await enqueueOutbox({
-            body: messageBody,
-            channelId: selectedChannelId,
-            clientMessageId,
-            mentionedUserIds: input.mentionedUserIds,
-            parentId: input.parentId,
-            replyTo: input.replyTo,
-            workspaceId
-          });
-          setOutboxItems(await readOutbox().catch(() => [entry]));
+        const policy = classifyOutboxError(error);
+        if (!uploads.length && messageBody && policy.retryable && outboxScope) {
+          const entry = await enqueueMessageOutbox(
+            outboxScope,
+            {
+              body: messageBody,
+              channelId: selectedChannelId,
+              clientMessageId,
+              mentionedUserIds: input.mentionedUserIds,
+              parentId: input.parentId,
+              replyTo: input.replyTo
+            },
+            error
+          );
+          setOutboxItems(await listMessageOutbox(outboxScope).catch(() => [entry]));
           return {
             failedUploadNames: [],
             message: createOptimisticMessage({
@@ -664,8 +730,8 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
     },
     onSuccess: async (result, input, context) => {
       mergeMessageIntoTimeline(queryClient, workspaceId, selectedChannelId, result.message, context?.optimisticId);
-      if (!result.queued && input.clientMessageId) {
-        setOutboxItems(await readOutbox().catch(() => []));
+      if (!result.queued && input.clientMessageId && outboxScope) {
+        setOutboxItems(await listMessageOutbox(outboxScope).catch(() => []));
       }
       queryClient.setQueryData<ApiDirectConversation[]>(
         queryKeys.channels.directConversations(workspaceId),
@@ -688,17 +754,35 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
     }
   });
 
-  const flushOutbox = useCallback(async () => {
-    if (isFlushingOutboxRef.current || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+  const flushOutbox = useCallback(async (force = true) => {
+    if (
+      !outboxScope ||
+      isFlushingOutboxRef.current ||
+      (typeof navigator !== "undefined" && navigator.onLine === false)
+    ) {
       return;
     }
     isFlushingOutboxRef.current = true;
     try {
-      const items = await readOutbox();
-      for (const item of items) {
-        try {
-          await updateOutboxItem(item.clientMessageId, { attempts: item.attempts + 1, lastError: undefined });
-          const message = await api.messages.send(item.workspaceId, item.channelId, {
+      await flushMessageOutbox(outboxScope, {
+        force,
+        onSent: (item, result) => {
+          const message = result as ApiMessage;
+          if (!message?.id) {
+            throw new Error("Máy chủ không trả về tin nhắn sau khi gửi.");
+          }
+          mergeMessageIntoTimeline(queryClient, item.workspaceId, item.channelId, message, `local-${item.clientMessageId}`);
+          queryClient.setQueryData<ApiDirectConversation[]>(
+            queryKeys.channels.directConversations(item.workspaceId),
+            (current) => updateDirectConversationLastMessage(current, item.channelId, message)
+          );
+          queryClient.setQueryData<ApiChannel[]>(queryKeys.channels.all(item.workspaceId), (current) =>
+            updateChannelAfterOwnMessage(current, item.channelId, message)
+          );
+        },
+        onUpdated: setOutboxItems,
+        send: (item) =>
+          api.messages.send(item.workspaceId, item.channelId, {
             body: item.body,
             client_message_id: item.clientMessageId,
             kind: "text",
@@ -708,35 +792,28 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
               client_message_id: item.clientMessageId,
               ...(item.replyTo ? { reply_to: item.replyTo } : {})
             }
-          });
-          await removeOutboxItem(item.clientMessageId);
-          mergeMessageIntoTimeline(queryClient, item.workspaceId, item.channelId, message, `local-${item.clientMessageId}`);
-          queryClient.setQueryData<ApiDirectConversation[]>(
-            queryKeys.channels.directConversations(item.workspaceId),
-            (current) => updateDirectConversationLastMessage(current, item.channelId, message)
-          );
-          queryClient.setQueryData<ApiChannel[]>(queryKeys.channels.all(item.workspaceId), (current) =>
-            updateChannelAfterOwnMessage(current, item.channelId, message)
-          );
-        } catch (error) {
-          await updateOutboxItem(item.clientMessageId, {
-            attempts: item.attempts + 1,
-            lastError: error instanceof Error ? error.message : "Send failed."
-          }).catch(() => undefined);
-          if (isLikelyOfflineError(error)) {
-            break;
-          }
-        }
-      }
-      setOutboxItems(await readOutbox().catch(() => []));
+          })
+      });
     } finally {
       isFlushingOutboxRef.current = false;
     }
-  }, [queryClient]);
+  }, [outboxScope, queryClient]);
+
+  const retryOutboxItem = useCallback(
+    async (entryId: string) => {
+      if (!outboxScope) {
+        return;
+      }
+      await retryMessageOutbox(outboxScope, entryId);
+      setOutboxItems(await listMessageOutbox(outboxScope).catch(() => []));
+      await flushOutbox(true);
+    },
+    [flushOutbox, outboxScope]
+  );
 
   useEffect(() => {
     const handleOnline = () => {
-      void flushOutbox();
+      void flushOutbox(true);
       if (workspaceId && selectedChannelId) {
         void queryClient.invalidateQueries({ queryKey: messageTimelineKey(workspaceId, selectedChannelId) });
       }
@@ -749,7 +826,7 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
     if (realtime.status !== "connected") {
       return;
     }
-    void flushOutbox();
+    void flushOutbox(true);
     if (workspaceId && selectedChannelId) {
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: messageTimelineKey(workspaceId, selectedChannelId) }),
@@ -758,6 +835,22 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
       ]);
     }
   }, [flushOutbox, queryClient, realtime.status, selectedChannelId, workspaceId]);
+
+  useEffect(() => {
+    if (!outboxItems.length || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+      return undefined;
+    }
+    const now = Date.now();
+    const dueAt = outboxItems
+      .filter((item) => item.retryable)
+      .map((item) => item.status === "sending" ? (item.leaseExpiresAt ?? now) : (item.nextAttemptAt ?? now))
+      .sort((left, right) => left - right)[0];
+    if (dueAt === undefined) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => void flushOutbox(false), Math.max(0, dueAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [flushOutbox, outboxItems]);
 
   const downloadMutation = useMutation({
     mutationFn: (file: FileItem) => api.files.download(workspaceId, file.id)
@@ -945,7 +1038,9 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
     offlineReadMode,
     outboxItems,
     queuedOutboxCount: outboxItems.length,
+    failedOutboxCount: outboxItems.filter((item) => item.status === "failed").length,
     flushOutbox,
+    retryOutboxItem,
     presenceByUserId: notificationPresence.presenceByUserId,
     presenceQuery: notificationPresence.presenceQuery,
     pinnedMessages: messageTimeline.pinnedMessages,
@@ -1004,10 +1099,14 @@ function outboxEntryToChatMessage(entry: MessageOutboxEntry, currentUser: ChatUs
   return {
     author: currentUser,
     body: entry.body,
+    clientMessageId: entry.clientMessageId,
     id: `local-${entry.clientMessageId}`,
+    deliveryError: entry.lastError,
+    deliveryState: entry.status,
     isLocal: true,
     isMine: true,
     isPending: true,
+    outboxEntryId: entry.id,
     parentId: entry.parentId,
     rawChannelId: entry.channelId,
     rawCreatedAt: entry.createdAt,

@@ -31,6 +31,7 @@ export type ZoneRuntime = {
   ws_base_url: string;
   admin_base_url?: string;
   rtc_ice_servers?: RuntimeIceServer[];
+  capabilities?: ZoneCapabilities;
 };
 
 export type ZoneCapabilities = {
@@ -154,9 +155,31 @@ export type ZoneAdminDomain = {
 };
 
 export type ZoneAdminOverview = {
-  zone: ZoneSummary;
-  domains: ZoneAdminDomain[];
-  deployments: ZoneDeployment[];
+	zone: ZoneSummary;
+	domains: ZoneAdminDomain[];
+	deployments: ZoneDeployment[];
+};
+
+export type ZoneStorageProvider = "local" | "minio" | "s3";
+
+export type ZoneStorageSettings = {
+	provider: ZoneStorageProvider;
+	endpoint?: string;
+	region?: string;
+	bucket?: string;
+	access_key_id?: string;
+	has_secret_access_key: boolean;
+	configured: boolean;
+	updated_at?: string;
+};
+
+export type UpdateZoneStorageInput = {
+	provider: ZoneStorageProvider;
+	endpoint?: string;
+	region?: string;
+	bucket?: string;
+	access_key_id?: string;
+	secret_access_key?: string;
 };
 
 export type ZoneDeploymentRequest = {

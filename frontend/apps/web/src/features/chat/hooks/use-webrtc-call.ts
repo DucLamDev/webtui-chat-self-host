@@ -282,8 +282,14 @@ export function useWebRtcCall({
       localStream.getVideoTracks().forEach((track) => {
         track.enabled = defaultCameraEnabled;
       });
-      const discoveredIceServers =
-        useAuthStore.getState().zoneRuntime?.rtc_ice_servers;
+      let discoveredIceServers: RTCIceServer[];
+      try {
+        discoveredIceServers = (await api.calls.iceServers()) as RTCIceServer[];
+      } catch {
+        discoveredIceServers = (
+          useAuthStore.getState().zoneRuntime?.rtc_ice_servers ?? []
+        ) as RTCIceServer[];
+      }
       const connection = new RTCPeerConnection({
         iceServers: (
           discoveredIceServers?.length

@@ -1,6 +1,7 @@
 "use client";
 
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Avatar,
   Badge,
@@ -10,7 +11,6 @@ import {
   ErrorState,
   Input,
   MetricCard,
-  NavigationRail,
   SegmentedControl,
   Skeleton,
   Toast,
@@ -18,7 +18,6 @@ import {
   useTheme
 } from "@webtui/ui";
 import {
-  Activity,
   Bell,
   Bot,
   CalendarClock,
@@ -27,8 +26,10 @@ import {
   KeyRound,
   LogOut,
   MessageCircle,
+  PanelLeftOpen,
   Plus,
   Moon,
+  RefreshCw,
   Search,
   Send,
   Settings,
@@ -66,74 +67,23 @@ import type {
 } from "@webtui/types";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiStatus } from "../../platform/hooks/use-api-status";
+import { AdminSidebar } from "./admin-sidebar";
 import { useAdminDashboardData } from "../hooks/use-admin-dashboard-data";
 import type { AdminUser, AdminUserFilter, ChannelRank, DashboardMetric } from "../model/types";
+import {
+  adminPageMeta,
+  adminSectionGroup,
+  type AdminNavId,
+  resolveAdminSection
+} from "../model/navigation";
+import {
+  confirmDestructiveAction,
+  escapeCsvCell,
+  isAdminUserBlockedStatus
+} from "../model/admin-safety";
 
 type DashboardData = ReturnType<typeof useAdminDashboardData>;
 type ToastTone = "danger" | "info" | "success";
-
-const navItems = [
-  { id: "overview", label: "Tổng quan", icon: Activity },
-  { id: "messages", label: "Tin nhắn", icon: MessageCircle },
-  { id: "channels", label: "Kênh", icon: Hash },
-  { id: "users", label: "Người dùng", icon: Users },
-  { id: "roles", label: "Vai trò", icon: ShieldCheck },
-  { id: "integrations", label: "Tích hợp", icon: Workflow },
-  { id: "automations", label: "Automation", icon: Zap },
-  { id: "bots", label: "Bot", icon: Bot },
-  { id: "cronjobs", label: "Cronjob", icon: CalendarClock },
-  { id: "backups", label: "Backup", icon: Database },
-  { id: "settings", label: "Cài đặt", icon: Settings }
-] as const;
-
-type AdminNavId = (typeof navItems)[number]["id"];
-
-const pageMeta: Record<AdminNavId, { description: string; title: string }> = {
-  overview: {
-    description: "Theo dõi sức khỏe, hoạt động và các chỉ số quan trọng của workspace.",
-    title: "Tổng quan hệ thống"
-  },
-  messages: {
-    description: "Quản lý và giám sát tất cả tin nhắn trong hệ thống.",
-    title: "Quản trị tin nhắn"
-  },
-  channels: {
-    description: "Quản lý kênh nhóm, kênh riêng và các phiên bot riêng tư.",
-    title: "Quản trị kênh"
-  },
-  users: {
-    description: "Quản lý tài khoản, thành viên và trạng thái truy cập workspace.",
-    title: "Quản trị người dùng"
-  },
-  roles: {
-    description: "Thiết lập vai trò và quyền hạn theo nguyên tắc tối thiểu.",
-    title: "Vai trò và phân quyền"
-  },
-  integrations: {
-    description: "Quản lý API token, webhook và các kết nối dịch vụ bên ngoài.",
-    title: "Tích hợp hệ thống"
-  },
-  automations: {
-    description: "Cài workflow, connector và bot theo cấu hình riêng của zone hiện tại.",
-    title: "Automation theo zone"
-  },
-  bots: {
-    description: "Quản lý bot, cài đặt vào workspace và theo dõi hoạt động.",
-    title: "Quản trị bot"
-  },
-  cronjobs: {
-    description: "Lập lịch, theo dõi và vận hành các tác vụ tự động.",
-    title: "Tác vụ định kỳ"
-  },
-  backups: {
-    description: "Quản lý lịch sao lưu và lịch sử khôi phục dữ liệu.",
-    title: "Sao lưu dữ liệu"
-  },
-  settings: {
-    description: "Cấu hình workspace và kiểm tra trạng thái các dịch vụ nền.",
-    title: "Cài đặt hệ thống"
-  }
-};
 
 const userFilters: Array<{ label: string; value: AdminUserFilter }> = [
   { label: "Tất cả", value: "all" },
@@ -169,17 +119,37 @@ const backupStatuses = [
 export function AdminDashboard() {
   const { logout, user } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const [activeNavItem, setActiveNavItem] = useState<AdminNavId>("overview");
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const activeNavItem = resolveAdminSection(searchParams.get("section"));
   const [userFilter, setUserFilter] = useState<AdminUserFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedBackupJobId, setSelectedBackupJobId] = useState("");
   const [selectedBotId, setSelectedBotId] = useState("");
   const [selectedCronJobId, setSelectedCronJobId] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [selectedOutgoingWebhookId, setSelectedOutgoingWebhookId] = useState("");
   const [toast, setToastState] = useState<{ message: string; tone: ToastTone } | null>(null);
+  const previousSection = useRef(activeNavItem);
   const apiStatus = useApiStatus();
+  const setActiveNavItem = useCallback((section: AdminNavId) => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (section === "overview") {
+      nextParams.delete("section");
+    } else {
+      nextParams.set("section", section);
+    }
+    const query = nextParams.toString();
+    router.push(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    setMobileNavOpen(false);
+    setSearchQuery("");
+  }, [pathname, router, searchParams]);
   const data = useAdminDashboardData({
+    activeSection: activeNavItem,
     selectedBackupJobId,
     selectedBotId,
     selectedCronJobId,
@@ -192,9 +162,41 @@ export function AdminDashboard() {
   const activityBars = useMemo(() => mapActivityBars(data.statsQuery.data), [data.statsQuery.data]);
   const channelRanks = useMemo(() => mapChannelRanks(data.statsQuery.data), [data.statsQuery.data]);
   const healthChecks = useMemo(() => mapHealthChecks(data.healthQuery.data), [data.healthQuery.data]);
-  const activePage = pageMeta[activeNavItem];
+  const activePage = adminPageMeta[activeNavItem];
   const showSystemPanel = activeNavItem === "overview";
+  const searchable = activeNavItem === "messages" || activeNavItem === "channels" || activeNavItem === "users";
   const profile = useMemo(() => mapProfile(user), [user]);
+
+  useEffect(() => {
+    setSidebarCollapsed(window.localStorage.getItem("webtui-admin-sidebar-collapsed") === "true");
+  }, []);
+
+  useEffect(() => {
+    function handleShortcut(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const editing = target?.matches("input, textarea, select, [contenteditable='true']");
+      if (event.key === "/" && searchable && !editing) {
+        event.preventDefault();
+        document.getElementById("admin-global-search")?.focus();
+      }
+      if (event.key === "Escape" && mobileNavOpen) {
+        setMobileNavOpen(false);
+      }
+    }
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [mobileNavOpen, searchable]);
+
+  useEffect(() => {
+    if (previousSection.current === activeNavItem) {
+      return;
+    }
+    previousSection.current = activeNavItem;
+    const focusFrame = window.requestAnimationFrame(() => {
+      document.getElementById("admin-content")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [activeNavItem]);
 
   const filteredUsers = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -236,22 +238,57 @@ export function AdminDashboard() {
   const adminDenied = Boolean(data.workspaceId && !data.permissionsQuery.isLoading && !data.canViewAdmin);
   const showToast = (message: string, tone: ToastTone = "success") => setToastState({ message, tone });
 
+  const refreshActiveSection = async () => {
+    setIsRefreshing(true);
+    try {
+      await data.refreshActiveQueries();
+      showToast("Đã cập nhật dữ liệu mới nhất.", "info");
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem("webtui-admin-sidebar-collapsed", String(next));
+      return next;
+    });
+  };
+
   return (
-    <main className="admin-shell admin-shell--wide" aria-label="Bảng quản trị WebTui">
-      <NavigationRail
+    <div className={`admin-shell admin-shell--v2${sidebarCollapsed ? " admin-shell--sidebar-collapsed" : ""}`}>
+      <a className="admin-skip-link" href="#admin-content">Bỏ qua điều hướng</a>
+      <AdminSidebar
         activeId={activeNavItem}
-        ariaLabel="Điều hướng quản trị"
-        brandTitle="Quản trị hệ thống"
-        items={[...navItems]}
-        onSelect={(id) => setActiveNavItem(id as AdminNavId)}
-        profile={{ ...profile, description: "Quản trị viên", label: profile.name }}
+        collapsed={sidebarCollapsed}
+        mobileOpen={mobileNavOpen}
+        onCloseMobile={() => setMobileNavOpen(false)}
+        onPrefetch={data.prefetchSection}
+        onSelect={setActiveNavItem}
+        onToggleCollapsed={toggleSidebar}
+        profile={profile}
       />
 
-      <section className="admin-main">
+      <main aria-busy={data.activeFetchCount > 0} className="admin-main" id="admin-content" tabIndex={-1}>
         <header className="admin-header">
-          <div className="admin-header__context">
-            <strong>Admin workspace</strong>
-            <span>Trung tâm điều hành VPSTTT</span>
+          <div className="admin-header__leading">
+            <Button
+              aria-controls="admin-navigation"
+              aria-expanded={mobileNavOpen}
+              aria-label="Mở menu quản trị"
+              className="admin-mobile-menu"
+              onClick={() => setMobileNavOpen(true)}
+              variant="icon"
+            >
+              <PanelLeftOpen aria-hidden size={19} />
+            </Button>
+            <div aria-label="Vị trí hiện tại" className="admin-header__context">
+              <span>{adminSectionGroup(activeNavItem)}</span>
+              <strong>{activePage.label}</strong>
+            </div>
           </div>
           <div className="admin-actions">
             <select
@@ -267,25 +304,36 @@ export function AdminDashboard() {
                 </option>
               ))}
             </select>
-            <Input
-              aria-label="Tìm kiếm trong trang quản trị"
-              className="admin-search-control"
-              leftAddon={<Search size={18} />}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Tìm kiếm dữ liệu..."
-              value={searchQuery}
-            />
-            <Tooltip label="Thông báo hệ thống">
+            {searchable ? (
+              <Input
+                aria-label={`Tìm kiếm trong ${activePage.label}`}
+                className="admin-search-control"
+                id="admin-global-search"
+                leftAddon={<Search aria-hidden size={17} />}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={`Tìm trong ${activePage.label.toLowerCase()}...`}
+                rightAddon={<kbd aria-hidden>/</kbd>}
+                value={searchQuery}
+              />
+            ) : null}
+            <Tooltip label="Làm mới dữ liệu">
               <Button
-                aria-label="Thông báo hệ thống"
-                className="admin-notification-button"
-                onClick={() => {
-                  setActiveNavItem("overview");
-                  showToast(apiStatus.status === "online" ? "Hệ thống đang hoạt động ổn định." : apiStatus.label, "info");
-                }}
+                aria-label="Làm mới dữ liệu màn hình"
+                disabled={isRefreshing}
+                onClick={() => void refreshActiveSection()}
                 variant="icon"
               >
-                <Bell size={19} />
+                <RefreshCw aria-hidden className={isRefreshing ? "admin-spin" : undefined} size={18} />
+              </Button>
+            </Tooltip>
+            <Tooltip label="Mở vận hành push notification">
+              <Button
+                aria-label="Mở vận hành push notification"
+                className="admin-notification-button"
+                onClick={() => setActiveNavItem("push")}
+                variant="icon"
+              >
+                <Bell aria-hidden size={18} />
                 {apiStatus.status === "offline" ? <i aria-hidden="true" /> : null}
               </Button>
             </Tooltip>
@@ -295,12 +343,12 @@ export function AdminDashboard() {
                 onClick={toggleTheme}
                 variant="icon"
               >
-                {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
+                {theme === "dark" ? <Sun aria-hidden size={18} /> : <Moon aria-hidden size={18} />}
               </Button>
             </Tooltip>
             <Tooltip label="Đăng xuất">
               <Button aria-label="Đăng xuất" onClick={logout} variant="icon">
-                <LogOut size={19} />
+                <LogOut aria-hidden size={18} />
               </Button>
             </Tooltip>
             <Avatar name={profile.name} src={profile.src} status={profile.status} />
@@ -309,21 +357,34 @@ export function AdminDashboard() {
 
         <div className="admin-page-heading">
           <div>
-            <span className="eyebrow">Quản trị hệ thống</span>
+            <span className="eyebrow">
+              {adminSectionGroup(activeNavItem)} · {data.selectedWorkspace?.name ?? "Workspace"}
+            </span>
             <h1>{activePage.title}</h1>
             <p>{activePage.description}</p>
           </div>
-          <div className={`api-status-pill api-status-pill--${apiStatus.status}`}>
+          <div
+            aria-live="polite"
+            className={`api-status-pill api-status-pill--${apiStatus.status}`}
+            role="status"
+            title={apiStatus.detail}
+          >
             <span />
             <strong>{apiStatus.label}</strong>
           </div>
         </div>
 
-        {!data.workspaceId && !data.workspacesQuery.isLoading ? (
+        {data.workspacesQuery.isError ? (
+          <ErrorState
+            action={<Button onClick={() => void data.workspacesQuery.refetch()} size="sm" variant="secondary">Thử lại</Button>}
+            description={errorMessage(data.workspacesQuery.error)}
+            title="Không tải được danh sách workspace"
+          />
+        ) : !data.workspaceId && !data.workspacesQuery.isLoading ? (
           <ErrorState description="Tài khoản hiện tại chưa có workspace để quản trị." title="Chưa có workspace" />
         ) : null}
 
-        {adminDenied ? (
+        {data.workspacesQuery.isError || !data.workspaceId ? null : adminDenied ? (
           <ErrorState
             description="Tài khoản hiện tại chưa có quyền `admin.view` trong workspace này."
             title="Chưa đủ quyền quản trị"
@@ -361,7 +422,7 @@ export function AdminDashboard() {
             onOpenSettings={() => setActiveNavItem("settings")}
           />
         ) : null}
-      </section>
+      </main>
 
       {toast ? (
         <div className="toast-stack">
@@ -373,7 +434,7 @@ export function AdminDashboard() {
           </Toast>
         </div>
       ) : null}
-    </main>
+    </div>
   );
 }
 
@@ -433,6 +494,10 @@ function DashboardSection({
         metrics={metrics}
       />
     );
+  }
+
+  if (activeNavItem === "push") {
+    return <PushQueueSection data={data} showToast={showToast} />;
   }
 
   if (activeNavItem === "messages") {
@@ -520,14 +585,7 @@ function DashboardSection({
     return <SystemSettingsSection data={data} healthChecks={healthChecks} showToast={showToast} />;
   }
 
-  return (
-    <section className="admin-panel">
-      <EmptyState
-        description="Màn này thuộc phase vận hành tiếp theo. Hiện dashboard chưa dựng dữ liệu giả cho khu vực này."
-        title="Chưa triển khai trong phase hiện tại"
-      />
-    </section>
-  );
+  return null;
 }
 
 function AdminMessagesSection({ data, searchQuery, setSearchQuery }: { data: DashboardData; searchQuery: string; setSearchQuery: (value: string) => void }) {
@@ -564,6 +622,10 @@ function AdminMessagesSection({ data, searchQuery, setSearchQuery }: { data: Das
   ).length;
 
   useEffect(() => setPage(1), [kindFilter, query, senderFilter]);
+
+  if (!data.canManageMessages) {
+    return <PermissionNotice permission="message.manage" />;
+  }
 
   return (
     <section className="admin-content-stack admin-resource-page">
@@ -725,11 +787,11 @@ function PaginationFooter({ count, onPageChange, page, pageCount, pageSize }: { 
     <footer className="admin-pagination">
       <span>Hiển thị <strong>{start}-{end}</strong> trong tổng số <strong>{count}</strong></span>
       <nav aria-label="Phân trang">
-        <Button disabled={page <= 1} onClick={() => onPageChange(page - 1)} size="sm" variant="secondary">‹</Button>
+        <Button aria-label="Trang trước" disabled={page <= 1} onClick={() => onPageChange(page - 1)} size="sm" variant="secondary">‹</Button>
         {visiblePages.map((item) => (
           <Button key={item} onClick={() => onPageChange(item)} size="sm" variant={item === page ? "primary" : "secondary"}>{item}</Button>
         ))}
-        <Button disabled={page >= pageCount} onClick={() => onPageChange(page + 1)} size="sm" variant="secondary">›</Button>
+        <Button aria-label="Trang sau" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)} size="sm" variant="secondary">›</Button>
       </nav>
     </footer>
   );
@@ -746,6 +808,29 @@ function OverviewSection({
   data: DashboardData;
   metrics: DashboardMetric[];
 }) {
+  if (data.statsQuery.isError) {
+    return (
+      <section className="admin-content-stack">
+        <article className="admin-panel">
+          <ErrorState
+            action={<Button onClick={() => void data.statsQuery.refetch()} size="sm" variant="secondary">Thử lại</Button>}
+            description={errorMessage(data.statsQuery.error)}
+            title="Không tải được chỉ số tổng quan"
+          />
+        </article>
+        <AuditPanel compact data={data} />
+      </section>
+    );
+  }
+
+  const healthStatus = data.healthQuery.isLoading
+    ? { label: "Đang kiểm tra", tone: "orange" as const }
+    : data.healthQuery.isError
+      ? { label: "Không kiểm tra được", tone: "red" as const }
+      : data.healthQuery.data?.status === "ready"
+        ? { label: "Ổn định", tone: "green" as const }
+        : { label: "Suy giảm", tone: "orange" as const };
+
   return (
     <>
       <section className="metric-grid" aria-label="Chỉ số tổng quan">
@@ -771,12 +856,16 @@ function OverviewSection({
               <h2>Hoạt động hệ thống</h2>
               <p>Dữ liệu biểu đồ lấy từ API admin stats khi backend cung cấp.</p>
             </div>
-            <Badge tone={data.healthQuery.data?.status === "ready" ? "green" : "orange"}>
-              {data.healthQuery.data?.status === "ready" ? "Ổn định" : "Đang kiểm tra"}
+            <Badge tone={healthStatus.tone}>
+              {healthStatus.label}
             </Badge>
           </header>
           {activityBars.length ? (
-            <div className="line-chart" aria-label="Biểu đồ hoạt động hệ thống">
+            <div
+              className="line-chart"
+              aria-label={`Biểu đồ hoạt động hệ thống gồm ${activityBars.length} điểm, giá trị tương đối từ ${Math.min(...activityBars)} đến ${Math.max(...activityBars)} phần trăm`}
+              role="img"
+            >
               {activityBars.map((height, index) => (
                 <i aria-hidden="true" key={`${height}-${index}`} style={{ height: `${height}%` }} />
               ))}
@@ -1085,13 +1174,13 @@ function UsersSection({
               ))}
             </select>
           </label>
-          <Button disabled={data.addMemberMutation.isPending || !data.canManageWorkspace} type="submit">
+          <Button disabled={data.addMemberMutation.isPending || !data.canInviteUsers} type="submit">
             <Plus size={16} />
             Thêm thành viên
           </Button>
         </form>
-        {!data.canManageWorkspace ? (
-          <PermissionNotice permission="workspace.manage" />
+        {!data.canInviteUsers ? (
+          <PermissionNotice permission="workspace.invite_user" />
         ) : null}
         {data.membersQuery.isLoading ? (
           <TableSkeleton />
@@ -1126,11 +1215,11 @@ function UsersSection({
                   </Button>
                   <Button
                     disabled={data.updateMemberStatusMutation.isPending || !data.canManageWorkspace}
-                    onClick={() => void updateMemberStatus(member.user_id, "inactive")}
+                    onClick={() => void updateMemberStatus(member.user_id, "disabled")}
                     size="sm"
                     variant="ghost"
                   >
-                    Inactive
+                    Disabled
                   </Button>
                 </span>
               </div>
@@ -1207,6 +1296,10 @@ function RolesSection({
       return;
     }
 
+    if (!confirmDestructiveAction("Gỡ vai trò này khỏi thành viên đã chọn? Quyền truy cập của họ sẽ thay đổi ngay.")) {
+      return;
+    }
+
     try {
       await data.revokeMemberRoleMutation.mutateAsync({ roleId, userId: selectedMemberId });
       showToast("Đã gỡ role khỏi thành viên.");
@@ -1217,7 +1310,6 @@ function RolesSection({
 
   return (
     <section className="admin-content-stack">
-      <InstanceAdministration data={data} showToast={showToast} />
       <article className="admin-panel">
         <header>
           <div>
@@ -1376,6 +1468,12 @@ function IntegrationsSection({
   setSelectedOutgoingWebhookId: (value: string) => void;
   showToast: (message: string, tone?: ToastTone) => void;
 }) {
+  useEffect(() => () => {
+    data.createApiTokenMutation.reset();
+    data.createIncomingWebhookMutation.reset();
+    data.createOutgoingWebhookMutation.reset();
+  }, []);
+
   async function handleCreateToken(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -1436,6 +1534,10 @@ function IntegrationsSection({
   }
 
   async function revokeToken(tokenId: string) {
+    if (!confirmDestructiveAction("Thu hồi API token này? Các ứng dụng đang dùng token sẽ mất kết nối ngay.")) {
+      return;
+    }
+
     try {
       await data.revokeApiTokenMutation.mutateAsync(tokenId);
       showToast("Đã thu hồi API token.");
@@ -1445,6 +1547,10 @@ function IntegrationsSection({
   }
 
   async function deleteIncoming(webhookId: string) {
+    if (!confirmDestructiveAction("Xóa incoming webhook này? URL và secret hiện tại sẽ không thể khôi phục.")) {
+      return;
+    }
+
     try {
       await data.deleteIncomingWebhookMutation.mutateAsync(webhookId);
       showToast("Đã xóa incoming webhook.");
@@ -1459,6 +1565,10 @@ function IntegrationsSection({
   }
 
   async function deleteOutgoing(webhookId: string) {
+    if (!confirmDestructiveAction("Xóa outgoing webhook này? Các lần gửi sự kiện tiếp theo sẽ dừng.")) {
+      return;
+    }
+
     try {
       await data.deleteOutgoingWebhookMutation.mutateAsync(webhookId);
       showToast("Đã xóa outgoing webhook.");
@@ -1508,7 +1618,7 @@ function IntegrationsSection({
             </Button>
           </form>
           {data.createApiTokenMutation.data?.token ? (
-            <SecretBox label="API token mới" value={data.createApiTokenMutation.data.token} />
+            <SecretBox label="API token mới" onDismiss={data.createApiTokenMutation.reset} value={data.createApiTokenMutation.data.token} />
           ) : null}
         </article>
 
@@ -1548,10 +1658,10 @@ function IntegrationsSection({
             </Button>
           </form>
           {data.createIncomingWebhookMutation.data?.secret ? (
-            <SecretBox label="Secret incoming webhook" value={data.createIncomingWebhookMutation.data.secret} />
+            <SecretBox label="Secret incoming webhook" onDismiss={data.createIncomingWebhookMutation.reset} value={data.createIncomingWebhookMutation.data.secret} />
           ) : null}
           {data.createIncomingWebhookMutation.data?.url ? (
-            <SecretBox label="URL incoming webhook" value={data.createIncomingWebhookMutation.data.url} />
+            <SecretBox label="URL incoming webhook" onDismiss={data.createIncomingWebhookMutation.reset} value={data.createIncomingWebhookMutation.data.url} />
           ) : null}
           <WebhookList incomingWebhooks={data.incomingWebhooks} onDelete={(id) => void deleteIncoming(id)} onToggle={(webhook) => void toggleIncoming(webhook)} />
         </article>
@@ -1584,7 +1694,7 @@ function IntegrationsSection({
             </Button>
           </form>
           {data.createOutgoingWebhookMutation.data?.secret ? (
-            <SecretBox label="Secret outgoing webhook" value={data.createOutgoingWebhookMutation.data.secret} />
+            <SecretBox label="Secret outgoing webhook" onDismiss={data.createOutgoingWebhookMutation.reset} value={data.createOutgoingWebhookMutation.data.secret} />
           ) : null}
           <OutgoingWebhookList
             onDelete={(id) => void deleteOutgoing(id)}
@@ -1608,6 +1718,8 @@ function AutomationsSection({
   data: DashboardData;
   showToast: (message: string, tone?: ToastTone) => void;
 }) {
+  useEffect(() => () => data.createAutomationInstallationMutation.reset(), []);
+
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -1652,6 +1764,10 @@ function AutomationsSection({
   }
 
   async function handleDelete(installationId: string) {
+    if (!confirmDestructiveAction("Gỡ automation này khỏi zone? Workflow liên quan sẽ ngừng chạy.")) {
+      return;
+    }
+
     try {
       await data.deleteAutomationInstallationMutation.mutateAsync(installationId);
       showToast("Đã gỡ automation khỏi zone.");
@@ -1732,6 +1848,7 @@ function AutomationsSection({
           {data.createAutomationInstallationMutation.data?.runtime_secret ? (
             <SecretBox
               label="Signing secret automation (chi hien thi mot lan)"
+              onDismiss={data.createAutomationInstallationMutation.reset}
               value={data.createAutomationInstallationMutation.data.runtime_secret}
             />
           ) : null}
@@ -1990,7 +2107,7 @@ function BotsSection({
           <form className="admin-form" onSubmit={(event) => void handleInstallBot(event)}>
             <label>
               Bot
-              <BotSelect bots={data.bots} name="bot_id" selectedId={selectedBotId} />
+              <BotSelect bots={data.bots} name="bot_id" onSelect={setSelectedBotId} selectedId={selectedBotId} />
             </label>
             <label>
               Kênh
@@ -2014,7 +2131,7 @@ function BotsSection({
           <form className="admin-form" onSubmit={(event) => void handleSendBotMessage(event)}>
             <label>
               Bot
-              <BotSelect bots={data.bots} name="bot_id" selectedId={selectedBotId} />
+              <BotSelect bots={data.bots} name="bot_id" onSelect={setSelectedBotId} selectedId={selectedBotId} />
             </label>
             <label>
               Kênh
@@ -2100,6 +2217,10 @@ function CronjobsSection({
   }
 
   async function handleDeleteCronJob(job: CronJob) {
+    if (!confirmDestructiveAction(`Xóa cronjob ${job.name || shortId(job.id)}? Lịch chạy này không thể khôi phục.`)) {
+      return;
+    }
+
     try {
       await data.deleteCronjobMutation.mutateAsync(job.id);
       if (selectedCronJobId === job.id) {
@@ -2210,6 +2331,188 @@ function CronjobsSection({
           runs={data.cronjobRuns}
           selectedJob={selectedJob}
         />
+      </article>
+    </section>
+  );
+}
+
+function PushQueueSection({
+  data,
+  showToast
+}: {
+  data: DashboardData;
+  showToast: (message: string, tone?: ToastTone) => void;
+}) {
+  const overview = data.pushQueueQuery.data;
+
+  async function replayDeadLetter(jobId: string) {
+    try {
+      const result = await data.replayPushDeadLetterMutation.mutateAsync(jobId);
+      showToast(
+        result.created
+          ? `Đã tạo push job chạy lại ${shortId(result.replay_job_id)}.`
+          : `Dead-letter này đã có job chạy lại ${shortId(result.replay_job_id)}.`,
+        "info"
+      );
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    }
+  }
+
+  if (data.pushQueueQuery.isLoading) {
+    return (
+      <section className="metric-grid" aria-label="Đang tải chỉ số push">
+        <MetricSkeleton />
+      </section>
+    );
+  }
+
+  if (data.pushQueueQuery.isError) {
+    return (
+      <ErrorState
+        description="Không tải được số liệu vận hành push. Kiểm tra migration và kết nối database rồi thử lại."
+        title="Không đọc được push queue"
+      />
+    );
+  }
+
+  if (!overview) {
+    return <EmptyState description="Backend chưa trả dữ liệu push queue." title="Chưa có số liệu" />;
+  }
+
+  const deliveryRate = overview.delivery_rate_percent_24h;
+  const maxHourly = Math.max(
+    1,
+    ...overview.hourly_activity.map((point) => point.sent + point.dead)
+  );
+
+  return (
+    <section className="admin-content-stack">
+      <section className="metric-grid" aria-label="Chỉ số push notification">
+        <MetricCard
+          delta={`${formatNumber(overview.pending)} chờ · ${formatNumber(overview.processing)} đang xử lý`}
+          label="Độ sâu hàng đợi"
+          tone={overview.queue_depth > 0 ? "orange" : "green"}
+          value={formatNumber(overview.queue_depth)}
+        />
+        <MetricCard
+          delta={`${formatNumber(overview.skipped_24h)} bỏ qua vì không có đích nhận`}
+          label="Đã giao"
+          tone="blue"
+          value={formatNumber(overview.sent_24h)}
+        />
+        <MetricCard
+          delta={deliveryRate == null ? "Chưa có mẫu hoàn tất" : `${formatNumber(overview.sent_24h + overview.dead_24h)} job hoàn tất`}
+          label="Tỷ lệ giao"
+          tone={deliveryRate != null && deliveryRate >= 99 ? "green" : "orange"}
+          value={deliveryRate == null ? "—" : `${deliveryRate.toFixed(1)}%`}
+        />
+        <MetricCard
+          delta={`${formatNumber(overview.failed)} job đang chờ retry`}
+          label="Dead-letter 24h"
+          tone={overview.dead_24h > 0 ? "orange" : "green"}
+          value={formatNumber(overview.dead_24h)}
+        />
+      </section>
+
+      <section className="admin-grid">
+        <article className="admin-panel">
+          <header>
+            <div>
+              <h2>Delivery theo giờ</h2>
+              <p>24 giờ gần nhất; màu xanh là thành công, màu cam là dead-letter.</p>
+            </div>
+            <Badge tone={overview.dead_24h > 0 ? "orange" : "green"}>
+              {overview.dead_24h > 0 ? "Cần kiểm tra" : "Ổn định"}
+            </Badge>
+          </header>
+          <div className="push-hourly-chart" role="img" aria-label="Biểu đồ delivery push trong 24 giờ">
+            {overview.hourly_activity.map((point) => (
+              <span
+                key={point.hour}
+                title={`${formatDateTime(point.hour)}: ${point.sent} thành công, ${point.dead} dead-letter`}
+              >
+                <i
+                  className="push-hourly-chart__sent"
+                  style={{ height: `${Math.max(point.sent ? 3 : 0, (point.sent / maxHourly) * 100)}%` }}
+                />
+                <i
+                  className="push-hourly-chart__dead"
+                  style={{ height: `${Math.max(point.dead ? 3 : 0, (point.dead / maxHourly) * 100)}%` }}
+                />
+              </span>
+            ))}
+          </div>
+        </article>
+
+        <article className="admin-panel">
+          <header>
+            <div>
+              <h2>Provider và độ trễ queue</h2>
+              <p>Số destination đã hoàn tất trong 24 giờ, không hiển thị token hoặc payload.</p>
+            </div>
+            <Send size={20} />
+          </header>
+          <div className="push-provider-list">
+            {overview.provider_deliveries_24h.length ? overview.provider_deliveries_24h.map((provider) => (
+              <div key={provider.provider}>
+                <span>{provider.provider}</span>
+                <strong>{formatNumber(provider.count)}</strong>
+              </div>
+            )) : <p>Chưa có destination được giao trong cửa sổ hiện tại.</p>}
+            <div>
+              <span>Job cũ nhất trong queue</span>
+              <strong>{formatQueueAge(overview.oldest_queue_age_seconds)}</strong>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <article className="admin-panel admin-table-panel">
+        <header>
+          <div>
+            <h2>Dead-letter gần nhất</h2>
+            <p>Chạy lại tạo một job mới có audit link; job cũ được giữ nguyên để điều tra.</p>
+          </div>
+          {!data.canManageNotifications ? <Badge tone="slate">Chỉ xem</Badge> : null}
+        </header>
+        {overview.dead_letters.length ? (
+          <div className="admin-table-wrap">
+            <table className="admin-table admin-table--push" aria-label="Danh sách push dead-letter">
+              <thead>
+                <tr>
+                  <th>Job</th>
+                  <th>Lần thử</th>
+                  <th>Lỗi cuối</th>
+                  <th>Cập nhật</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overview.dead_letters.map((job) => (
+                  <tr key={job.id}>
+                    <td><strong>{shortId(job.id)}</strong><small>{formatDateTime(job.created_at)}</small></td>
+                    <td>{formatNumber(job.attempt_count)}</td>
+                    <td><span className="admin-message-preview" title={job.error}>{job.error}</span></td>
+                    <td>{formatDateTime(job.updated_at)}</td>
+                    <td>
+                      <Button
+                        disabled={!data.canManageNotifications || data.replayPushDeadLetterMutation.isPending}
+                        onClick={() => void replayDeadLetter(job.id)}
+                        size="sm"
+                        variant="secondary"
+                      >
+                        Chạy lại
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState description="Không có push job nào hết retry." title="Dead-letter đang trống" />
+        )}
       </article>
     </section>
   );
@@ -2735,6 +3038,7 @@ function SystemSettingsSection({
 
   return (
     <section className="admin-content-stack">
+      <InstanceAdministration data={data} showToast={showToast} />
       <article className="admin-panel">
         <header>
           <div>
@@ -2813,12 +3117,95 @@ function InstanceAdministration({
   async function changeLifecycle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const action = formValue(form, "action") as "suspend" | "resume" | "archive";
+    if (
+      action !== "resume" &&
+      !confirmDestructiveAction(
+        action === "archive"
+          ? "Archive zone này? Người dùng sẽ mất quyền truy cập và thao tác cần quy trình khôi phục riêng."
+          : "Tạm dừng zone này? Người dùng sẽ mất kết nối cho tới khi zone được resume."
+      )
+    ) {
+      return;
+    }
+
     try {
       await data.setZoneLifecycleMutation.mutateAsync({
-        action: formValue(form, "action") as "suspend" | "resume" | "archive",
+        action,
         reason: formValue(form, "reason") || undefined
       });
       showToast("Đã cập nhật vòng đời zone.");
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    }
+  }
+
+  async function deleteDomain(domainId: string, domain: string) {
+    if (!confirmDestructiveAction(`Xóa domain ${domain}? DNS và liên kết truy cập hiện tại có thể ngừng hoạt động.`)) {
+      return;
+    }
+
+    try {
+      await data.deleteZoneDomainMutation.mutateAsync(domainId);
+      showToast("Đã xóa domain khỏi zone.");
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    }
+  }
+
+  async function verifyDomain(domainId: string) {
+    try {
+      await data.verifyZoneDomainMutation.mutateAsync(domainId);
+      showToast("Đã kiểm tra bản ghi xác minh domain.");
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    }
+  }
+
+  async function setPrimaryDomain(domainId: string, domain: string) {
+    if (!confirmDestructiveAction(`Đặt ${domain} làm primary domain? Liên kết mặc định của zone sẽ thay đổi.`)) {
+      return;
+    }
+
+    try {
+      await data.setPrimaryDomainMutation.mutateAsync(domainId);
+      showToast("Đã cập nhật primary domain.");
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    }
+  }
+
+  async function deleteOIDCProvider(provider: ZoneOIDCProvider) {
+    if (!confirmDestructiveAction(`Xóa OIDC provider ${provider.name}? Người dùng SSO qua provider này sẽ không đăng nhập được.`)) {
+      return;
+    }
+
+    try {
+      await data.deleteOIDCProviderMutation.mutateAsync(provider.id);
+      if (editingOIDCProviderID === provider.id) {
+        setEditingOIDCProviderID(null);
+      }
+      showToast("Đã xóa OIDC provider.");
+    } catch (error) {
+      showToast(errorMessage(error), "danger");
+    }
+  }
+
+  async function toggleOIDCProvider(provider: ZoneOIDCProvider) {
+    const disabling = provider.status === "configured";
+    if (
+      disabling &&
+      !confirmDestructiveAction(`Tắt OIDC provider ${provider.name}? Người dùng SSO mới sẽ không thể đăng nhập qua provider này.`)
+    ) {
+      return;
+    }
+
+    try {
+      await data.updateOIDCProviderMutation.mutateAsync({
+        input: { status: disabling ? "disabled" : "configured" },
+        providerId: provider.id
+      });
+      showToast(disabling ? "Đã tắt OIDC provider." : "Đã bật OIDC provider.");
     } catch (error) {
       showToast(errorMessage(error), "danger");
     }
@@ -2926,24 +3313,10 @@ function InstanceAdministration({
     return (
       <article className="admin-panel">
         <ErrorState
+          action={<Button onClick={() => void data.currentZoneQuery.refetch()} size="sm" variant="secondary">Thử lại</Button>}
           description={errorMessage(data.currentZoneQuery.error)}
-          title="Zone hiện tại không hoạt động"
+          title="Không tải được thông tin zone"
         />
-        <Button
-          disabled={data.setZoneLifecycleMutation.isPending}
-          onClick={async () => {
-            try {
-              await data.setZoneLifecycleMutation.mutateAsync({ action: "resume" });
-              await data.currentZoneQuery.refetch();
-              showToast("Đã resume zone.");
-            } catch (error) {
-              showToast(errorMessage(error), "danger");
-            }
-          }}
-          variant="secondary"
-        >
-          Resume zone
-        </Button>
       </article>
     );
   }
@@ -3059,7 +3432,8 @@ function InstanceAdministration({
                 <span className="row-actions">
                   {!isSelfHosted && domain.status === "pending" ? (
                     <Button
-                      onClick={() => void data.verifyZoneDomainMutation.mutateAsync(domain.id)}
+                      disabled={data.verifyZoneDomainMutation.isPending}
+                      onClick={() => void verifyDomain(domain.id)}
                       size="sm"
                       variant="secondary"
                     >
@@ -3068,7 +3442,8 @@ function InstanceAdministration({
                   ) : null}
                   {!isSelfHosted && domain.status === "active" && domain.kind !== "primary" ? (
                     <Button
-                      onClick={() => void data.setPrimaryDomainMutation.mutateAsync(domain.id)}
+                      disabled={data.setPrimaryDomainMutation.isPending}
+                      onClick={() => void setPrimaryDomain(domain.id, domain.domain)}
                       size="sm"
                       variant="ghost"
                     >
@@ -3078,7 +3453,8 @@ function InstanceAdministration({
                   {!isSelfHosted && domain.kind !== "primary" ? (
                     <Button
                       aria-label={`Xóa ${domain.domain}`}
-                      onClick={() => void data.deleteZoneDomainMutation.mutateAsync(domain.id)}
+                      disabled={data.deleteZoneDomainMutation.isPending}
+                      onClick={() => void deleteDomain(domain.id, domain.domain)}
                       size="sm"
                       variant="icon"
                     >
@@ -3234,12 +3610,8 @@ function InstanceAdministration({
                     {editingOIDCProviderID === provider.id ? "Đóng" : "Sửa"}
                   </Button>
                   <Button
-                    onClick={() =>
-                      void data.updateOIDCProviderMutation.mutateAsync({
-                        input: { status: provider.status === "configured" ? "disabled" : "configured" },
-                        providerId: provider.id
-                      })
-                    }
+                    disabled={data.updateOIDCProviderMutation.isPending}
+                    onClick={() => void toggleOIDCProvider(provider)}
                     size="sm"
                     variant="ghost"
                   >
@@ -3247,7 +3619,8 @@ function InstanceAdministration({
                   </Button>
                   <Button
                     aria-label={`Xóa ${provider.name}`}
-                    onClick={() => void data.deleteOIDCProviderMutation.mutateAsync(provider.id)}
+                    disabled={data.deleteOIDCProviderMutation.isPending}
+                    onClick={() => void deleteOIDCProvider(provider)}
                     size="sm"
                     variant="icon"
                   >
@@ -3531,14 +3904,16 @@ function InstallationList({
 function BotSelect({
   bots,
   name,
+  onSelect,
   selectedId
 }: {
   bots: BotRecord[];
   name: string;
+  onSelect: (value: string) => void;
   selectedId: string;
 }) {
   return (
-    <select defaultValue={selectedId} name={name} required>
+    <select name={name} onChange={(event) => onSelect(event.target.value)} value={selectedId} required>
       <option value="">Chọn bot</option>
       {bots.map((bot) => (
         <option key={bot.id} value={bot.id}>
@@ -3570,12 +3945,37 @@ function ChannelSelect({
   );
 }
 
-function SecretBox({ label, value }: { label: string; value: string }) {
+function SecretBox({
+  label,
+  onDismiss,
+  value
+}: {
+  label: string;
+  onDismiss?: () => void;
+  value: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copySecret() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
   return (
     <div className="secret-box">
       <span>{label}</span>
       <code>{value}</code>
       <small>Giá trị này chỉ nên lưu ở nơi an toàn và không hiển thị lại sau khi rời màn hình.</small>
+      <div className="row-actions">
+        <Button onClick={() => void copySecret()} size="sm" variant="secondary">
+          {copied ? "Đã sao chép" : "Sao chép"}
+        </Button>
+        {onDismiss ? <Button onClick={onDismiss} size="sm" variant="ghost">Tôi đã lưu an toàn</Button> : null}
+      </div>
     </div>
   );
 }
@@ -3728,7 +4128,6 @@ function mapProfile(user: AuthUser | null) {
 
 function mapAdminUser(user: AuthUser): AdminUser {
   const raw = user as AuthUser & Record<string, unknown>;
-  const status = String(raw.status ?? "").toLowerCase();
 
   return {
     department: stringValue(raw.department_name ?? raw.department, "Chưa phân phòng"),
@@ -3736,7 +4135,7 @@ function mapAdminUser(user: AuthUser): AdminUser {
     id: user.id,
     name: displayName(user),
     role: stringValue(raw.role_name ?? raw.role, "Chưa gán"),
-    status: status === "blocked" || status === "disabled" ? "blocked" : "active"
+    status: isAdminUserBlockedStatus(raw.status) ? "blocked" : "active"
   };
 }
 
@@ -3826,8 +4225,7 @@ function percentage(value: number, total: number): string {
 }
 
 function downloadCsv(filename: string, rows: Array<Array<number | string>>): void {
-  const escapeCell = (value: number | string) => `"${String(value).replaceAll('"', '""')}"`;
-  const content = `\uFEFF${rows.map((row) => row.map(escapeCell).join(",")).join("\r\n")}`;
+  const content = `\uFEFF${rows.map((row) => row.map(escapeCsvCell).join(",")).join("\r\n")}`;
   const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -3864,6 +4262,19 @@ function formatDuration(value?: number | null): string {
   }
 
   return `${(value / 1000).toFixed(1)} giây`;
+}
+
+function formatQueueAge(value?: number | null): string {
+  if (typeof value !== "number") {
+    return "Queue trống";
+  }
+  if (value < 60) {
+    return `${Math.round(value)} giây`;
+  }
+  if (value < 3600) {
+    return `${Math.round(value / 60)} phút`;
+  }
+  return `${(value / 3600).toFixed(1)} giờ`;
 }
 
 function formatBytes(value?: number | null): string {

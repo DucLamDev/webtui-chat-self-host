@@ -16,6 +16,8 @@ export { createContactsClient } from "./contacts-client";
 export { createDepartmentsClient } from "./departments-client";
 export type { SendContactRequestInput } from "./contacts-client";
 export { createWebTuiApiClient } from "./client-factory";
+export { createSyncClient } from "./sync-client";
+export type { WorkspaceSyncEvent, WorkspaceSyncPage } from "./sync-client";
 export type { WebTuiApiClient } from "./client-factory";
 export { createFilesClient } from "./files-client";
 export { ApiClientError, HttpClient } from "./http-client";
@@ -32,7 +34,12 @@ export {
   createPresenceClient,
   createWebhooksClient
 } from "./modules-client";
-export type { ModuleRecord } from "./modules-client";
+export type {
+  ModuleRecord,
+  WebPushConfig,
+  WebPushSubscriptionInput,
+  WebPushSubscriptionRecord
+} from "./modules-client";
 export { createMessagesClient } from "./messages-client";
 export type { MessagePage } from "./messages-client";
 export { queryKeys } from "./query-keys";
@@ -54,4 +61,5 @@ export {
 } from "./zone-runtime";
 export { collectionFrom, itemFrom } from "./response-utils";
 export { createUsersClient } from "./users-client";
+export type { DeleteMeInput } from "./users-client";
 export { createWorkspacesClient } from "./workspaces-client";

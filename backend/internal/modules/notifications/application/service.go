@@ -2,8 +2,11 @@ package application
 
 import (
 	"context"
+	"crypto/elliptic"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,10 +29,21 @@ type Repository interface {
 	UpsertPreference(ctx context.Context, zoneID string, preference notificationsdomain.NotificationPreference) (notificationsdomain.NotificationPreference, error)
 	GetChannelPreference(ctx context.Context, zoneID string, userID string, workspaceID string, channelID string) (notificationsdomain.ChannelPreference, error)
 	UpsertChannelPreference(ctx context.Context, zoneID string, preference notificationsdomain.ChannelPreference) (notificationsdomain.ChannelPreference, error)
+	UpsertWebPushSubscription(ctx context.Context, params WebPushSubscriptionParams) (notificationsdomain.WebPushSubscription, error)
+	RevokeWebPushSubscription(ctx context.Context, zoneID string, userID string, subscriptionID string) error
 }
 
 type Service struct {
-	repo Repository
+	repo                    Repository
+	webPushEnabled          bool
+	webPushPublicKey        string
+	webPushMaxSubscriptions int
+}
+
+type WebPushOptions struct {
+	Enabled                 bool
+	PublicKey               string
+	MaxSubscriptionsPerUser int
 }
 
 type MentionParams struct {
@@ -142,8 +156,84 @@ type ChannelPreferenceDTO struct {
 	UpdatedAt   string   `json:"updated_at"`
 }
 
+type WebPushSubscriptionInput struct {
+	ZoneID         string
+	UserID         string
+	WorkspaceID    string
+	Endpoint       string
+	P256DH         string
+	Auth           string
+	ExpirationTime string
+}
+
+type WebPushSubscriptionParams struct {
+	ZoneID                  string
+	UserID                  string
+	WorkspaceID             string
+	Endpoint                string
+	P256DH                  string
+	Auth                    string
+	ExpirationTime          *time.Time
+	MaxSubscriptionsPerUser int
+}
+
+type WebPushSubscriptionDTO struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type WebPushConfigDTO struct {
+	Enabled        bool   `json:"enabled"`
+	VAPIDPublicKey string `json:"vapid_public_key,omitempty"`
+}
+
 func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+	return &Service{repo: repo, webPushMaxSubscriptions: 10}
+}
+
+func (s *Service) ConfigureWebPush(options WebPushOptions) {
+	if s == nil {
+		return
+	}
+	s.webPushEnabled = options.Enabled
+	s.webPushPublicKey = strings.TrimSpace(options.PublicKey)
+	if options.MaxSubscriptionsPerUser > 0 {
+		s.webPushMaxSubscriptions = options.MaxSubscriptionsPerUser
+	}
+}
+
+func (s *Service) WebPushConfig() WebPushConfigDTO {
+	if s == nil || !s.webPushEnabled || s.webPushPublicKey == "" {
+		return WebPushConfigDTO{Enabled: false}
+	}
+	return WebPushConfigDTO{Enabled: true, VAPIDPublicKey: s.webPushPublicKey}
+}
+
+func (s *Service) RegisterWebPushSubscription(ctx context.Context, input WebPushSubscriptionInput) (WebPushSubscriptionDTO, error) {
+	if s == nil || !s.webPushEnabled {
+		return WebPushSubscriptionDTO{}, apperrors.ServiceUnavailable("WEB_PUSH_DISABLED", "Web Push is disabled for this instance.")
+	}
+	params, err := normalizeWebPushSubscription(input)
+	if err != nil {
+		return WebPushSubscriptionDTO{}, err
+	}
+	params.MaxSubscriptionsPerUser = s.webPushMaxSubscriptions
+	stored, err := s.repo.UpsertWebPushSubscription(ctx, params)
+	if err != nil {
+		return WebPushSubscriptionDTO{}, mapNotificationError(err)
+	}
+	return toWebPushSubscriptionDTO(stored), nil
+}
+
+func (s *Service) RevokeWebPushSubscription(ctx context.Context, zoneID string, userID string, subscriptionID string) error {
+	if strings.TrimSpace(subscriptionID) == "" {
+		return apperrors.BadRequest("VALIDATION_ERROR", "subscription_id is required.")
+	}
+	if err := s.repo.RevokeWebPushSubscription(ctx, strings.TrimSpace(zoneID), strings.TrimSpace(userID), strings.TrimSpace(subscriptionID)); err != nil {
+		return mapNotificationError(err)
+	}
+	return nil
 }
 
 func (s *Service) ListMine(ctx context.Context, params ListParams) ([]NotificationDTO, error) {
@@ -277,6 +367,12 @@ func (s *Service) ProcessJobs(ctx context.Context, limit int) (int, error) {
 }
 
 func mapNotificationError(err error) error {
+	if errors.Is(err, notificationsdomain.ErrWebPushSubscriptionNotFound) {
+		return apperrors.NotFound("WEB_PUSH_SUBSCRIPTION_NOT_FOUND", "Web Push subscription was not found.")
+	}
+	if errors.Is(err, notificationsdomain.ErrWebPushSubscriptionConflict) {
+		return apperrors.Conflict("WEB_PUSH_SUBSCRIPTION_CONFLICT", "This browser push endpoint is already registered to another account.")
+	}
 	if errors.Is(err, notificationsdomain.ErrNotificationPreferenceUnavailable) {
 		return apperrors.Forbidden("Workspace notification preference is unavailable.")
 	}
@@ -284,6 +380,62 @@ func mapNotificationError(err error) error {
 		return apperrors.NotFound("NOTIFICATION_NOT_FOUND", "Không tìm thấy thông báo.")
 	}
 	return err
+}
+
+func normalizeWebPushSubscription(input WebPushSubscriptionInput) (WebPushSubscriptionParams, error) {
+	zoneID := strings.TrimSpace(input.ZoneID)
+	userID := strings.TrimSpace(input.UserID)
+	workspaceID := strings.TrimSpace(input.WorkspaceID)
+	if zoneID == "" || userID == "" || workspaceID == "" {
+		return WebPushSubscriptionParams{}, apperrors.BadRequest("WORKSPACE_REQUIRED", "workspace_id and the active zone are required.")
+	}
+	endpoint := strings.TrimSpace(input.Endpoint)
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || len(endpoint) > 4096 {
+		return WebPushSubscriptionParams{}, apperrors.BadRequest("INVALID_WEB_PUSH_SUBSCRIPTION", "The Web Push endpoint must be a valid HTTPS URL.")
+	}
+	p256dh := strings.TrimSpace(input.P256DH)
+	auth := strings.TrimSpace(input.Auth)
+	if !validP256DH(p256dh) || !validURLBase64(auth, 16, 64) {
+		return WebPushSubscriptionParams{}, apperrors.BadRequest("INVALID_WEB_PUSH_SUBSCRIPTION", "The Web Push subscription keys are invalid.")
+	}
+	var expirationTime *time.Time
+	if raw := strings.TrimSpace(input.ExpirationTime); raw != "" {
+		parsedTime, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil || !parsedTime.After(time.Now().UTC()) {
+			return WebPushSubscriptionParams{}, apperrors.BadRequest("INVALID_WEB_PUSH_SUBSCRIPTION", "expiration_time must be a future RFC3339 timestamp.")
+		}
+		parsedTime = parsedTime.UTC()
+		expirationTime = &parsedTime
+	}
+	return WebPushSubscriptionParams{
+		ZoneID: zoneID, UserID: userID, WorkspaceID: workspaceID,
+		Endpoint: endpoint, P256DH: p256dh, Auth: auth, ExpirationTime: expirationTime,
+	}, nil
+}
+
+func validURLBase64(value string, minBytes int, maxBytes int) bool {
+	if value == "" {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(value, "="))
+	return err == nil && len(raw) >= minBytes && len(raw) <= maxBytes
+}
+
+func validP256DH(value string) bool {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.TrimSpace(value), "="))
+	if err != nil || len(raw) != 65 || raw[0] != 4 {
+		return false
+	}
+	x, y := elliptic.Unmarshal(elliptic.P256(), raw)
+	return x != nil && y != nil
+}
+
+func toWebPushSubscriptionDTO(subscription notificationsdomain.WebPushSubscription) WebPushSubscriptionDTO {
+	return WebPushSubscriptionDTO{
+		ID:        subscription.ID,
+		CreatedAt: formatTime(subscription.CreatedAt), UpdatedAt: formatTime(subscription.UpdatedAt),
+	}
 }
 
 func normalizePreferenceInput(input PreferenceInput) (notificationsdomain.NotificationPreference, error) {

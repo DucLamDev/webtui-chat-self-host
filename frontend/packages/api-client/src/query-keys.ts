@@ -2,6 +2,7 @@ export const queryKeys = {
   admin: {
     auditLogs: (workspaceId: string, filter = "") => ["admin", "audit-logs", workspaceId, filter] as const,
     health: (workspaceId: string) => ["admin", "health", workspaceId] as const,
+    pushQueue: (workspaceId: string) => ["admin", "push-queue", workspaceId] as const,
     stats: (workspaceId: string) => ["admin", "stats", workspaceId] as const
   },
   auth: {

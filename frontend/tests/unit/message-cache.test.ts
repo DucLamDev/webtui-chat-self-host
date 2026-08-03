@@ -43,12 +43,12 @@ describe("message cache helpers", () => {
     expect(messageTimelineKey("workspace-1", "")).toEqual(["messages", "workspace-1", "none"]);
   });
 
-  it("deduplicates messages by id and keeps the first item", () => {
+  it("deduplicates messages by id and keeps the newest server revision", () => {
     const first = message("msg-1", "2026-07-09T01:00:00Z", "Bản đầu");
     const duplicate = message("msg-1", "2026-07-09T02:00:00Z", "Bản trùng");
 
     expect(uniqueMessages([first, duplicate, message("msg-2", "2026-07-09T03:00:00Z")])).toEqual([
-      first,
+      duplicate,
       message("msg-2", "2026-07-09T03:00:00Z")
     ]);
   });

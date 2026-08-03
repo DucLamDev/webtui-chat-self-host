@@ -49,6 +49,7 @@ export {
   Play,
   Plus,
   Reply,
+  RefreshCw,
   Search,
   Send,
   Share2,

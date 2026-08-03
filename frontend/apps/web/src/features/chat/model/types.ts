@@ -33,6 +33,9 @@ export type ChatMessage = {
   author: ChatUser;
   sentAt: string;
   body: string;
+  clientMessageId?: string;
+  deliveryError?: string;
+  deliveryState?: "pending" | "sending" | "failed";
   attachments?: MessageAttachmentItem[];
   canDelete?: boolean;
   canEdit?: boolean;
@@ -43,6 +46,7 @@ export type ChatMessage = {
   isPending?: boolean;
   isSystem?: boolean;
   isVoice?: boolean;
+  outboxEntryId?: string;
   reactions?: Array<{ emoji: string; count: number; reactedByMe?: boolean }>;
   metrics?: ChatMetric[];
   attachmentName?: string;

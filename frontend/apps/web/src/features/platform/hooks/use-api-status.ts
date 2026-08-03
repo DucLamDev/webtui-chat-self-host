@@ -124,7 +124,9 @@ export function useDesktopVersionStatus(): DesktopVersionStatus {
         const desktop = version.clients?.desktop;
         const minimum = desktop?.minimum_version;
         const recommended = desktop?.recommended_version;
-        const updateUrl = desktop?.update_url;
+        // Release provenance belongs to the signed desktop build, never to the
+        // custom server selected by the user.
+        const updateUrl = process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL ?? "https://download.vpsttt.com/download/";
         const clientLabel = `${env.appVersion} (${env.releaseChannel})`;
 
         if (minimum && compareVersions(env.appVersion, minimum) < 0) {

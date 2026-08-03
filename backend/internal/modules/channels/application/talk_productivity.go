@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	maxBreakoutRooms = 20
-	maxMeetingTitle  = 160
+	maxBreakoutRooms      = 20
+	maxMeetingTitle       = 160
+	maxMeetingDescription = 2000
 )
 
 type TalkProductivityRepository interface {
@@ -262,16 +263,23 @@ func (s *Service) CreateMeeting(ctx context.Context, input CreateMeetingInput) (
 	if title == "" || len([]rune(title)) > maxMeetingTitle {
 		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Meeting title must contain 1 to 160 characters.")
 	}
+	description := strings.TrimSpace(input.Description)
+	if len([]rune(description)) > maxMeetingDescription {
+		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Meeting description must not exceed 2000 characters.")
+	}
 	startsAt, err := time.Parse(time.RFC3339, strings.TrimSpace(input.StartsAt))
 	if err != nil {
 		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "starts_at must be an RFC3339 timestamp.")
+	}
+	if startsAt.Before(time.Now().UTC().Add(-time.Minute)) {
+		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "starts_at must not be in the past.")
 	}
 	endsAt, err := parseDateFilter(input.EndsAt)
 	if err != nil || (endsAt != nil && !endsAt.After(startsAt)) {
 		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "ends_at must be after starts_at.")
 	}
 	lobbyOpensAt, err := parseDateFilter(input.LobbyOpensAt)
-	if err != nil || (lobbyOpensAt != nil && lobbyOpensAt.After(startsAt)) {
+	if err != nil || (lobbyOpensAt != nil && !lobbyOpensAt.Before(startsAt)) {
 		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "lobby_opens_at must be before starts_at.")
 	}
 	roomPolicy := strings.TrimSpace(input.RoomPolicy)
@@ -285,9 +293,22 @@ func (s *Service) CreateMeeting(ctx context.Context, input CreateMeetingInput) (
 	if err != nil {
 		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "cleanup_after must be an RFC3339 timestamp.")
 	}
+	cleanupReference := startsAt
+	if endsAt != nil {
+		cleanupReference = *endsAt
+	}
+	if cleanupAfter != nil && !cleanupAfter.After(cleanupReference) {
+		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "cleanup_after must be after the meeting ends.")
+	}
+	if roomPolicy == "keep" {
+		cleanupAfter = nil
+	} else if cleanupAfter == nil {
+		defaultCleanup := cleanupReference.Add(24 * time.Hour)
+		cleanupAfter = &defaultCleanup
+	}
 	meeting, err := s.talkProductivityRepository().CreateMeeting(ctx, CreateMeetingParams{
 		WorkspaceID: strings.TrimSpace(input.WorkspaceID), ChannelID: strings.TrimSpace(input.ChannelID),
-		Title: title, Description: strings.TrimSpace(input.Description), StartsAt: startsAt.UTC(),
+		Title: title, Description: description, StartsAt: startsAt.UTC(),
 		EndsAt: endsAt, LobbyOpensAt: lobbyOpensAt, RoomPolicy: roomPolicy,
 		CleanupAfter: cleanupAfter, ActorUserID: strings.TrimSpace(input.ActorUserID),
 	})
@@ -587,7 +608,7 @@ func (s *Service) ensureInternalBreakouts(ctx context.Context, workspaceID strin
 func (s *Service) talkProductivityRepository() TalkProductivityRepository {
 	repository, ok := s.collab.(TalkProductivityRepository)
 	if !ok {
-		panic("channels collaboration repository does not implement TalkProductivityRepository")
+		return unavailableTalkRepository{}
 	}
 	return repository
 }

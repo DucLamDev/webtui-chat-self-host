@@ -22,14 +22,25 @@ Tài liệu dự án WebTui Chat được viết bằng tiếng Việt có dấu
 ## Kế hoạch triển khai
 
 - [Cài đặt self-hosted cho customer](../deploy/self-hosted/README.md)
-- [Triển khai portal trung tâm](../portal/deploy/README.md)
+- [Ranh giới portal, self-host và client](architecture/self-hosted-portal-clients.md)
 - [Kế hoạch hoàn thiện backend](planning/backend-roadmap.md)
 - [Kế hoạch cải thiện Push, Realtime, Session và File Transfer](planning/cross-platform-reliability-improvement-plan.md)
+- [Roadmap chức năng self-host theo mức ưu tiên](planning/self-host-feature-roadmap.md)
 - [Deploy production lên VPS](deploy/vps-production.md)
 - [CI/CD từng bước với GitHub Actions và Docker Compose](deploy/cicd.md)
 
-Kế hoạch và tài liệu release mobile/desktop đã chuyển sang
-[`clients/docs/`](../clients/docs/).
+Tài liệu release mobile/desktop nằm trong repository tương ứng của từng client;
+repository self-host này chỉ giữ contract kết nối và checklist production chung.
+
+## Vận hành production
+
+- [Runbook self-host](operations/self-host-runbook.md)
+- [Admin Panel: hướng dẫn sử dụng, RBAC và roadmap](operations/admin-panel.md)
+- [Backup off-site S3/MinIO và restore có guardrail](operations/offsite-backup-restore.md)
+- [Kiến trúc và runbook push notification](operations/push-notifications.md)
+- [OpenTelemetry, p95/p99, Grafana và cảnh báo](operations/observability.md)
+- [Offline outbox và đồng bộ xung đột](operations/offline-outbox-and-sync.md)
+- [Checklist production và mobile store](operations/production-checklist.md)
 
 ## Backend contract
 

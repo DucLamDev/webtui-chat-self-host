@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/elliptic"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -206,6 +208,62 @@ func TestValidateAllowsLocalSelfHostedDevelopment(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresCompletePushRelayConfiguration(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.PushRelay = PushRelayConfig{URL: "https://push.example.com/v1/deliver"}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "PUSH_RELAY_TOKEN") ||
+		!strings.Contains(err.Error(), "PUSH_RELAY_INSTANCE_ID") {
+		t.Fatalf("Validate() error = %v, want incomplete push relay rejection", err)
+	}
+}
+
+func TestValidateRejectsInsecureProductionPushRelay(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.App.Env = "production"
+	cfg.PushRelay = PushRelayConfig{
+		URL:        "http://push.example.com/v1/deliver",
+		Token:      "CHANGE_ME_ISSUED_BY_PUBLISHER",
+		InstanceID: "instance/unsafe",
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "PUSH_RELAY_URL") ||
+		!strings.Contains(err.Error(), "PUSH_RELAY_TOKEN") ||
+		!strings.Contains(err.Error(), "PUSH_RELAY_INSTANCE_ID") {
+		t.Fatalf("Validate() error = %v, want insecure push relay rejection", err)
+	}
+}
+
+func TestValidateRejectsPartialDirectPushConfiguration(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.Firebase.ProjectID = "mobile-project"
+	cfg.APNS.KeyID = "key-id"
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "FIREBASE_SERVICE_ACCOUNT") ||
+		!strings.Contains(err.Error(), "APNS_TEAM_ID") ||
+		!strings.Contains(err.Error(), "APNS_PRIVATE_KEY") {
+		t.Fatalf("Validate() error = %v, want incomplete direct push rejection", err)
+	}
+}
+
+func TestValidateRejectsRelayAndDirectPushTogether(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.PushRelay = PushRelayConfig{
+		URL:        "https://push.example.com/v1/deliver",
+		Token:      "relay-token-for-development",
+		InstanceID: "instance-1",
+	}
+	cfg.Firebase.ServiceAccountFile = "/run/secrets/firebase.json"
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "cannot be configured together") {
+		t.Fatalf("Validate() error = %v, want ambiguous push mode rejection", err)
+	}
+}
+
 func TestLoadReadsDesktopVersionPolicy(t *testing.T) {
 	t.Setenv("APP_ENV", "dev")
 	t.Setenv("DESKTOP_MIN_VERSION", "1.4.0")
@@ -292,6 +350,108 @@ func assertContains(t *testing.T, values []string, expected string) {
 	}
 
 	t.Fatalf("%q không có trong %v", expected, values)
+}
+
+func TestValidateAllowsAPIToKeepOnlyVAPIDPublicKey(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.App.ServiceName = "api"
+	cfg.WebPush = WebPushConfig{
+		Enabled: true, VAPIDPublicKey: testVAPIDKey(65),
+		TTL: 300, MaxSubscriptionsPerUser: 10,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRequiresVAPIDSigningMaterialForWorker(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.App.ServiceName = "worker"
+	cfg.WebPush = WebPushConfig{
+		Enabled: true, VAPIDPublicKey: testVAPIDKey(65),
+		TTL: 300, MaxSubscriptionsPerUser: 10,
+	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "WEB_PUSH_VAPID_PRIVATE_KEY") {
+		t.Fatalf("Validate() error = %v, want missing worker VAPID signing material", err)
+	}
+}
+
+func TestValidateAcceptsMatchingVAPIDKeyPairForWorker(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.App.ServiceName = "worker"
+	cfg.WebPush = WebPushConfig{
+		Enabled:                 true,
+		VAPIDPublicKey:          testVAPIDKey(65),
+		VAPIDPrivateKey:         testVAPIDKey(32),
+		VAPIDSubject:            "mailto:admin@example.com",
+		TTL:                     300,
+		MaxSubscriptionsPerUser: 10,
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want matching VAPID key pair to pass", err)
+	}
+}
+
+func TestValidateRejectsOffCurveVAPIDPublicKey(t *testing.T) {
+	cfg := validConfigForTest()
+	invalidPoint := append([]byte{4}, make([]byte, 64)...)
+	cfg.WebPush = WebPushConfig{
+		Enabled: true, VAPIDPublicKey: base64.RawURLEncoding.EncodeToString(invalidPoint),
+		TTL: 300, MaxSubscriptionsPerUser: 10,
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "WEB_PUSH_VAPID_PUBLIC_KEY") {
+		t.Fatalf("Validate() error = %v, want off-curve VAPID rejection", err)
+	}
+}
+
+func TestValidateRejectsMismatchedVAPIDKeyPair(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.App.ServiceName = "worker"
+	otherPrivateKey := make([]byte, 32)
+	otherPrivateKey[len(otherPrivateKey)-1] = 2
+	cfg.WebPush = WebPushConfig{
+		Enabled:                 true,
+		VAPIDPublicKey:          testVAPIDKey(65),
+		VAPIDPrivateKey:         base64.RawURLEncoding.EncodeToString(otherPrivateKey),
+		VAPIDSubject:            "mailto:admin@example.com",
+		TTL:                     300,
+		MaxSubscriptionsPerUser: 10,
+	}
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "matching key pair") {
+		t.Fatalf("Validate() error = %v, want mismatched VAPID key pair rejection", err)
+	}
+}
+
+func TestValidateRejectsPaddedVAPIDKeys(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.App.ServiceName = "worker"
+	cfg.WebPush = WebPushConfig{
+		Enabled:                 true,
+		VAPIDPublicKey:          testVAPIDKey(65) + "=",
+		VAPIDPrivateKey:         testVAPIDKey(32) + "=",
+		VAPIDSubject:            "mailto:admin@example.com",
+		TTL:                     300,
+		MaxSubscriptionsPerUser: 10,
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "WEB_PUSH_VAPID_PUBLIC_KEY") ||
+		!strings.Contains(err.Error(), "WEB_PUSH_VAPID_PRIVATE_KEY") {
+		t.Fatalf("Validate() error = %v, want non-canonical padded VAPID keys rejected", err)
+	}
+}
+
+func testVAPIDKey(size int) string {
+	privateKey := make([]byte, 32)
+	privateKey[len(privateKey)-1] = 1
+	if size == 32 {
+		return base64.RawURLEncoding.EncodeToString(privateKey)
+	}
+	x, y := elliptic.P256().ScalarBaseMult(privateKey)
+	return base64.RawURLEncoding.EncodeToString(elliptic.Marshal(elliptic.P256(), x, y))
 }
 
 func validConfigForTest() *Config {

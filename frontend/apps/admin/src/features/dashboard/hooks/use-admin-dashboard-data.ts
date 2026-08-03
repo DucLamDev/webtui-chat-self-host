@@ -2,13 +2,12 @@
 
 import { useCallback, useEffect, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiClientError, queryKeys } from "@webtui/api-client";
 import { createPermissionSet, hasPermission } from "@webtui/types";
 import type {
   AddWorkspaceMemberInput,
   AdminChannelOverview,
-  AdminMessageOverview,
   AuthUser,
   CreateBackupJobInput,
   CreateApiTokenInput,
@@ -30,10 +29,12 @@ import type {
   UpsertWorkspaceSettingInput
 } from "@webtui/types";
 import { api } from "@/lib/api";
+import type { AdminNavId } from "../model/navigation";
 
 export type AdminPermissionValue = PermissionCode | string;
 
 export type AdminDashboardDataOptions = {
+  activeSection?: AdminNavId;
   selectedBackupJobId?: string;
   selectedBotId?: string;
   selectedCronJobId?: string;
@@ -46,9 +47,15 @@ type CreateRoleMutationInput = Omit<CreateRoleInput, "workspace_id">;
 export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
   const pathname = usePathname();
   const queryClient = useQueryClient();
+  const activeFetchCount = useIsFetching();
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedWorkspaceId = searchParams.get("workspace") ?? "";
+  const activeSection = options.activeSection ?? "overview";
+  const isActiveSection = useCallback(
+    (...sections: AdminNavId[]) => sections.includes(activeSection),
+    [activeSection]
+  );
 
   const workspacesQuery = useQuery({
     queryFn: () => api.workspaces.listMine(),
@@ -90,101 +97,112 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
   const canViewAudit = can("audit.view");
   const canManageRoles = can("role.manage");
   const canManageUsers = can("user.manage");
+  const canManageMessages = can("message.manage");
   const canManageApiTokens = can("api_token.manage");
   const canManageBots = can("bot.manage");
   const canManageBackups = can("backup.manage");
+  const canManageNotifications = can("notification.manage");
   const canManageCronjobs = can("cronjob.manage");
   const canManageWebhooks = can("webhook.manage");
   const canManageWorkspace = can("workspace.manage");
   const canInviteUsers = can("workspace.invite_user");
+  const canViewMembers = can("workspace.view_members");
   const adminQueryEnabled = Boolean(workspaceId && canViewAdmin);
-  const integrationQueryEnabled = Boolean(workspaceId && (canManageApiTokens || canManageBots || canManageWebhooks));
   const operationsQueryEnabled = Boolean(workspaceId && (canManageCronjobs || canManageBackups));
 
   const statsQuery = useQuery({
-    enabled: adminQueryEnabled,
+    enabled: adminQueryEnabled && isActiveSection("overview"),
     queryFn: () => api.admin.stats(workspaceId),
     queryKey: queryKeys.admin.stats(workspaceId),
     retry: false
   });
 
   const healthQuery = useQuery({
-    enabled: adminQueryEnabled,
+    enabled: adminQueryEnabled && isActiveSection("overview", "settings"),
     queryFn: () => api.admin.health(workspaceId),
     queryKey: queryKeys.admin.health(workspaceId),
     retry: false
   });
 
   const adminChannelsQuery = useQuery({
-    enabled: adminQueryEnabled,
+    enabled: adminQueryEnabled && isActiveSection("channels"),
     queryFn: () => loadAdminChannels(workspaceId),
     queryKey: ["admin", workspaceId, "channels"],
     retry: false
   });
 
   const adminMessagesQuery = useQuery({
-    enabled: adminQueryEnabled,
-    queryFn: () => loadAdminMessages(workspaceId),
+    enabled: adminQueryEnabled && canManageMessages && isActiveSection("messages"),
+    queryFn: () => api.admin.messages(workspaceId, { limit: 100 }),
     queryKey: ["admin", workspaceId, "messages"],
     retry: false
   });
 
   const usersQuery = useQuery({
-    enabled: adminQueryEnabled,
+    enabled: adminQueryEnabled && isActiveSection("users"),
     queryFn: () => api.users.list({ limit: 100 }),
     queryKey: queryKeys.users.all()
   });
 
   const membersQuery = useQuery({
-    enabled: adminQueryEnabled,
+    enabled: Boolean(workspaceId && canViewMembers && isActiveSection("users", "roles")),
     queryFn: () => api.workspaces.members(workspaceId),
     queryKey: queryKeys.workspaces.members(workspaceId),
     retry: false
   });
 
+  const pushQueueQuery = useQuery({
+    enabled: adminQueryEnabled && isActiveSection("push"),
+    queryFn: () => api.admin.pushQueue(workspaceId),
+    queryKey: queryKeys.admin.pushQueue(workspaceId),
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+    retry: false
+  });
+
   const invitesQuery = useQuery({
-    enabled: Boolean(workspaceId && canInviteUsers),
+    enabled: Boolean(workspaceId && canInviteUsers && isActiveSection("users")),
     queryFn: () => api.workspaces.invites(workspaceId),
     queryKey: queryKeys.workspaces.invites(workspaceId),
     retry: false
   });
 
   const settingsQuery = useQuery({
-    enabled: Boolean(workspaceId),
+    enabled: Boolean(workspaceId && canManageWorkspace && isActiveSection("settings")),
     queryFn: () => api.workspaces.settings(workspaceId),
     queryKey: queryKeys.workspaces.settings(workspaceId)
   });
 
   const permissionsCatalogQuery = useQuery({
-    enabled: adminQueryEnabled,
+    enabled: adminQueryEnabled && isActiveSection("roles"),
     queryFn: () => api.rbac.permissions(),
     queryKey: queryKeys.rbac.permissions,
     retry: false
   });
 
   const rolesQuery = useQuery({
-    enabled: adminQueryEnabled,
+    enabled: adminQueryEnabled && isActiveSection("users", "roles"),
     queryFn: () => api.rbac.roles({ workspace_id: workspaceId }),
     queryKey: queryKeys.rbac.roles(workspaceId),
     retry: false
   });
 
   const selectedMemberRolesQuery = useQuery({
-    enabled: Boolean(workspaceId && options.selectedMemberId && adminQueryEnabled),
+    enabled: Boolean(workspaceId && options.selectedMemberId && adminQueryEnabled && isActiveSection("roles")),
     queryFn: () => api.rbac.memberRoles(workspaceId, options.selectedMemberId ?? ""),
     queryKey: queryKeys.rbac.memberRoles(workspaceId, options.selectedMemberId ?? ""),
     retry: false
   });
 
   const auditLogsQuery = useQuery({
-    enabled: Boolean(workspaceId && canViewAudit),
+    enabled: Boolean(workspaceId && canViewAudit && isActiveSection("overview", "roles")),
     queryFn: () => api.admin.auditLogs(workspaceId, { limit: 50 }),
     queryKey: queryKeys.admin.auditLogs(workspaceId),
     retry: false
   });
 
   const channelsQuery = useQuery({
-    enabled: Boolean(workspaceId && (adminQueryEnabled || integrationQueryEnabled)),
+    enabled: Boolean(workspaceId && isActiveSection("integrations", "bots") && (canManageBots || canManageWebhooks)),
     queryFn: () => api.channels.list(workspaceId),
     queryKey: queryKeys.channels.all(workspaceId),
     retry: false
@@ -212,61 +230,22 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     }
   }
 
-  async function loadAdminMessages(currentWorkspaceId: string): Promise<AdminMessageOverview[]> {
-    try {
-      return await api.admin.messages(currentWorkspaceId, { limit: 100 });
-    } catch (error) {
-      if (!isMissingAdminOverviewEndpoint(error)) {
-        throw error;
-      }
-
-      const channels = await api.channels.list(currentWorkspaceId);
-      const results = await Promise.allSettled(
-        channels.map(async (channel) => ({
-          channel,
-          messages: await api.messages.list(currentWorkspaceId, channel.id, { limit: 25 })
-        }))
-      );
-
-      return results
-        .flatMap((result) => result.status === "fulfilled"
-          ? result.value.messages.map<AdminMessageOverview>((message) => ({
-              body: message.body,
-              channel_id: result.value.channel.id,
-              channel_name: result.value.channel.name,
-              created_at: message.created_at ?? message.sent_at ?? message.updated_at ?? "",
-              id: message.id,
-              kind: message.kind ?? "text",
-              sender_name: message.author?.display_name
-                || message.author?.username
-                || message.author?.email
-                || message.user?.display_name
-                || message.user?.username
-                || message.user?.email
-                || "Hệ thống"
-            }))
-          : [])
-        .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
-        .slice(0, 100);
-    }
-  }
-
   const apiScopesQuery = useQuery({
-    enabled: canManageApiTokens,
+    enabled: canManageApiTokens && isActiveSection("integrations"),
     queryFn: () => api.apiTokens.scopes(),
     queryKey: queryKeys.integrations.apiScopes,
     retry: false
   });
 
   const apiTokensQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageApiTokens),
+    enabled: Boolean(workspaceId && canManageApiTokens && isActiveSection("integrations")),
     queryFn: () => api.apiTokens.list(workspaceId),
     queryKey: queryKeys.integrations.apiTokens(workspaceId),
     retry: false
   });
 
   const botsQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageBots),
+    enabled: Boolean(workspaceId && canManageBots && isActiveSection("bots")),
     queryFn: () => api.bots.list(workspaceId),
     queryKey: queryKeys.integrations.bots(workspaceId),
     retry: false
@@ -275,21 +254,21 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
   const canManageAutomation = canManageWorkspace || canManageBots || canManageWebhooks;
 
   const automationTemplatesQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageAutomation),
+    enabled: Boolean(workspaceId && canManageAutomation && isActiveSection("automations")),
     queryFn: () => api.tenancy.automationTemplates(),
     queryKey: queryKeys.tenancy.automationTemplates,
     retry: false
   });
 
   const automationInstallationsQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageAutomation),
+    enabled: Boolean(workspaceId && canManageAutomation && isActiveSection("automations")),
     queryFn: () => api.tenancy.automationInstallations(),
     queryKey: queryKeys.tenancy.automationInstallations,
     retry: false
   });
 
   const currentZoneQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageWorkspace),
+    enabled: Boolean(workspaceId && canManageWorkspace && isActiveSection("settings")),
     queryFn: () => api.tenancy.currentZone(),
     queryKey: queryKeys.tenancy.currentZone,
     retry: false
@@ -299,6 +278,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     enabled: Boolean(
       workspaceId &&
       canManageWorkspace &&
+      isActiveSection("settings") &&
       currentZoneQuery.data &&
       currentZoneQuery.data?.zone.kind !== "customer_dedicated"
     ),
@@ -308,74 +288,121 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
   });
 
   const zoneQuotaQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageWorkspace),
+    enabled: Boolean(workspaceId && canManageWorkspace && isActiveSection("settings")),
     queryFn: () => api.tenancy.zoneQuota(),
     queryKey: queryKeys.tenancy.quota,
     retry: false
   });
 
   const oidcProvidersQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageWorkspace),
+    enabled: Boolean(workspaceId && canManageWorkspace && isActiveSection("settings")),
     queryFn: () => api.tenancy.oidcProviders(),
     queryKey: queryKeys.tenancy.oidcProviders,
     retry: false
   });
 
   const botInstallationsQuery = useQuery({
-    enabled: Boolean(workspaceId && options.selectedBotId && canManageBots),
+    enabled: Boolean(workspaceId && options.selectedBotId && canManageBots && isActiveSection("bots")),
     queryFn: () => api.bots.installations(workspaceId, options.selectedBotId ?? ""),
     queryKey: queryKeys.integrations.botInstallations(workspaceId, options.selectedBotId ?? ""),
     retry: false
   });
 
   const incomingWebhooksQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageWebhooks),
+    enabled: Boolean(workspaceId && canManageWebhooks && isActiveSection("integrations")),
     queryFn: () => api.webhooks.incoming(workspaceId),
     queryKey: queryKeys.integrations.incomingWebhooks(workspaceId),
     retry: false
   });
 
   const outgoingWebhooksQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageWebhooks),
+    enabled: Boolean(workspaceId && canManageWebhooks && isActiveSection("integrations")),
     queryFn: () => api.webhooks.outgoing(workspaceId),
     queryKey: queryKeys.integrations.outgoingWebhooks(workspaceId),
     retry: false
   });
 
   const webhookDeliveriesQuery = useQuery({
-    enabled: Boolean(workspaceId && options.selectedOutgoingWebhookId && canManageWebhooks),
+    enabled: Boolean(workspaceId && options.selectedOutgoingWebhookId && canManageWebhooks && isActiveSection("integrations")),
     queryFn: () => api.webhooks.deliveries(workspaceId, options.selectedOutgoingWebhookId ?? ""),
     queryKey: queryKeys.integrations.webhookDeliveries(workspaceId, options.selectedOutgoingWebhookId ?? ""),
     retry: false
   });
 
   const cronjobsQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageCronjobs),
+    enabled: Boolean(workspaceId && canManageCronjobs && isActiveSection("cronjobs")),
     queryFn: () => api.cronjobs.list(workspaceId, { limit: 100 }),
     queryKey: queryKeys.operations.cronjobs(workspaceId),
     retry: false
   });
 
   const cronjobRunsQuery = useQuery({
-    enabled: Boolean(workspaceId && options.selectedCronJobId && canManageCronjobs),
+    enabled: Boolean(workspaceId && options.selectedCronJobId && canManageCronjobs && isActiveSection("cronjobs")),
     queryFn: () => api.cronjobs.runs(workspaceId, options.selectedCronJobId ?? "", { limit: 50 }),
     queryKey: queryKeys.operations.cronJobRuns(workspaceId, options.selectedCronJobId ?? ""),
     retry: false
   });
 
   const backupJobsQuery = useQuery({
-    enabled: Boolean(workspaceId && canManageBackups),
+    enabled: Boolean(workspaceId && canManageBackups && isActiveSection("backups")),
     queryFn: () => api.backups.jobs(workspaceId, { limit: 100 }),
     queryKey: queryKeys.operations.backupJobs(workspaceId),
     retry: false
   });
 
   const backupRunsQuery = useQuery({
-    enabled: Boolean(workspaceId && options.selectedBackupJobId && canManageBackups),
+    enabled: Boolean(workspaceId && options.selectedBackupJobId && canManageBackups && isActiveSection("backups")),
     queryFn: () => api.backups.runs(workspaceId, options.selectedBackupJobId ?? "", { limit: 50 }),
     queryKey: queryKeys.operations.backupRuns(workspaceId, options.selectedBackupJobId ?? ""),
     retry: false
   });
+
+  function prefetchSection(section: AdminNavId) {
+    const pending: Array<Promise<unknown>> = [];
+    const warm = (...queries: Array<{ data: unknown; fetchStatus: string; refetch: () => Promise<unknown> }>) => {
+      for (const query of queries) {
+        if (query.data === undefined && query.fetchStatus !== "fetching") {
+          pending.push(query.refetch());
+        }
+      }
+    };
+
+    if (section === "overview" && canViewAdmin) {
+      warm(statsQuery, healthQuery);
+      if (canViewAudit) warm(auditLogsQuery);
+    } else if (section === "push" && canViewAdmin) {
+      warm(pushQueueQuery);
+    } else if (section === "messages" && canViewAdmin && canManageMessages) {
+      warm(adminMessagesQuery);
+    } else if (section === "channels" && canViewAdmin) {
+      warm(adminChannelsQuery);
+    } else if (section === "users" && canViewAdmin) {
+      warm(usersQuery, rolesQuery);
+      if (canViewMembers) warm(membersQuery);
+      if (canInviteUsers) warm(invitesQuery);
+    } else if (section === "roles" && canViewAdmin) {
+      warm(permissionsCatalogQuery, rolesQuery);
+      if (canViewMembers) warm(membersQuery);
+      if (canViewAudit) warm(auditLogsQuery);
+    } else if (section === "integrations") {
+      if (canManageApiTokens) warm(apiScopesQuery, apiTokensQuery);
+      if (canManageWebhooks) warm(channelsQuery, incomingWebhooksQuery, outgoingWebhooksQuery);
+    } else if (section === "automations" && canManageAutomation) {
+      warm(automationTemplatesQuery, automationInstallationsQuery);
+    } else if (section === "bots" && canManageBots) {
+      warm(channelsQuery, botsQuery);
+    } else if (section === "cronjobs" && canManageCronjobs) {
+      warm(cronjobsQuery);
+    } else if (section === "backups" && canManageBackups) {
+      warm(backupJobsQuery);
+    } else if (section === "settings" && canManageWorkspace) {
+      warm(settingsQuery, healthQuery, currentZoneQuery, zoneQuotaQuery, oidcProvidersQuery);
+    }
+
+    if (pending.length) {
+      void Promise.allSettled(pending);
+    }
+  }
 
   const invalidateWorkspaceMembers = useCallback(() => {
     if (workspaceId) {
@@ -415,6 +442,15 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
       }
     }
   }, [options.selectedBackupJobId, queryClient, workspaceId]);
+
+  const replayPushDeadLetterMutation = useMutation({
+    mutationFn: (jobId: string) => api.admin.replayPushDeadLetter(requireWorkspaceId(workspaceId), jobId),
+    onSuccess: () => {
+      if (workspaceId) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.admin.pushQueue(workspaceId) });
+      }
+    }
+  });
 
   const addMemberMutation = useMutation({
     mutationFn: (input: AddWorkspaceMemberInput) =>
@@ -769,7 +805,13 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     }
   }, [requestedWorkspaceId, setWorkspaceId, workspaceId]);
 
+  const refreshActiveQueries = useCallback(
+    () => queryClient.refetchQueries({ type: "active" }),
+    [queryClient]
+  );
+
   return {
+    activeFetchCount,
     addMemberMutation,
     adminChannels: adminChannelsQuery.data ?? [],
     adminChannelsQuery,
@@ -796,15 +838,18 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     backupRunsQuery,
     can,
     canManageBackups,
+    canManageNotifications,
     canManageApiTokens,
     canManageAutomation,
     canManageBots,
     canManageCronjobs,
+    canManageMessages,
     canManageRoles,
     canManageUsers,
     canManageWebhooks,
     canManageWorkspace,
     canInviteUsers,
+    canViewMembers,
     canViewAdmin,
     canViewAudit,
     channels: channelsQuery.data ?? [],
@@ -848,10 +893,13 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     permissionsCatalog: permissionsCatalogQuery.data ?? [],
     permissionsCatalogQuery,
     permissionsQuery,
+    prefetchSection,
     revokeApiTokenMutation,
     revokeMemberRoleMutation,
     roles: rolesQuery.data ?? [],
     rolesQuery,
+    replayPushDeadLetterMutation,
+    refreshActiveQueries,
     runBackupJobMutation,
     runCronjobMutation,
     selectedMemberRoles: selectedMemberRolesQuery.data ?? [],
@@ -864,6 +912,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     settings: settingsQuery.data ?? [],
     settingsQuery,
     statsQuery,
+    pushQueueQuery,
     operationsQueryEnabled,
     updateMemberStatusMutation,
     updateAutomationInstallationMutation,

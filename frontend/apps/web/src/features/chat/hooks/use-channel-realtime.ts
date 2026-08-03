@@ -2,11 +2,26 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { createRealtimeGateway, queryKeys, type RealtimeServerEvent } from "@webtui/api-client";
+import {
+  ApiClientError,
+  createRealtimeGateway,
+  queryKeys,
+  type RealtimeServerEvent,
+  type WorkspaceSyncEvent
+} from "@webtui/api-client";
 import type { Message as ApiMessage } from "@webtui/types";
-import { runtimeEnvironment } from "@/lib/api";
+import { getPlatformServices } from "@webtui/chat-core";
+import { api, runtimeEnvironment } from "@/lib/api";
 import { useAuthStore } from "@/features/auth/auth-store";
 import { useRealtimeStore } from "../stores/realtime-store";
+import {
+  confirmMessageOutbox,
+  outboxScopeKey,
+  readSyncCheckpoint,
+  writeSyncCheckpoint,
+  type MessageOutboxScope
+} from "../model/message-outbox";
+import { messageClientId } from "../model/message-cache";
 import {
   mergeMessageIntoTimeline,
   messageRoomName,
@@ -89,6 +104,9 @@ export function useChannelRealtime({
   const accessToken = useAuthStore((state) => state.accessToken);
   const zoneWebSocketBaseUrl = useAuthStore(
     (state) => state.zoneRuntime?.ws_base_url
+  );
+  const zoneApiBaseUrl = useAuthStore(
+    (state) => state.zoneRuntime?.api_base_url
   );
   const queryClient = useQueryClient();
   const setConnection = useRealtimeStore((state) => state.setConnection);
@@ -183,6 +201,14 @@ export function useChannelRealtime({
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
+    let catchUpRunning = false;
+    const syncScope: MessageOutboxScope | null = currentUserId
+      ? {
+          serverId: zoneApiBaseUrl ?? runtimeEnvironment.apiBaseUrl,
+          userId: currentUserId,
+          workspaceId
+        }
+      : null;
 
     function clearReconnectTimer() {
       if (reconnectTimer) {
@@ -220,6 +246,7 @@ export function useChannelRealtime({
           room: room || null,
           status: "connected"
         });
+        void catchUpMissedEvents();
       });
 
       socket.addEventListener("message", (event) => {
@@ -248,6 +275,104 @@ export function useChannelRealtime({
         });
         reconnectTimer = setTimeout(connect, delay);
       });
+    }
+
+    async function catchUpMissedEvents() {
+      if (catchUpRunning || disposed || !syncScope) {
+        return;
+      }
+      catchUpRunning = true;
+      try {
+        await withWorkspaceSyncLock(syncScope, async () => {
+          const deviceId = await clientSyncDeviceID();
+          const savedCheckpoint = await readSyncCheckpoint(syncScope);
+          let cursor = savedCheckpoint?.cursor;
+          const processedEventIds = new Set(savedCheckpoint?.recentEventIds ?? []);
+          do {
+            const page = await api.sync.catchUp(workspaceId, deviceId, cursor);
+            const unseenEvents = page.events.filter((event) => !processedEventIds.has(event.event_id));
+            await applyWorkspaceSyncEvents(unseenEvents);
+            const pageCursor = page.next_cursor || cursor;
+            if (pageCursor && page.events.length) {
+              await writeSyncCheckpoint(
+                syncScope,
+                pageCursor,
+                page.events.map((event) => event.event_id)
+              );
+              page.events.forEach((event) => processedEventIds.add(event.event_id));
+              await api.sync.ack(workspaceId, deviceId, pageCursor);
+            }
+            cursor = pageCursor;
+            if (!page.has_more) {
+              break;
+            }
+          } while (cursor && !disposed);
+        });
+      } catch {
+        // WebSocket remains usable; the next reconnect retries catch-up.
+      } finally {
+        catchUpRunning = false;
+      }
+    }
+
+    async function applyWorkspaceSyncEvents(events: WorkspaceSyncEvent[]) {
+      if (!events.length || disposed) {
+        return;
+      }
+
+      const latestMessageEvents = new Map<string, WorkspaceSyncEvent>();
+      const touchedChannelIds = new Set<string>();
+      let invalidateNotifications = false;
+      for (const event of events) {
+        const eventChannelId = syncPayloadString(event.payload, "channel_id");
+        if (eventChannelId) {
+          touchedChannelIds.add(eventChannelId);
+        }
+        if (event.aggregate_type === "message" || event.type.startsWith("Message") || event.type === "ReactionChanged") {
+          const messageId = syncPayloadString(event.payload, "message_id") || event.aggregate_id;
+          if (messageId) {
+            latestMessageEvents.set(messageId, event);
+          }
+        }
+        invalidateNotifications ||= event.type === "NotificationCreated" || event.type === "NotificationUpdated";
+      }
+
+      await mapWithConcurrency([...latestMessageEvents.entries()], 6, async ([messageId, event]) => {
+        const eventChannelId = syncPayloadString(event.payload, "channel_id");
+        if (!eventChannelId) {
+          throw new Error(`Sync event ${event.event_id} thiếu channel_id.`);
+        }
+        if (event.type === "MessageDeleted") {
+          removeMessageFromTimeline(queryClient, workspaceId, eventChannelId, messageId, event.occurred_at);
+          return;
+        }
+        try {
+          const message = await api.messages.get(workspaceId, eventChannelId, messageId);
+          if (message?.id) {
+            mergeMessageIntoTimeline(queryClient, workspaceId, eventChannelId, message);
+            await confirmCanonicalOutbox(message);
+            return;
+          }
+          throw new Error(`Không hydrate được message ${messageId} từ sync event ${event.event_id}.`);
+        } catch (error) {
+          if (error instanceof ApiClientError && (error.status === 404 || error.status === 410)) {
+            removeMessageFromTimeline(queryClient, workspaceId, eventChannelId, messageId, event.occurred_at);
+            return;
+          }
+          throw error;
+        }
+      });
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.channels.all(workspaceId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.channels.directConversations(workspaceId) }),
+        ...(invalidateNotifications
+          ? [queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list(workspaceId) })]
+          : []),
+        ...[...touchedChannelIds].map((id) =>
+          queryClient.invalidateQueries({ queryKey: ["direct-conversation-summary", workspaceId, id] })
+        )
+      ]);
     }
 
     function handleRealtimeMessage(raw: string) {
@@ -398,11 +523,13 @@ export function useChannelRealtime({
       }
 
       if (event.type === "MessageDeleted") {
-        removeMessageFromTimeline(queryClient, workspaceId, eventChannelId, message.id);
+        removeMessageFromTimeline(queryClient, workspaceId, eventChannelId, message.id, event.timestamp);
       } else if (event.type === "MessageCreated" || event.type === "MessageUpdated" || event.type === "ReactionChanged") {
         mergeMessageIntoTimeline(queryClient, workspaceId, eventChannelId, message);
+        void confirmCanonicalOutbox(message);
       } else if (event.type === "MessagePinned" || event.type === "MessageUnpinned") {
         mergeMessageIntoTimeline(queryClient, workspaceId, eventChannelId, message);
+        void confirmCanonicalOutbox(message);
         void queryClient.invalidateQueries({ queryKey: queryKeys.messages.pins(workspaceId, eventChannelId) });
       }
 
@@ -419,6 +546,15 @@ export function useChannelRealtime({
         room: room || null,
         status: "connected"
       });
+    }
+
+    async function confirmCanonicalOutbox(message: ApiMessage) {
+      const clientId = messageClientId(message);
+      const senderId = message.sender_id ?? message.author_id;
+      if (!syncScope || !clientId || senderId !== currentUserId) {
+        return;
+      }
+      await confirmMessageOutbox(syncScope, clientId).catch(() => undefined);
     }
 
     connect();
@@ -442,7 +578,7 @@ export function useChannelRealtime({
         status: "offline"
       });
     };
-  }, [accessToken, channelId, currentUserId, enabled, gateway, lifecycleVersion, queryClient, room, rooms, setConnection, workspaceId]);
+  }, [accessToken, channelId, currentUserId, enabled, gateway, lifecycleVersion, queryClient, room, rooms, setConnection, workspaceId, zoneApiBaseUrl]);
 
   const publishTyping = useCallback(
     (active: boolean) => {
@@ -464,6 +600,28 @@ export function useChannelRealtime({
     status,
     typingUserIds
   };
+}
+
+let syncDeviceIDPromise: Promise<string> | undefined;
+
+function clientSyncDeviceID(): Promise<string> {
+  if (!syncDeviceIDPromise) {
+    syncDeviceIDPromise = (async () => {
+      const storage = getPlatformServices().storage;
+      const key = "workspace_sync_device_id";
+      const legacyKey = "desktop_sync_device_id";
+      const stored = (await storage.getItem(key))?.trim() || (await storage.getItem(legacyKey))?.trim();
+      if (stored) {
+        await storage.setItem(key, stored, "persistent");
+        return stored;
+      }
+      const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const created = `client-${random}`;
+      await storage.setItem(key, created, "persistent");
+      return created;
+    })();
+  }
+  return syncDeviceIDPromise;
 }
 
 function parseRealtimeEvent(raw: string): RealtimeServerEvent<RealtimeMessagePayload> | null {
@@ -527,4 +685,32 @@ function channelIdFromRoom(room?: string): string {
   }
   const parts = room.split(":");
   return parts.length === 4 && parts[0] === "workspace" && parts[2] === "channel" ? parts[3] : "";
+}
+
+function syncPayloadString(payload: Record<string, unknown> | undefined, key: string): string {
+  const value = payload?.[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex];
+      nextIndex += 1;
+      await worker(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function withWorkspaceSyncLock<T>(scope: MessageOutboxScope, task: () => Promise<T>): Promise<T> {
+  if (typeof navigator === "undefined" || !navigator.locks) {
+    return task();
+  }
+  return navigator.locks.request(`webtui-sync:${outboxScopeKey(scope)}`, { mode: "exclusive" }, task);
 }

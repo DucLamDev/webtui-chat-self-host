@@ -2,6 +2,9 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { queryKeys, type MessagePage } from "@webtui/api-client";
 import type { Message as ApiMessage } from "@webtui/types";
 
+const deletionTombstones = new Map<string, number>();
+const maxDeletionTombstones = 1_000;
+
 export function mergeMessageIntoTimeline(
   queryClient: QueryClient,
   workspaceId: string,
@@ -9,6 +12,14 @@ export function mergeMessageIntoTimeline(
   message: ApiMessage,
   replaceId?: string
 ) {
+  const tombstoneKey = messageTombstoneKey(workspaceId, channelId, message.id);
+  const deletedAt = deletionTombstones.get(tombstoneKey);
+  if (deletedAt !== undefined && messageRevision(message) <= deletedAt) {
+    return;
+  }
+  if (deletedAt !== undefined) {
+    deletionTombstones.delete(tombstoneKey);
+  }
   queryClient.setQueryData<InfiniteData<MessagePage>>(messageTimelineKey(workspaceId, channelId), (current) =>
     upsertMessageInPages(current, message, replaceId)
   );
@@ -18,8 +29,12 @@ export function removeMessageFromTimeline(
   queryClient: QueryClient,
   workspaceId: string,
   channelId: string,
-  messageId: string
+  messageId: string,
+  deletedAt?: string
 ) {
+  if (deletedAt) {
+    rememberMessageDeletion(workspaceId, channelId, messageId, deletedAt);
+  }
   queryClient.setQueryData<InfiniteData<MessagePage>>(messageTimelineKey(workspaceId, channelId), (current) =>
     removeMessageFromPages(current, messageId)
   );
@@ -40,22 +55,35 @@ export function upsertMessageInPages(
 ): InfiniteData<MessagePage> {
   const emptyPage: MessagePage = { messages: [], meta: {} };
   const next = current ?? { pageParams: [undefined], pages: [emptyPage] };
-  const shouldReplace = next.pages.some((page) =>
-    page.messages.some((item) => item.id === message.id || (replaceId && item.id === replaceId))
+  const clientMessageId = messageClientId(message);
+  const isMatch = (item: ApiMessage) =>
+    item.id === message.id ||
+    Boolean(replaceId && item.id === replaceId) ||
+    Boolean(clientMessageId && messageClientId(item) === clientMessageId);
+  const matches = next.pages.flatMap((page) => page.messages.filter(isMatch));
+  const authoritativeMessage = matches.reduce(
+    (candidate, existing) => chooseAuthoritativeMessage(existing, candidate),
+    message
   );
+  let inserted = false;
 
   const pages = next.pages.map((page, pageIndex) => {
-    const messages = page.messages.map((item) => {
-      if (item.id === message.id || (replaceId && item.id === replaceId)) {
-        return message;
+    const messages = page.messages.flatMap((item) => {
+      if (isMatch(item)) {
+        if (inserted) {
+          return [];
+        }
+        inserted = true;
+        return [authoritativeMessage];
       }
-      return item;
+      return [item];
     });
 
-    if (!shouldReplace && pageIndex === 0) {
+    if (!matches.length && pageIndex === 0) {
+      inserted = true;
       return {
         ...page,
-        messages: [message, ...messages]
+        messages: [authoritativeMessage, ...messages]
       };
     }
 
@@ -110,18 +138,78 @@ export function removeMessageFromPages(
 }
 
 export function uniqueMessages(messages: ApiMessage[]): ApiMessage[] {
-  const seen = new Set<string>();
   const result: ApiMessage[] = [];
+  const indexById = new Map<string, number>();
+  const indexByClientId = new Map<string, number>();
 
   for (const message of messages) {
-    if (seen.has(message.id)) {
+    const clientMessageId = messageClientId(message);
+    const existingIndex = indexById.get(message.id) ?? (clientMessageId ? indexByClientId.get(clientMessageId) : undefined);
+    if (existingIndex !== undefined) {
+      const selected = chooseAuthoritativeMessage(result[existingIndex], message);
+      result[existingIndex] = selected;
+      indexById.set(selected.id, existingIndex);
+      const selectedClientId = messageClientId(selected);
+      if (selectedClientId) {
+        indexByClientId.set(selectedClientId, existingIndex);
+      }
       continue;
     }
-    seen.add(message.id);
+    indexById.set(message.id, result.length);
+    if (clientMessageId) {
+      indexByClientId.set(clientMessageId, result.length);
+    }
     result.push(message);
   }
 
   return result;
+}
+
+export function messageClientId(message: ApiMessage): string {
+  const value = message.metadata?.client_message_id;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * REST and realtime can complete in either order. A canonical server id always
+ * replaces a local optimistic id; between server records, the newest server
+ * timestamp wins so a late response cannot roll back a newer edit.
+ */
+export function chooseAuthoritativeMessage(existing: ApiMessage, incoming: ApiMessage): ApiMessage {
+  const existingLocal = existing.id.startsWith("local-");
+  const incomingLocal = incoming.id.startsWith("local-");
+  if (existingLocal !== incomingLocal) {
+    return existingLocal ? incoming : existing;
+  }
+  const existingRevision = messageRevision(existing);
+  const incomingRevision = messageRevision(incoming);
+  return existingRevision > incomingRevision ? existing : incoming;
+}
+
+function messageRevision(message: ApiMessage): number {
+  return [message.deleted_at, message.updated_at, message.edited_at, message.created_at, message.sent_at]
+    .map((value) => Date.parse(value || ""))
+    .filter(Number.isFinite)
+    .reduce((latest, value) => Math.max(latest, value), 0);
+}
+
+function rememberMessageDeletion(workspaceId: string, channelId: string, messageId: string, deletedAt: string) {
+  const timestamp = Date.parse(deletedAt);
+  deletionTombstones.set(
+    messageTombstoneKey(workspaceId, channelId, messageId),
+    Number.isFinite(timestamp) ? timestamp : Date.now()
+  );
+  while (deletionTombstones.size > maxDeletionTombstones) {
+    const oldestKey = deletionTombstones.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    deletionTombstones.delete(oldestKey);
+  }
+}
+
+function messageTombstoneKey(workspaceId: string, channelId: string, messageId: string) {
+  return JSON.stringify([workspaceId, channelId, messageId]);
 }
 
 export function sortMessagesAscending(messages: ApiMessage[]): ApiMessage[] {

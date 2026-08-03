@@ -10,12 +10,10 @@ import type {
   WorkspaceMember,
   WorkspaceSetting
 } from "@webtui/types";
-import type { MessageReplyPreview } from "./types";
 
 const schemaVersion = 1;
 const maxCachedTimelines = 24;
 const maxMessagesPerTimeline = 200;
-const maxOutboxItems = 100;
 
 type CacheEnvelope<T> = {
   savedAt: string;
@@ -39,21 +37,6 @@ export type WorkspaceChatCache = {
 type TimelineIndexEntry = {
   channelId: string;
   savedAt: string;
-  workspaceId: string;
-};
-
-export type MessageOutboxEntry = {
-  attempts: number;
-  body: string;
-  channelId: string;
-  clientMessageId: string;
-  createdAt: string;
-  id: string;
-  lastError?: string;
-  mentionedUserIds?: string[];
-  parentId?: string;
-  replyTo?: MessageReplyPreview;
-  updatedAt: string;
   workspaceId: string;
 };
 
@@ -113,67 +96,6 @@ export async function writeDraft(workspaceId: string, channelId: string, value: 
   await writeEnvelope(key, value, store);
 }
 
-export async function readOutbox(store: PlatformStorage = storage()) {
-  return (await readEnvelope<MessageOutboxEntry[]>(outboxKey, store)) ?? [];
-}
-
-export async function enqueueOutbox(
-  input: Pick<MessageOutboxEntry, "body" | "channelId" | "clientMessageId" | "mentionedUserIds" | "parentId" | "replyTo" | "workspaceId">,
-  store: PlatformStorage = storage()
-) {
-  const now = new Date().toISOString();
-  const current = await readOutbox(store);
-  const existing = current.find((item) => item.clientMessageId === input.clientMessageId);
-  const nextItem: MessageOutboxEntry = existing
-    ? {
-        ...existing,
-        body: input.body,
-        mentionedUserIds: input.mentionedUserIds,
-        parentId: input.parentId,
-        replyTo: input.replyTo,
-        updatedAt: now
-      }
-    : {
-        attempts: 0,
-        body: input.body,
-        channelId: input.channelId,
-        clientMessageId: input.clientMessageId,
-        createdAt: now,
-        id: input.clientMessageId,
-        mentionedUserIds: input.mentionedUserIds,
-        parentId: input.parentId,
-        replyTo: input.replyTo,
-        updatedAt: now,
-        workspaceId: input.workspaceId
-      };
-  const withoutCurrent = current.filter((item) => item.clientMessageId !== input.clientMessageId);
-  const next = [...withoutCurrent, nextItem].slice(-maxOutboxItems);
-  await writeEnvelope(outboxKey, next, store);
-  return nextItem;
-}
-
-export async function removeOutboxItem(clientMessageId: string, store: PlatformStorage = storage()) {
-  const next = (await readOutbox(store)).filter((item) => item.clientMessageId !== clientMessageId);
-  await writeEnvelope(outboxKey, next, store);
-}
-
-export async function updateOutboxItem(
-  clientMessageId: string,
-  patch: Partial<Pick<MessageOutboxEntry, "attempts" | "lastError" | "updatedAt">>,
-  store: PlatformStorage = storage()
-) {
-  const next = (await readOutbox(store)).map((item) =>
-    item.clientMessageId === clientMessageId
-      ? {
-          ...item,
-          ...patch,
-          updatedAt: patch.updatedAt ?? new Date().toISOString()
-        }
-      : item
-  );
-  await writeEnvelope(outboxKey, next, store);
-}
-
 export function isLikelyOfflineError(error: unknown): boolean {
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     return true;
@@ -181,11 +103,12 @@ export function isLikelyOfflineError(error: unknown): boolean {
   return error instanceof TypeError || (error instanceof Error && /fetch|network|offline|failed to fetch/i.test(error.message));
 }
 
-export function createClientMessageId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+/**
+ * Discard the pre-IndexedDB outbox. It had no server/user ownership metadata,
+ * so migrating it could expose one account's drafts after an account switch.
+ */
+export async function discardLegacyOutbox(store: PlatformStorage = storage()) {
+  await store.removeItem(legacyOutboxKey);
 }
 
 function compactTimeline(messages: ApiMessage[]): ApiMessage[] {
@@ -252,5 +175,5 @@ function draftKey(workspaceId: string, channelId: string) {
   return `webtui:offline:v${schemaVersion}:draft:${workspaceId}:${channelId}`;
 }
 
-const outboxKey = `webtui:offline:v${schemaVersion}:outbox`;
+const legacyOutboxKey = `webtui:offline:v${schemaVersion}:outbox`;
 const timelineIndexKey = `webtui:offline:v${schemaVersion}:timeline-index`;

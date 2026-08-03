@@ -2,6 +2,7 @@
 
 import { Fragment, type ChangeEvent, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type ReactNode, type RefObject, type UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
 import { usePathname, useSearchParams } from "next/navigation";
 import { queryKeys } from "@webtui/api-client";
 import { getPlatformServices, type MediaRecorderHandle } from "@webtui/chat-core";
@@ -30,6 +31,7 @@ import {
   ClipboardCheck,
   Clock3,
   Cloud,
+  Database,
   Edit3,
   FileText,
   Frown,
@@ -37,6 +39,7 @@ import {
   Heart,
   Image as ImageIcon,
   Info,
+  KeyRound,
   Laugh,
   LockKeyhole,
   LogOut,
@@ -82,7 +85,9 @@ import {
 } from "@webtui/icons";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useAuthStore } from "@/features/auth/auth-store";
+import { useDesktopAppLock } from "@/features/auth/desktop-app-lock";
 import { useDesktopVersionStatus, type DesktopVersionStatus } from "@/features/platform/hooks/use-api-status";
+import { WebPushSettings } from "@/features/notifications/web-push-settings";
 import { api, runtimeEnvironment } from "@/lib/api";
 import {
   mapAuthUser,
@@ -141,11 +146,20 @@ import type {
   Ticket as SupportTicket,
   TicketPriority,
   TicketStatus,
+  ZoneCapabilities,
+  ZoneStorageProvider,
   WorkspaceMember
 } from "@webtui/types";
-import { AutomationPage } from "./automation-page";
-import { TalkCollaborationHub } from "./talk-collaboration-hub";
 import { parseChatRoute } from "@/lib/chat-route";
+
+const AutomationPage = dynamic(
+  () => import("./automation-page").then((module) => module.AutomationPage),
+  { loading: PanelSkeleton }
+);
+const TalkCollaborationHub = dynamic(
+  () => import("./talk-collaboration-hub").then((module) => module.TalkCollaborationHub),
+  { loading: PanelSkeleton }
+);
 
 const railItems = [
   { id: "messages", label: "Tin nhắn", icon: ConversationSolidIcon },
@@ -286,7 +300,15 @@ const quickReactions = [
   { className: "reaction-choice--angry", emoji: "😡", icon: Angry, label: "Giận" }
 ] as const;
 
-const maxUploadSizeBytes = 100 * 1024 * 1024;
+const maxUploadSizeBytes = 2 * 1024 * 1024 * 1024;
+const resumableUploadThresholdBytes = 8 * 1024 * 1024;
+const videoUploadAcceptList = [
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-m4v",
+  "video/x-matroska"
+];
 const uploadAcceptList = [
   "image/*",
   "text/*",
@@ -296,11 +318,7 @@ const uploadAcceptList = [
   "audio/mpeg",
   "audio/wav",
   "audio/x-m4a",
-  "video/mp4",
-  "video/webm",
-  "video/quicktime",
-  "video/x-m4v",
-  "video/x-matroska",
+  ...videoUploadAcceptList,
   "application/ogg",
   "application/pdf",
   "application/json",
@@ -649,7 +667,10 @@ export function ChatWorkspace() {
     threadMessageId: threadMessageId ?? undefined
   });
 
-  const visibleRailItems = railItems.filter((item) => canAccessRailItem(item.id, data.can));
+  const serverCapabilities = useAuthStore((state) => state.zoneRuntime?.capabilities);
+  const visibleRailItems = railItems.filter((item) =>
+    canAccessRailItem(item.id, data.can, serverCapabilities)
+  );
 
   useEffect(() => setActiveRailItem(routedRailItem), [routedRailItem]);
   useEffect(() => setMessageSidebarTab(routedMessageSidebarTab), [routedMessageSidebarTab]);
@@ -684,12 +705,21 @@ export function ChatWorkspace() {
     };
   }, [isProfileMenuOpen]);
   useEffect(() => {
-    if (data.permissionsQuery.isLoading || canAccessRailItem(routedRailItem, data.can)) {
+    if (
+      data.permissionsQuery.isLoading ||
+      canAccessRailItem(routedRailItem, data.can, serverCapabilities)
+    ) {
       return;
     }
     setActiveRailItem("messages");
     data.setWorkspaceSection();
-  }, [data.can, data.permissionsQuery.isLoading, data.setWorkspaceSection, routedRailItem]);
+  }, [
+    data.can,
+    data.permissionsQuery.isLoading,
+    data.setWorkspaceSection,
+    routedRailItem,
+    serverCapabilities
+  ]);
   const selectedChannelMembersQuery = useQuery({
     enabled: Boolean(data.workspaceId && data.selectedChannelId && data.canAccessSelectedChannel),
     queryFn: () => api.channels.members(data.workspaceId, data.selectedChannelId),
@@ -717,7 +747,9 @@ export function ChatWorkspace() {
   const isDirectChat =
     data.selectedChannel?.type === "direct" || data.selectedChannelWithMessages?.type === "direct";
   const canSendMessage = data.can("message.send") || isDirectChat;
-  const canUploadFile = data.can("file.upload") || isDirectChat;
+  const canUploadFile =
+    serverCapabilities?.files !== false &&
+    (data.can("file.upload") || isDirectChat);
   const canUseComposer = canSendMessage && (!uploadQueue.items.length || canUploadFile);
 
   const refocusComposerInput = useCallback(() => {
@@ -1283,7 +1315,7 @@ export function ChatWorkspace() {
     currentUserId: currentUser.id,
     defaultCameraEnabled: callJoinPreferences.cameraEnabled,
     defaultMicrophoneEnabled: callJoinPreferences.microphoneEnabled,
-    enabled: Boolean(data.workspaceId),
+    enabled: Boolean(data.workspaceId) && serverCapabilities?.calls !== false,
     lastSignal: data.realtime.lastCallSignal,
     onCallOutcome: handleCallOutcome,
     peerName: selectedChatChannel?.name,
@@ -1470,7 +1502,7 @@ export function ChatWorkspace() {
   }
 
   function handleRailSelect(itemId: RailItemId) {
-    if (!canAccessRailItem(itemId, data.can)) {
+    if (!canAccessRailItem(itemId, data.can, serverCapabilities)) {
       setToast("Tài khoản của bạn chỉ được sử dụng các chức năng trao đổi trong workspace.");
       return;
     }
@@ -1709,19 +1741,33 @@ export function ChatWorkspace() {
     persistChatPreferences(favoriteChatIds, next);
   }
 
-  async function handlePickUploadFiles(kind: "file" | "image") {
+  async function handlePickUploadFiles(kind: "file" | "image" | "video") {
     if (!canUploadFile) {
-      setToast(kind === "image" ? "Tài khoản hiện tại chưa có quyền gửi ảnh." : "Tài khoản hiện tại chưa có quyền upload file.");
+      setToast(
+        kind === "image"
+          ? "Tài khoản hiện tại chưa có quyền gửi ảnh."
+          : kind === "video"
+            ? "Tài khoản hiện tại chưa có quyền gửi video."
+            : "Tài khoản hiện tại chưa có quyền upload file."
+      );
       return;
     }
 
     try {
       const files = await getPlatformServices().files.pickFiles({
-        accept: kind === "image" ? imageUploadAcceptList : uploadAcceptList,
+        accept: kind === "image"
+          ? imageUploadAcceptList
+          : kind === "video"
+            ? videoUploadAcceptList
+            : uploadAcceptList,
         multiple: true,
-        title: kind === "image" ? "Chọn ảnh" : "Chọn file"
+        title: kind === "image" ? "Chọn ảnh" : kind === "video" ? "Chọn video" : "Chọn file"
       });
-      addFilesToUploadQueue(files, { imageOnly: kind === "image", source: "picker" });
+      addFilesToUploadQueue(files, {
+        imageOnly: kind === "image",
+        source: "picker",
+        videoOnly: kind === "video"
+      });
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Không chọn được file.");
     }
@@ -1729,13 +1775,17 @@ export function ChatWorkspace() {
 
   function addFilesToUploadQueue(
     files: File[],
-    options: { imageOnly?: boolean; source?: "drop" | "input" | "paste" | "picker" } = {}
+    options: {
+      imageOnly?: boolean;
+      source?: "drop" | "input" | "paste" | "picker";
+      videoOnly?: boolean;
+    } = {}
   ) {
     if (!files.length) {
       return;
     }
 
-    const { accepted, rejected } = validateUploadFiles(files, options.imageOnly);
+    const { accepted, rejected } = validateUploadFiles(files, options.imageOnly, options.videoOnly);
     if (accepted.length) {
       uploadQueue.addFiles(accepted);
     }
@@ -3076,8 +3126,8 @@ export function ChatWorkspace() {
                 setDetailTab("workspace");
                 setIsDetailPanelOpen(true);
               }}
-              onStartAudioCall={selectedChatChannel.type === "direct" ? () => void callControls.startCall("audio") : undefined}
-              onStartVideoCall={selectedChatChannel.type === "direct" ? () => void callControls.startCall("video") : undefined}
+              onStartAudioCall={selectedChatChannel.type === "direct" && serverCapabilities?.calls !== false ? () => void callControls.startCall("audio") : undefined}
+              onStartVideoCall={selectedChatChannel.type === "direct" && serverCapabilities?.calls !== false ? () => void callControls.startCall("video") : undefined}
               onToggleDetailPanel={() => setIsDetailPanelOpen((current) => !current)}
               onToggleFavorite={() => handleToggleFavorite(selectedChatChannel.id)}
               onToggleSearch={handleToggleMessageSearch}
@@ -3122,11 +3172,23 @@ export function ChatWorkspace() {
               </div>
             ) : null}
             {data.offlineReadMode || data.queuedOutboxCount ? (
-              <div className="offline-read-banner" role="status">
+              <div aria-live="polite" className="offline-read-banner" role="status">
                 <span>{data.offlineReadMode ? "Đang hiển thị dữ liệu đã lưu offline." : "Kết nối đã sẵn sàng."}</span>
-                {data.queuedOutboxCount ? <strong>{data.queuedOutboxCount} tin đang chờ gửi</strong> : null}
                 {data.queuedOutboxCount ? (
-                  <button onClick={() => void data.flushOutbox()} type="button">Gửi lại</button>
+                  <strong>
+                    {data.failedOutboxCount
+                      ? `${data.failedOutboxCount} tin gửi chưa thành công`
+                      : `${data.queuedOutboxCount} tin đang chờ gửi`}
+                  </strong>
+                ) : null}
+                {data.queuedOutboxCount ? (
+                  <button
+                    aria-label="Thử gửi lại các tin nhắn đang chờ"
+                    onClick={() => void data.flushOutbox()}
+                    type="button"
+                  >
+                    Gửi lại
+                  </button>
                 ) : null}
               </div>
             ) : null}
@@ -3181,6 +3243,7 @@ export function ChatWorkspace() {
                 }}
                 onFocusedMessageSettled={handleFocusedMessageSettled}
                 onRetryCall={(mode) => void callControls.startCall(mode)}
+                onRetryOutbox={(entryId) => void data.retryOutboxItem(entryId)}
                 onSearchResultSelect={(message) => {
                   if (message.rawChannelId && message.rawChannelId !== data.selectedChannelId) {
                     data.setSelectedChannelId(message.rawChannelId);
@@ -3357,6 +3420,19 @@ export function ChatWorkspace() {
                         </Button>
                       </Tooltip>
                     </span>
+                    <span className="composer-desktop-attachment">
+                      <Tooltip label="Gửi video">
+                        <Button
+                          aria-label="Gửi video"
+                          disabled={data.sendMessageMutation.isPending || !canUploadFile}
+                          onClick={() => void handlePickUploadFiles("video")}
+                          type="button"
+                          variant="icon"
+                        >
+                          <Video size={20} />
+                        </Button>
+                      </Tooltip>
+                    </span>
                     <Tooltip label={isRecording ? "Dừng ghi âm" : "Gửi tin nhắn thoại"}>
                       <Button
                         aria-label={isRecording ? "Dừng ghi âm" : "Gửi tin nhắn thoại"}
@@ -3397,6 +3473,18 @@ export function ChatWorkspace() {
                           >
                             <ImageIcon size={19} />
                             <span>Gửi hình ảnh</span>
+                          </button>
+                          <button
+                            disabled={data.sendMessageMutation.isPending || !canUploadFile}
+                            onClick={() => {
+                              setIsComposerMoreOpen(false);
+                              void handlePickUploadFiles("video");
+                            }}
+                            role="menuitem"
+                            type="button"
+                          >
+                            <Video size={19} />
+                            <span>Gửi video đến 2 GB</span>
                           </button>
                           <button
                             disabled={data.sendMessageMutation.isPending || !canUploadFile}
@@ -3873,6 +3961,7 @@ function WorkspaceSectionPage({
         onProfileSubmit={onProfileSubmit}
         onThemeToggle={onThemeToggle}
         theme={theme}
+        workspaceId={workspaceId}
       />
     );
   }
@@ -5122,7 +5211,8 @@ function SettingsPage({
   onNotificationPreferencesChange,
   onProfileSubmit,
   onThemeToggle,
-  theme
+  theme,
+  workspaceId
 }: {
   canOpenAdmin: boolean;
   currentUser: ChatUser;
@@ -5142,6 +5232,7 @@ function SettingsPage({
   }) => void;
   onThemeToggle: () => void;
   theme: "dark" | "light";
+  workspaceId?: string;
 }) {
   const { logout } = useAuth();
   const queryClient = useQueryClient();
@@ -5152,6 +5243,8 @@ function SettingsPage({
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const brandLogoInputRef = useRef<HTMLInputElement>(null);
   const [avatarValue, setAvatarValue] = useState(currentUser.avatarUrl ?? "");
+  const [avatarUploadFile, setAvatarUploadFile] = useState<File | null>(null);
+  const [isAvatarUploading, setIsAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
   const [brandName, setBrandName] = useState(zoneRuntime?.app_name ?? "");
@@ -5160,9 +5253,21 @@ function SettingsPage({
   const [brandLogoPreviewURL, setBrandLogoPreviewURL] = useState(zoneRuntime?.logo_url ?? "");
   const [registrationMode, setRegistrationMode] = useState<"open" | "invite_only" | "closed">("open");
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
+  const [storageProvider, setStorageProvider] = useState<ZoneStorageProvider>("local");
+  const [storageEndpoint, setStorageEndpoint] = useState("");
+  const [storageRegion, setStorageRegion] = useState("us-east-1");
+  const [storageBucket, setStorageBucket] = useState("");
+  const [storageAccessKey, setStorageAccessKey] = useState("");
+  const [storageSecretKey, setStorageSecretKey] = useState("");
+  const [hasStoredStorageSecret, setHasStoredStorageSecret] = useState(false);
+  const [storageFeedback, setStorageFeedback] = useState<string | null>(null);
   const hasDesktopUpdateNotice =
     desktopVersionStatus.status === "update_available" || desktopVersionStatus.status === "unsupported";
   const recommendedDesktopVersion = desktopVersionStatus.version?.clients?.desktop?.recommended_version;
+  const canSubmitStorage = storageProvider === "local" || Boolean(
+    storageEndpoint.trim() && storageBucket.trim() && storageAccessKey.trim() &&
+    (storageSecretKey.trim() || hasStoredStorageSecret)
+  );
 
   useEffect(() => setAvatarValue(currentUser.avatarUrl ?? ""), [currentUser.avatarUrl]);
   useEffect(() => {
@@ -5184,6 +5289,11 @@ function SettingsPage({
     queryFn: () => api.tenancy.currentZone(),
     queryKey: ["tenancy", "current-zone", "settings"]
   });
+  const zoneStorageQuery = useQuery({
+    enabled: canOpenAdmin,
+    queryFn: () => api.tenancy.currentZoneStorage(),
+    queryKey: ["tenancy", "current-zone", "storage"]
+  });
   useEffect(() => {
     const zone = currentZoneQuery.data?.zone;
     if (!zone) return;
@@ -5193,6 +5303,17 @@ function SettingsPage({
       setRegistrationMode(zone.registration_mode);
     }
   }, [currentZoneQuery.data]);
+  useEffect(() => {
+    const storage = zoneStorageQuery.data;
+    if (!storage) return;
+    setStorageProvider(storage.provider);
+    setStorageEndpoint(storage.endpoint ?? "");
+    setStorageRegion(storage.region || "us-east-1");
+    setStorageBucket(storage.bucket ?? "");
+    setStorageAccessKey(storage.access_key_id ?? "");
+    setStorageSecretKey("");
+    setHasStoredStorageSecret(storage.has_secret_access_key);
+  }, [zoneStorageQuery.data]);
   const updateBrandingMutation = useMutation({
     mutationFn: async () => {
       let logoURL = brandLogoURL.trim();
@@ -5217,6 +5338,33 @@ function SettingsPage({
       }
       setBrandingFeedback("Đã cập nhật tên, logo và chính sách đăng ký cho toàn bộ ứng dụng.");
       await queryClient.invalidateQueries({ queryKey: ["tenancy", "current-zone", "settings"] });
+    }
+  });
+  const updateStorageMutation = useMutation({
+    mutationFn: () => api.tenancy.updateCurrentZoneStorage(
+      storageProvider === "local"
+        ? { provider: "local" }
+        : {
+            provider: storageProvider,
+            endpoint: storageEndpoint.trim(),
+            region: storageRegion.trim() || "us-east-1",
+            bucket: storageBucket.trim().toLowerCase(),
+            access_key_id: storageAccessKey.trim(),
+            ...(storageSecretKey.trim() ? { secret_access_key: storageSecretKey.trim() } : {})
+          }
+    ),
+    onError: (error) => setStorageFeedback(
+      error instanceof Error ? error.message : "Không lưu được cấu hình storage của host."
+    ),
+    onSuccess: async (storage) => {
+      setStorageSecretKey("");
+      setHasStoredStorageSecret(storage.has_secret_access_key);
+      setStorageFeedback(
+        storage.provider === "local"
+          ? "Host đang lưu file trên ổ đĩa local."
+          : "Đã kiểm tra kết nối và lưu cấu hình riêng cho host này."
+      );
+      await queryClient.invalidateQueries({ queryKey: ["tenancy", "current-zone", "storage"] });
     }
   });
   const revokeSessionMutation = useMutation({
@@ -5248,6 +5396,62 @@ function SettingsPage({
   const activeSessionCount = sessions.filter((session) => !session.revoked_at).length;
   const recentSessions = sessions.slice(0, 4);
   const isDesktopRuntime = getPlatformServices().lifecycle.isDesktop;
+  const desktopAppLock = useDesktopAppLock();
+  const [appLockPin, setAppLockPin] = useState("");
+  const [appLockConfirmation, setAppLockConfirmation] = useState("");
+  const [appLockFeedback, setAppLockFeedback] = useState<string | null>(null);
+  const [isAppLockPending, setIsAppLockPending] = useState(false);
+  const [accountDeletionConfirmation, setAccountDeletionConfirmation] = useState("");
+  const [ownershipSuccessorEmail, setOwnershipSuccessorEmail] = useState("");
+  const [accountDeletionError, setAccountDeletionError] = useState<string | null>(null);
+  const deleteAccountMutation = useMutation({
+    mutationFn: () => {
+      const successorEmail = ownershipSuccessorEmail.trim();
+      return api.users.deleteMe({
+        confirmation: "DELETE",
+        ...(successorEmail ? { ownership_successor_email: successorEmail } : {})
+      });
+    },
+    onError: (error) => {
+      setAccountDeletionError(
+        error instanceof Error ? error.message : "Không thể xóa tài khoản lúc này."
+      );
+    },
+    onSuccess: () => logout()
+  });
+
+  async function handleEnableAppLock(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (appLockPin !== appLockConfirmation) {
+      setAppLockFeedback("Mã PIN xác nhận không khớp.");
+      return;
+    }
+    setIsAppLockPending(true);
+    try {
+      await desktopAppLock.configure(appLockPin);
+      setAppLockPin("");
+      setAppLockConfirmation("");
+      setAppLockFeedback("Đã bật khóa ứng dụng trên máy tính này.");
+    } catch (error) {
+      setAppLockFeedback(error instanceof Error ? error.message : "Không bật được khóa ứng dụng.");
+    } finally {
+      setIsAppLockPending(false);
+    }
+  }
+
+  async function handleDisableAppLock(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsAppLockPending(true);
+    try {
+      await desktopAppLock.disable(appLockPin);
+      setAppLockPin("");
+      setAppLockFeedback("Đã tắt khóa ứng dụng.");
+    } catch (error) {
+      setAppLockFeedback(error instanceof Error ? error.message : "Không tắt được khóa ứng dụng.");
+    } finally {
+      setIsAppLockPending(false);
+    }
+  }
 
   async function handleAvatarFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -5264,7 +5468,9 @@ function SettingsPage({
       return;
     }
     try {
-      setAvatarValue(await resizeAvatarFile(file));
+      const resizedAvatar = await resizeAvatarFile(file);
+      setAvatarValue(resizedAvatar.previewURL);
+      setAvatarUploadFile(resizedAvatar.file);
       setAvatarError(null);
     } catch {
       setAvatarError("Không đọc được ảnh đã chọn.");
@@ -5287,14 +5493,29 @@ function SettingsPage({
     setBrandingFeedback(null);
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    onProfileSubmit({
-      avatar_url: formValue(form, "avatar_url") || null,
-      display_name: formValue(form, "display_name"),
-      phone_number: formValue(form, "phone_number") || null
-    });
+    setIsAvatarUploading(true);
+    setAvatarError(null);
+    try {
+      let avatarURL = formValue(form, "avatar_url") || null;
+      if (avatarUploadFile) {
+        const uploaded = await api.users.uploadMyAvatar(avatarUploadFile);
+        avatarURL = uploaded.avatar_path;
+        setAvatarValue(uploaded.avatar_path);
+        setAvatarUploadFile(null);
+      }
+      onProfileSubmit({
+        avatar_url: avatarURL,
+        display_name: formValue(form, "display_name"),
+        phone_number: formValue(form, "phone_number") || null
+      });
+    } catch (error) {
+      setAvatarError(error instanceof Error ? error.message : "Không tải được ảnh đại diện lên storage của host.");
+    } finally {
+      setIsAvatarUploading(false);
+    }
   }
 
   function handleOpenAdminPanel() {
@@ -5343,8 +5564,8 @@ function SettingsPage({
                 Số điện thoại
                 <input defaultValue={currentUser.phoneNumber ?? ""} name="phone_number" placeholder="Số điện thoại" />
               </label>
-              <Button disabled={isUpdatingProfile} size="sm" type="submit">
-                {isUpdatingProfile ? "Đang lưu..." : "Lưu hồ sơ"}
+              <Button disabled={isUpdatingProfile || isAvatarUploading} size="sm" type="submit">
+                {isAvatarUploading ? "Đang tải ảnh..." : isUpdatingProfile ? "Đang lưu..." : "Lưu hồ sơ"}
               </Button>
             </div>
             {avatarError ? <small className="profile-form__error">{avatarError}</small> : null}
@@ -5420,6 +5641,123 @@ function SettingsPage({
           </section>
         ) : null}
         {canOpenAdmin ? (
+          <section className="settings-card settings-card--storage">
+            <div className="settings-card__heading">
+              <div>
+                <h2><Database size={20} /> Lưu trữ ảnh và video</h2>
+                <p>Mỗi host sử dụng một cấu hình riêng; khóa truy cập không được dùng chung với host khác.</p>
+              </div>
+              <span className={`zone-storage-status zone-storage-status--${storageProvider}`}>
+                <Cloud size={15} /> {storageProvider === "local" ? "Local" : storageProvider === "minio" ? "MinIO" : "S3"}
+              </span>
+            </div>
+            <form
+              className="zone-storage-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setStorageFeedback(null);
+                updateStorageMutation.mutate();
+              }}
+            >
+              <label>
+                Loại lưu trữ
+                <select
+                  onChange={(event) => {
+                    setStorageProvider(event.target.value as ZoneStorageProvider);
+                    setStorageFeedback(null);
+                  }}
+                  value={storageProvider}
+                >
+                  <option value="local">Ổ đĩa local của host</option>
+                  <option value="minio">MinIO (S3-compatible)</option>
+                  <option value="s3">Amazon S3 / S3-compatible</option>
+                </select>
+              </label>
+              {storageProvider !== "local" ? (
+                <>
+                  <div className="zone-storage-form__grid">
+                    <label className="zone-storage-form__wide">
+                      API Endpoint
+                      <input
+                        autoCapitalize="none"
+                        onChange={(event) => setStorageEndpoint(event.target.value)}
+                        placeholder="https://minio01.example.vn:9000"
+                        required
+                        spellCheck={false}
+                        type="url"
+                        value={storageEndpoint}
+                      />
+                    </label>
+                    <label>
+                      Region
+                      <input
+                        autoCapitalize="none"
+                        onChange={(event) => setStorageRegion(event.target.value)}
+                        placeholder="us-east-1"
+                        required
+                        spellCheck={false}
+                        value={storageRegion}
+                      />
+                    </label>
+                    <label>
+                      Bucket
+                      <input
+                        autoCapitalize="none"
+                        maxLength={63}
+                        onChange={(event) => setStorageBucket(event.target.value)}
+                        placeholder="webtui-host-01"
+                        required
+                        spellCheck={false}
+                        value={storageBucket}
+                      />
+                    </label>
+                    <label>
+                      Access Key
+                      <input
+                        autoCapitalize="none"
+                        autoComplete="off"
+                        onChange={(event) => setStorageAccessKey(event.target.value)}
+                        required
+                        spellCheck={false}
+                        value={storageAccessKey}
+                      />
+                    </label>
+                    <label>
+                      Secret Key
+                      <span className="zone-storage-secret-input">
+                        <KeyRound size={16} />
+                        <input
+                          autoComplete="new-password"
+                          onChange={(event) => setStorageSecretKey(event.target.value)}
+                          placeholder={hasStoredStorageSecret ? "Để trống để giữ Secret Key hiện tại" : "Nhập Secret Key"}
+                          required={!hasStoredStorageSecret}
+                          type="password"
+                          value={storageSecretKey}
+                        />
+                      </span>
+                    </label>
+                  </div>
+                  <small>
+                    Bucket phải tồn tại và là private. Khi lưu, hệ thống sẽ kiểm tra kết nối trước và mã hóa Secret Key trong database.
+                  </small>
+                </>
+              ) : (
+                <small>Ảnh, video và file sẽ được lưu trong volume riêng của host hiện tại.</small>
+              )}
+              <div className="zone-storage-form__actions">
+                <Button disabled={!canSubmitStorage || zoneStorageQuery.isLoading || updateStorageMutation.isPending} size="sm" type="submit">
+                  {updateStorageMutation.isPending ? "Đang kiểm tra..." : "Kiểm tra và lưu cấu hình"}
+                </Button>
+                {zoneStorageQuery.isFetching ? <small>Đang tải cấu hình...</small> : null}
+              </div>
+              {zoneStorageQuery.isError ? (
+                <small className="zone-storage-form__error" role="alert">Không tải được cấu hình storage hiện tại.</small>
+              ) : null}
+              {storageFeedback ? <small className="zone-storage-form__feedback" role="status">{storageFeedback}</small> : null}
+            </form>
+          </section>
+        ) : null}
+        {canOpenAdmin ? (
           <section className="settings-card settings-card--admin-link">
             <div>
               <Monitor size={22} />
@@ -5441,6 +5779,50 @@ function SettingsPage({
             Chuyển chế độ
           </Button>
         </section>
+        {desktopAppLock.isDesktop ? (
+          <section className="settings-card settings-card--app-lock">
+            <div>
+              <LockKeyhole size={22} />
+              <h2>Khóa ứng dụng</h2>
+            </div>
+            <p>
+              {desktopAppLock.enabled
+                ? "Ứng dụng sẽ yêu cầu mã PIN sau khi máy tính bị khóa hoặc ứng dụng ở nền lâu."
+                : "Bảo vệ phiên desktop bằng mã PIN được lưu trong kho bảo mật của hệ điều hành."}
+            </p>
+            <form onSubmit={desktopAppLock.enabled ? handleDisableAppLock : handleEnableAppLock}>
+              <Input
+                autoComplete="new-password"
+                inputMode="numeric"
+                maxLength={32}
+                onChange={(event) => setAppLockPin(event.target.value)}
+                placeholder={desktopAppLock.enabled ? "Mã PIN hiện tại" : "Mã PIN mới (tối thiểu 6 số)"}
+                type="password"
+                value={appLockPin}
+              />
+              {!desktopAppLock.enabled ? (
+                <Input
+                  autoComplete="new-password"
+                  inputMode="numeric"
+                  maxLength={32}
+                  onChange={(event) => setAppLockConfirmation(event.target.value)}
+                  placeholder="Nhập lại mã PIN"
+                  type="password"
+                  value={appLockConfirmation}
+                />
+              ) : null}
+              <div className="settings-card__actions">
+                <Button disabled={!appLockPin || isAppLockPending} size="sm" type="submit" variant="secondary">
+                  {isAppLockPending ? "Đang lưu..." : desktopAppLock.enabled ? "Tắt khóa ứng dụng" : "Bật khóa ứng dụng"}
+                </Button>
+                {desktopAppLock.enabled ? (
+                  <Button onClick={desktopAppLock.lock} size="sm" type="button">Khóa ngay</Button>
+                ) : null}
+              </div>
+              {appLockFeedback ? <small role="status">{appLockFeedback}</small> : null}
+            </form>
+          </section>
+        ) : null}
         <div className="settings-desktop-grid">
           <section className={`settings-card settings-card--desktop-version settings-card--desktop-version-${desktopVersionStatus.status}`}>
           <div>
@@ -5538,6 +5920,7 @@ function SettingsPage({
               />
             </label>
           </div>
+          <WebPushSettings userId={currentUser.id} workspaceId={workspaceId} />
           <label className="settings-toggle-row">
             <span>
               <strong>Mở ứng dụng khi bật máy</strong>
@@ -5651,6 +6034,79 @@ function SettingsPage({
             </div>
           ) : <EmptyState description="Các thiết bị đăng nhập sẽ xuất hiện tại đây." title="Chưa có phiên đăng nhập" />}
           {sessionActionError ? <p className="session-action-error" role="alert">{sessionActionError}</p> : null}
+        </section>
+        <section className="settings-card settings-card--danger" aria-labelledby="delete-account-title">
+          <div className="settings-card__heading">
+            <div>
+              <h2 id="delete-account-title">Xóa tài khoản</h2>
+              <p>
+                Xóa vĩnh viễn hồ sơ, phiên đăng nhập, thiết bị và tùy chọn cá nhân của bạn trên
+                instance này. Tin nhắn thuộc hồ sơ của tổ chức có thể được giữ lại nhưng không còn
+                liên kết tới tài khoản.
+              </p>
+            </div>
+          </div>
+          <form
+            aria-busy={deleteAccountMutation.isPending}
+            onSubmit={(event) => {
+              event.preventDefault();
+              setAccountDeletionError(null);
+              if (accountDeletionConfirmation !== "DELETE") {
+                setAccountDeletionError("Nhập chính xác DELETE để xác nhận.");
+                return;
+              }
+              if (window.confirm("Xóa vĩnh viễn tài khoản này? Hành động không thể hoàn tác.")) {
+                deleteAccountMutation.mutate();
+              }
+            }}
+          >
+            <label htmlFor="delete-account-successor">
+              Email người tiếp quản <span>(không bắt buộc)</span>
+            </label>
+            <Input
+              aria-describedby="delete-account-successor-help"
+              autoCapitalize="none"
+              autoComplete="email"
+              disabled={deleteAccountMutation.isPending}
+              id="delete-account-successor"
+              inputMode="email"
+              onChange={(event) => setOwnershipSuccessorEmail(event.target.value)}
+              placeholder="thanhvien@congty.vn"
+              spellCheck={false}
+              type="email"
+              value={ownershipSuccessorEmail}
+            />
+            <small id="delete-account-successor-help">
+              Nếu bạn là chủ tổ chức, hãy nhập email của một thành viên đang hoạt động để chuyển quyền trước khi xóa.
+            </small>
+            <label htmlFor="delete-account-confirmation">
+              Nhập <strong>DELETE</strong> để xác nhận
+            </label>
+            <div className="settings-danger-actions">
+              <Input
+                aria-describedby="delete-account-help"
+                autoCapitalize="characters"
+                autoComplete="off"
+                disabled={deleteAccountMutation.isPending}
+                id="delete-account-confirmation"
+                onChange={(event) => setAccountDeletionConfirmation(event.target.value)}
+                placeholder="DELETE"
+                spellCheck={false}
+                value={accountDeletionConfirmation}
+              />
+              <Button
+                disabled={accountDeletionConfirmation !== "DELETE" || deleteAccountMutation.isPending}
+                size="sm"
+                type="submit"
+                variant="secondary"
+              >
+                <Trash2 size={16} />
+                {deleteAccountMutation.isPending ? "Đang xóa..." : "Xóa vĩnh viễn tài khoản"}
+              </Button>
+            </div>
+            <small id="delete-account-help">Hành động này không thể hoàn tác.</small>
+            {accountDeletionError ? <p className="settings-danger-error" role="alert">{accountDeletionError}</p> : null}
+          </form>
         </section>
       </div>
     </div>
@@ -6465,7 +6921,7 @@ function formatOrderServiceMap(services: Record<string, number>) {
     .join(" · ");
 }
 
-function resizeAvatarFile(file: File): Promise<string> {
+function resizeAvatarFile(file: File): Promise<{ file: File; previewURL: string }> {
   return new Promise((resolve, reject) => {
     const source = URL.createObjectURL(file);
     const image = new Image();
@@ -6483,7 +6939,17 @@ function resizeAvatarFile(file: File): Promise<string> {
       }
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(source);
-      resolve(canvas.toDataURL("image/jpeg", 0.86));
+      const previewURL = canvas.toDataURL("image/jpeg", 0.86);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("Avatar could not be encoded"));
+          return;
+        }
+        resolve({
+          file: new File([blob], "avatar.jpg", { type: "image/jpeg" }),
+          previewURL
+        });
+      }, "image/jpeg", 0.86);
     };
     image.onerror = () => {
       URL.revokeObjectURL(source);
@@ -7464,7 +7930,11 @@ function UploadQueue({
               <div className="upload-queue__details">
                 <strong className="upload-queue__name" title={item.name}>{item.isAudio ? "Tin nhắn thoại" : item.name}</strong>
                 <small className="upload-queue__meta">
-                  {item.durationSeconds ? `${formatVoiceTime(item.durationSeconds)} · ` : ""}{statusLabel}
+                  {item.durationSeconds
+                    ? `${formatVoiceTime(item.durationSeconds)} · `
+                    : `${formatFileSize(item.size)} · `}
+                  {item.isVideo && item.size >= resumableUploadThresholdBytes ? "Tải tiếp tục · " : ""}
+                  {statusLabel}
                 </small>
                 {item.status === "uploading" ? (
                   <i
@@ -7787,6 +8257,7 @@ function MessageTimeline({
   onRemindMessage,
   onFocusedMessageSettled,
   onRetryCall,
+  onRetryOutbox,
   onSearchResultSelect,
   onStartEdit,
   onSubmitEdit,
@@ -7824,6 +8295,7 @@ function MessageTimeline({
   onRemindMessage: (message: ChatMessage) => void;
   onFocusedMessageSettled: () => void;
   onRetryCall: (mode: "audio" | "video") => void;
+  onRetryOutbox: (entryId: string) => void;
   onSearchResultSelect: (message: ChatMessage) => void;
   onStartEdit: (message: ChatMessage) => void;
   onSubmitEdit: (event: FormEvent<HTMLFormElement>) => void;
@@ -8084,10 +8556,31 @@ function MessageTimeline({
                   {message.isBot ? <Badge tone="blue">BOT</Badge> : null}
                   {message.isForwarded ? <span>Đã chuyển tiếp</span> : null}
                   {message.editedAt ? <span>Đã sửa {message.editedAt}</span> : null}
-                  {message.isPending ? <Badge tone="blue">Đang gửi</Badge> : null}
+                  {message.isPending && message.deliveryState !== "failed" ? (
+                    <Badge role="status" tone={message.deliveryState === "sending" ? "blue" : "orange"}>
+                      {message.deliveryState === "sending" ? "Đang gửi" : "Chờ kết nối"}
+                    </Badge>
+                  ) : null}
+                  {message.deliveryState === "failed" ? (
+                    <span className="message-delivery-failed" role="alert" title={message.deliveryError}>
+                      <Badge tone="red">Gửi thất bại</Badge>
+                      {message.outboxEntryId ? (
+                        <button
+                          aria-label="Thử gửi lại tin nhắn này"
+                          onClick={() => onRetryOutbox(message.outboxEntryId!)}
+                          type="button"
+                        >
+                          Thử lại
+                        </button>
+                      ) : null}
+                    </span>
+                  ) : null}
                 </header>
               ) : null}
-              <div className={actionMenuMessageId === message.id ? "message-actions message-actions--open" : "message-actions"}>
+              <div
+                className={actionMenuMessageId === message.id ? "message-actions message-actions--open" : "message-actions"}
+                hidden={message.isPending}
+              >
                 <Tooltip label={actionMenuMessageId === message.id ? "Đóng thao tác" : "Thao tác tin nhắn"}>
                   <button
                     aria-expanded={actionMenuMessageId === message.id}
@@ -8335,7 +8828,7 @@ function MessageTimeline({
                 ))}
               </div>
             ) : null}
-            {!message.isDeleted && !message.poll ? (
+            {!message.isDeleted && !message.poll && !message.isPending ? (
               <div className="message-reaction-control">
                 <button
                   aria-expanded={reactionPickerMessageId === message.id}
@@ -8876,7 +9369,7 @@ function collectMentionedUserIds(body: string, members: Array<ChannelMember | Wo
   return mentionedUserIds;
 }
 
-function validateUploadFiles(files: File[], imageOnly = false): {
+function validateUploadFiles(files: File[], imageOnly = false, videoOnly = false): {
   accepted: File[];
   rejected: Array<{ file: File; reason: string }>;
 } {
@@ -8884,7 +9377,7 @@ function validateUploadFiles(files: File[], imageOnly = false): {
   const rejected: Array<{ file: File; reason: string }> = [];
 
   for (const file of files) {
-    const reason = validateUploadFile(file, imageOnly);
+    const reason = validateUploadFile(file, imageOnly, videoOnly);
     if (reason) {
       rejected.push({ file, reason });
     } else {
@@ -8895,7 +9388,7 @@ function validateUploadFiles(files: File[], imageOnly = false): {
   return { accepted, rejected };
 }
 
-function validateUploadFile(file: File, imageOnly: boolean): string | null {
+function validateUploadFile(file: File, imageOnly: boolean, videoOnly: boolean): string | null {
   const name = file.name.trim();
   const mimeType = normalizedUploadMimeType(file);
 
@@ -8913,6 +9406,9 @@ function validateUploadFile(file: File, imageOnly: boolean): string | null {
   }
   if (imageOnly && !mimeType.startsWith("image/")) {
     return `${name} không phải là ảnh.`;
+  }
+  if (videoOnly && !mimeType.startsWith("video/")) {
+    return `${name} không phải là video được hỗ trợ.`;
   }
   if (!isAllowedUploadMimeType(mimeType)) {
     return `${name} có định dạng không được hỗ trợ.`;
@@ -10475,18 +10971,23 @@ function stripDisplayedQRURL(body: string) {
     .trim();
 }
 
-function canAccessRailItem(itemId: RailItemId, can: (permission: string) => boolean) {
+function canAccessRailItem(
+  itemId: RailItemId,
+  can: (permission: string) => boolean,
+  capabilities?: ZoneCapabilities
+) {
   switch (itemId) {
     case "departments":
       return can("workspace.manage");
     case "tickets":
       return can("ticket.view");
     case "files":
-      return can("admin.view");
+      return capabilities?.files !== false && can("admin.view");
     case "bots":
-      return can("bot.manage");
+      return capabilities?.bots !== false && can("bot.manage");
     case "automation":
-      return can("webhook.manage") || can("cronjob.manage") || can("module.manage");
+      return capabilities?.automation !== false &&
+        (can("webhook.manage") || can("cronjob.manage") || can("module.manage"));
     default:
       return true;
   }

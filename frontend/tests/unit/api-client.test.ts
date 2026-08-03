@@ -4,6 +4,9 @@ import {
   createAuthClient,
   createCallsClient,
   createFilesClient,
+  createMessagesClient,
+  createNotificationsClient,
+  createUsersClient,
   HttpClient,
   isLocalHostname,
   localizeZoneRuntime,
@@ -302,6 +305,102 @@ describe("HttpClient", () => {
       payload: {},
       signal_type: "ready",
     });
+  });
+
+  it("sends account deletion confirmation and an optional ownership successor", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const users = createUsersClient(
+      new HttpClient({ baseUrl: "https://chat.company.example" }),
+    );
+
+    await users.deleteMe({
+      confirmation: "DELETE",
+      ownership_successor_email: "successor@company.example",
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://chat.company.example/api/v1/users/me",
+    );
+    expect(fetchMock.mock.calls[0]?.[1].method).toBe("DELETE");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1].body))).toEqual({
+      confirmation: "DELETE",
+      ownership_successor_email: "successor@company.example",
+    });
+  });
+});
+
+describe("messages client", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the client message id as an idempotency header", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        data: { id: "message-1" },
+        success: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const messages = createMessagesClient(new HttpClient({ baseUrl: "https://chat.example.test" }));
+
+    await messages.send("workspace-1", "channel-1", {
+      body: "Xin chào",
+      client_message_id: "client-message-1",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Headers).get("Idempotency-Key")).toBe("client-message-1");
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      body: "Xin chào",
+      client_message_id: "client-message-1",
+    });
+  });
+});
+
+describe("web push client", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the public config and authenticated subscription endpoints", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { enabled: true, vapid_public_key: "vapid-key" }, success: true }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            created_at: "2026-08-03T00:00:00Z",
+            id: "subscription-1",
+            updated_at: "2026-08-03T00:00:00Z",
+          },
+          success: true,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const notifications = createNotificationsClient(
+      new HttpClient({ baseUrl: "https://chat.example.test", getAccessToken: () => "access-token" }),
+    );
+
+    await expect(notifications.getWebPushConfig()).resolves.toMatchObject({ enabled: true });
+    await notifications.registerWebPushSubscription({
+      endpoint: "https://push.example.test/subscription",
+      keys: { auth: "auth-key", p256dh: "p256dh-key" },
+      workspace_id: "workspace-1",
+    });
+    await notifications.revokeWebPushSubscription("subscription-1");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://chat.example.test/api/v1/notifications/web-push/config");
+    expect((fetchMock.mock.calls[0]?.[1].headers as Headers).get("Authorization")).toBeNull();
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://chat.example.test/api/v1/notifications/web-push/subscriptions");
+    expect((fetchMock.mock.calls[1]?.[1].headers as Headers).get("Authorization")).toBe("Bearer access-token");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1].body))).toMatchObject({ workspace_id: "workspace-1" });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "https://chat.example.test/api/v1/notifications/web-push/subscriptions/subscription-1",
+    );
+    expect(fetchMock.mock.calls[2]?.[1].method).toBe("DELETE");
   });
 });
 

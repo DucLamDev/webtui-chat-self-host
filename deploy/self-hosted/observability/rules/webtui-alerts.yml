@@ -1,0 +1,172 @@
+groups:
+  - name: webtui-api
+    rules:
+      - alert: WebTuiAPIDown
+        expr: up{job="webtui-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: WebTui API is unavailable
+          description: Prometheus has not scraped the API successfully for two minutes.
+
+      - alert: WebTuiAPIHighErrorRate
+        expr: |
+          sum(rate(webtui_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(webtui_http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API 5xx rate is above 5%
+          description: Investigate recent deployments, database health and dependency errors.
+
+      - alert: WebTuiAPIHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(webtui_http_request_latency_seconds_bucket{path!~"/metrics|/health|/ready"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API p95 latency is above one second
+          description: The p95 latency threshold has been exceeded for ten minutes.
+
+      - alert: WebTuiAPIHighP99Latency
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(webtui_http_request_latency_seconds_bucket{path!~"/metrics|/health|/ready"}[5m]))
+          ) > 2.5
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: API p99 latency is above 2.5 seconds
+          description: Tail latency is high enough to materially affect chat and sync UX.
+
+  - name: webtui-push
+    rules:
+      - alert: WebTuiPushQueueStalled
+        expr: webtui_push_oldest_queued_age_seconds > 300
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Push queue has been stalled for more than five minutes
+          description: Check worker health, provider credentials and relay availability.
+
+      - alert: WebTuiPushDeadLetters
+        expr: webtui_push_dead_jobs_24h > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Push notifications reached dead-letter
+          description: Open the admin Push dashboard and inspect the redacted final error.
+
+      - alert: WebTuiPushDeliveryRateLow
+        expr: webtui_push_delivery_rate_ratio_24h < 0.95
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Push delivery rate is below 95%
+          description: The ratio uses terminal push jobs from the rolling 24-hour window.
+
+  - name: webtui-push-relay
+    rules:
+      - alert: WebTuiPushRelayDown
+        expr: |
+          up{job="webtui-push-relay"} == 0
+          and on (job, instance)
+          present_over_time(webtui_push_relay_metrics_collection_success{job="webtui-push-relay"}[24h]) == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Official push relay is unavailable
+          description: This target was scraped successfully within 24 hours and has now been unreachable for two minutes.
+
+      - alert: WebTuiPushRelayQueueStalled
+        expr: webtui_push_relay_oldest_queued_age_seconds > 300
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Official push relay queue has been stalled for more than five minutes
+          description: Check relay workers, PostgreSQL leases and FCM/APNs provider reachability.
+
+      - alert: WebTuiPushRelayDeadLetters
+        expr: webtui_push_relay_dead_jobs_24h > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Official push relay deliveries reached dead-letter
+          description: Inspect aggregate relay health and redacted relay logs; destination credentials are never exported as metrics.
+
+      - alert: WebTuiPushRelayDeliveryRateLow
+        expr: |
+          webtui_push_relay_delivery_rate_ratio_24h < 0.95
+          and
+          (webtui_push_relay_sent_jobs_24h + webtui_push_relay_dead_jobs_24h) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Official push relay delivery rate is below 95%
+          description: The ratio measures terminal provider outcomes in the rolling 24-hour window.
+
+      - alert: WebTuiPushRelayMetricCollectionFailed
+        expr: webtui_push_relay_metrics_collection_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Official push relay queue metrics cannot be collected
+          description: The relay metrics endpoint could not query its aggregate PostgreSQL counters.
+
+  - name: webtui-backup
+    rules:
+      - alert: WebTuiBackupNeverSucceeded
+        expr: webtui_backup_last_success_timestamp_seconds == 0
+        for: 26h
+        labels:
+          severity: critical
+        annotations:
+          summary: No successful off-site backup has been recorded
+          description: Configure the backup profile and complete a verified S3/restic backup within the first day.
+
+      - alert: WebTuiBackupFailed
+        expr: webtui_backup_failed_runs_24h > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: At least one backup failed in the last 24 hours
+          description: Inspect the backup run, S3 reachability and available local staging space.
+
+      - alert: WebTuiBackupStale
+        expr: |
+          webtui_backup_last_success_timestamp_seconds > 0
+          and
+          (time() - webtui_backup_last_success_timestamp_seconds) > 90000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful backup for more than 25 hours
+          description: Verify the scheduled backup container and perform a restore drill.
+
+      - alert: WebTuiOperationalMetricCollectionFailed
+        expr: webtui_operational_metrics_scrape_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database-backed operational metrics cannot be collected
+          description: The API metrics endpoint could not query its operational counters.

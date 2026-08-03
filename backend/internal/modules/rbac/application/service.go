@@ -9,6 +9,11 @@ import (
 	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
+const (
+	PermissionViewAdmin  = "admin.view"
+	PermissionManageRole = "role.manage"
+)
+
 type Repository interface {
 	ListPermissions(ctx context.Context) ([]rbacdomain.Permission, error)
 	ListRoles(ctx context.Context, workspaceID string) ([]rbacdomain.Role, error)
@@ -100,7 +105,10 @@ func NewService(repo Repository) *Service {
 	return &Service{repo: repo}
 }
 
-func (s *Service) ListPermissions(ctx context.Context) ([]PermissionDTO, error) {
+func (s *Service) ListPermissions(ctx context.Context, actorUserID string, zoneID string) ([]PermissionDTO, error) {
+	if err := s.ensureZoneRoleReader(ctx, actorUserID, zoneID); err != nil {
+		return nil, err
+	}
 	permissions, err := s.repo.ListPermissions(ctx)
 	if err != nil {
 		return nil, err
@@ -108,7 +116,10 @@ func (s *Service) ListPermissions(ctx context.Context) ([]PermissionDTO, error) 
 	return toDTOs(permissions), nil
 }
 
-func (s *Service) ListRoles(ctx context.Context, workspaceID string) ([]RoleDTO, error) {
+func (s *Service) ListRoles(ctx context.Context, actorUserID string, zoneID string, workspaceID string) ([]RoleDTO, error) {
+	if err := s.ensureWorkspaceRoleReader(ctx, actorUserID, zoneID, workspaceID); err != nil {
+		return nil, err
+	}
 	roles, err := s.repo.ListRoles(ctx, strings.TrimSpace(workspaceID))
 	if err != nil {
 		return nil, err
@@ -166,12 +177,79 @@ func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (RoleDT
 	return toRoleDTO(role), nil
 }
 
-func (s *Service) ListWorkspaceMemberRoles(ctx context.Context, workspaceID string, userID string) ([]RoleDTO, error) {
+func (s *Service) ListWorkspaceMemberRoles(
+	ctx context.Context,
+	actorUserID string,
+	zoneID string,
+	workspaceID string,
+	userID string,
+) ([]RoleDTO, error) {
+	if err := s.ensureWorkspaceRoleReader(ctx, actorUserID, zoneID, workspaceID); err != nil {
+		return nil, err
+	}
 	roles, err := s.repo.ListWorkspaceMemberRoles(ctx, strings.TrimSpace(workspaceID), strings.TrimSpace(userID))
 	if err != nil {
 		return nil, err
 	}
 	return toRoleDTOs(roles), nil
+}
+
+func (s *Service) ensureZoneRoleReader(ctx context.Context, actorUserID string, zoneID string) error {
+	actorUserID = strings.TrimSpace(actorUserID)
+	zoneID = strings.TrimSpace(zoneID)
+	if actorUserID == "" {
+		return apperrors.Unauthorized("Phiên đăng nhập không hợp lệ.")
+	}
+	if zoneID == "" {
+		return apperrors.BadRequest("ZONE_REQUIRED", "Không xác định được vùng máy chủ hiện tại.")
+	}
+	for _, permission := range []string{PermissionViewAdmin, PermissionManageRole} {
+		allowed, err := s.repo.HasAnyZonePermission(ctx, actorUserID, zoneID, permission)
+		if err != nil {
+			return err
+		}
+		if allowed {
+			return nil
+		}
+	}
+	return apperrors.Forbidden("Bạn không có quyền xem danh mục phân quyền của zone này.")
+}
+
+func (s *Service) ensureWorkspaceRoleReader(
+	ctx context.Context,
+	actorUserID string,
+	zoneID string,
+	workspaceID string,
+) error {
+	actorUserID = strings.TrimSpace(actorUserID)
+	zoneID = strings.TrimSpace(zoneID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if actorUserID == "" {
+		return apperrors.Unauthorized("Phiên đăng nhập không hợp lệ.")
+	}
+	if zoneID == "" {
+		return apperrors.BadRequest("ZONE_REQUIRED", "Không xác định được vùng máy chủ hiện tại.")
+	}
+	if workspaceID == "" {
+		return apperrors.BadRequest("WORKSPACE_REQUIRED", "Thiếu workspace_id để xem role.")
+	}
+	matchesZone, err := s.repo.WorkspaceBelongsToZone(ctx, workspaceID, zoneID)
+	if err != nil {
+		return err
+	}
+	if !matchesZone {
+		return apperrors.Forbidden("Workspace không thuộc zone của phiên đăng nhập.")
+	}
+	for _, permission := range []string{PermissionViewAdmin, PermissionManageRole} {
+		allowed, err := s.repo.HasWorkspacePermission(ctx, actorUserID, workspaceID, permission)
+		if err != nil {
+			return err
+		}
+		if allowed {
+			return nil
+		}
+	}
+	return apperrors.Forbidden("Bạn không có quyền xem role trong workspace này.")
 }
 
 func (s *Service) AssignWorkspaceRole(ctx context.Context, input AssignWorkspaceRoleInput) error {

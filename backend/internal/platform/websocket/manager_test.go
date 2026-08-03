@@ -33,3 +33,33 @@ func TestUserRoomIsIsolatedByZone(t *testing.T) {
 	default:
 	}
 }
+
+func TestDisconnectUserClosesOnlyThatUsersClients(t *testing.T) {
+	manager := NewManager()
+	disconnected := false
+	deletedUser := &Client{
+		ID: "deleted-user-client", UserID: "user-1", ZoneID: "zone-a",
+		Send: make(chan Event, 1), Disconnect: func() { disconnected = true },
+	}
+	otherUser := &Client{ID: "other-user-client", UserID: "user-2", ZoneID: "zone-a", Send: make(chan Event, 1)}
+	if err := manager.Register(deletedUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(otherUser); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Unregister(otherUser.ID)
+
+	if err := manager.DisconnectUser(context.Background(), "user-1"); err != nil {
+		t.Fatalf("DisconnectUser() error = %v", err)
+	}
+	if !disconnected {
+		t.Fatal("deleted user's network connection was not closed")
+	}
+	if _, open := <-deletedUser.Send; open {
+		t.Fatal("deleted user's send channel is still open")
+	}
+	if stats := manager.Stats(); stats["clients"] != 1 {
+		t.Fatalf("clients = %d, want 1", stats["clients"])
+	}
+}

@@ -21,8 +21,16 @@ import {
 import { getPlatformServices } from "@webtui/chat-core";
 import { api, runtimeEnvironment } from "@/lib/api";
 import { useAuthStore } from "./auth-store";
+import type { AuthAccount } from "./auth-store";
+import { DesktopAppLockProvider } from "./desktop-app-lock";
 import { clearMediaObjectUrlCache } from "@/features/chat/model/media-cache";
 import { isLikelyOfflineError } from "@/features/chat/model/offline-cache";
+import {
+  accountKey as offlineAccountKey,
+  clearOfflineAccount,
+  type OfflineAccount
+} from "@/features/chat/model/message-outbox";
+import { cleanupWebPushForAccount } from "@/features/notifications/web-push";
 
 type AuthContextValue = {
   isAuthenticated: boolean;
@@ -35,6 +43,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const accessToken = useAuthStore((state) => state.accessToken);
+  const accounts = useAuthStore((state) => state.accounts);
   const hydrated = useAuthStore((state) => state.hydrated);
   const refreshToken = useAuthStore((state) => state.refreshToken);
   const user = useAuthStore((state) => state.user);
@@ -51,7 +60,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initialInviteToken, setInitialInviteToken] = useState("");
   const [isCompletingOIDC, setIsCompletingOIDC] = useState(false);
   const oidcCompletionStarted = useRef(false);
-  const supportsBrowserOIDC = !getPlatformServices().lifecycle.isDesktop;
+  const offlineAccountRef = useRef<OfflineAccount | null>(null);
+  const supportsBrowserOIDC = true;
   const isDesktop = getPlatformServices().lifecycle.isDesktop;
 
   useEffect(() => {
@@ -149,6 +159,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession,
     setZoneRuntime
   ]);
+
+  useEffect(() => {
+    if (!hydrated || accessToken || !isDesktop) {
+      return;
+    }
+    const services = getPlatformServices();
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+
+    const handleURLs = (urls: string[]) => {
+      if (disposed || oidcCompletionStarted.current) {
+        return;
+      }
+      const callback = urls.map(parseNativeOIDCCallback).find(Boolean);
+      if (!callback) {
+        return;
+      }
+      oidcCompletionStarted.current = true;
+      if (callback.error || !callback.code) {
+        setFormError("Đăng nhập SSO đã bị hủy hoặc không được xác minh.");
+        return;
+      }
+      setIsCompletingOIDC(true);
+      selectZone(callback.server, setZoneRuntime)
+        .then((domain) => api.auth.oidcComplete({
+          code: callback.code as string,
+          device_name: browserDeviceName(),
+          domain
+        }))
+        .then((result) => {
+          if (!disposed) {
+            setRememberLogin(true);
+            setSession(result);
+            void queryClient.invalidateQueries({ queryKey: queryKeys.auth.me });
+          }
+        })
+        .catch((error) => {
+          if (!disposed) {
+            setFormError(error instanceof Error ? error.message : "Đăng nhập SSO không thành công.");
+          }
+        })
+        .finally(() => {
+          if (!disposed) {
+            setIsCompletingOIDC(false);
+          }
+        });
+    };
+
+    void services.deepLinks.getInitialUrls().then(handleURLs);
+    void services.deepLinks.onOpenUrl(handleURLs).then((stop) => {
+      if (disposed) {
+        stop();
+      } else {
+        stopListening = stop;
+      }
+    });
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, [accessToken, hydrated, isDesktop, queryClient, setRememberLogin, setSession, setZoneRuntime]);
   const [isRestoringSession, setIsRestoringSession] = useState(false);
   const [restoreAttemptedToken, setRestoreAttemptedToken] = useState<string | null>(null);
 
@@ -167,6 +238,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(meQuery.data);
     }
   }, [meQuery.data, setUser]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    const nextAccount = user?.id
+      ? {
+          serverId: zoneRuntime?.api_base_url ?? runtimeEnvironment.apiBaseUrl,
+          userId: user.id
+        }
+      : null;
+    const previousAccount = offlineAccountRef.current;
+    if (
+      previousAccount &&
+      (!nextAccount || offlineAccountKey(previousAccount) !== offlineAccountKey(nextAccount))
+    ) {
+      void clearOfflineAccount(previousAccount).catch(() => undefined);
+      void cleanupWebPushForAccount(previousAccount).catch(() => undefined);
+    }
+    offlineAccountRef.current = nextAccount;
+  }, [hydrated, user?.id, zoneRuntime?.api_base_url]);
 
   useEffect(() => {
     if (meQuery.isError && !isLikelyOfflineError(meQuery.error)) {
@@ -279,10 +371,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logoutMutation = useMutation({
     mutationFn: () =>
       refreshToken ? api.auth.logout({ refresh_token: refreshToken }) : Promise.resolve({ status: "ok" }),
-    onSettled: () => {
-      clearMediaObjectUrlCache();
-      clearSession();
-      queryClient.clear();
+    onSettled: async () => {
+      const offlineAccount = user?.id
+        ? {
+            serverId: zoneRuntime?.api_base_url ?? runtimeEnvironment.apiBaseUrl,
+            userId: user.id
+          }
+        : null;
+      try {
+        if (offlineAccount) {
+          await Promise.allSettled([
+            clearOfflineAccount(offlineAccount),
+            cleanupWebPushForAccount(
+              offlineAccount,
+              (subscriptionId) => api.notifications.revokeWebPushSubscription(subscriptionId)
+            )
+          ]);
+        }
+      } finally {
+        clearMediaObjectUrlCache();
+        clearSession();
+        queryClient.clear();
+      }
     }
   });
 
@@ -314,6 +424,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           error={formError}
           initialDomain={zoneDomain ?? ""}
           isPending={connectServerMutation.isPending}
+          recentAccounts={accounts}
           onConnect={(domain) => connectServerMutation.mutate(domain)}
         />
       );
@@ -358,17 +469,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         onModeChange={setMode}
         onOIDCDiscover={supportsBrowserOIDC ? async (domain) => {
           const selectedDomain = await selectZone(domain, setZoneRuntime);
+          if (useAuthStore.getState().zoneRuntime?.capabilities?.sso === false) {
+            return [];
+          }
           return api.auth.oidcProviders(selectedDomain);
         } : undefined}
         onOIDCStart={supportsBrowserOIDC ? async (domain, providerId) => {
           const selectedDomain = await selectZone(domain, setZoneRuntime);
+          if (useAuthStore.getState().zoneRuntime?.capabilities?.sso === false) {
+            throw new Error("Máy chủ này không bật đăng nhập SSO.");
+          }
           const result = await api.auth.oidcStart({
             device_name: browserDeviceName(),
             domain: selectedDomain,
             provider_id: providerId,
-            return_to: browserOIDCReturnTo()
+            return_to: oidcReturnTo(selectedDomain, isDesktop)
           });
-          window.location.assign(result.authorization_url);
+          if (isDesktop) {
+            await getPlatformServices().links.openExternal(result.authorization_url);
+          } else {
+            window.location.assign(result.authorization_url);
+          }
         } : undefined}
         onRegister={(values) =>
           registerMutation.mutate({
@@ -393,18 +514,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return <AuthLoadingState label="Đang tải hồ sơ người dùng..." />;
   }
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <DesktopAppLockProvider
+        active={Boolean(accessToken)}
+        onLogout={() => logoutMutation.mutate()}
+      >
+        {children}
+      </DesktopAppLockProvider>
+    </AuthContext.Provider>
+  );
 }
 
 function ServerConnectScreen({
   error,
   initialDomain,
   isPending,
+  recentAccounts,
   onConnect
 }: {
   error?: string | null;
   initialDomain: string;
   isPending: boolean;
+  recentAccounts: AuthAccount[];
   onConnect: (domain: string) => void;
 }) {
   const [domain, setDomain] = useState(initialDomain);
@@ -444,6 +576,22 @@ function ServerConnectScreen({
           </Button>
         </form>
         <small>Có thể nhập domain hoặc URL HTTPS đầy đủ.</small>
+        {recentAccounts.length ? (
+          <div className="server-connect-card__recent" aria-label="Máy chủ gần đây">
+            <strong>Máy chủ gần đây</strong>
+            {recentAccounts.map((account) => (
+              <Button
+                key={account.domain}
+                disabled={isPending}
+                onClick={() => onConnect(account.domain)}
+                type="button"
+                variant="secondary"
+              >
+                {account.runtime.app_name || account.domain}
+              </Button>
+            ))}
+          </div>
+        ) : null}
       </section>
     </main>
   );
@@ -469,7 +617,12 @@ function browserDomain() {
   }
 }
 
-function browserOIDCReturnTo() {
+function oidcReturnTo(domain: string, isDesktop: boolean) {
+  if (isDesktop) {
+    const callback = new URL("webtui://oidc/callback");
+    callback.searchParams.set("server", domain);
+    return callback.toString();
+  }
   if (typeof window === "undefined") {
     return "/";
   }
@@ -502,9 +655,13 @@ async function selectZone(
   });
   const discoveryDomain = new URL(serverBaseUrl).hostname;
   const discovery = await discoveryApi.tenancy.discover(discoveryDomain);
+  if (!discovery.capabilities.chat) {
+    throw new Error("Máy chủ này không hỗ trợ WebTui Chat.");
+  }
   const discoveredRuntime = runtimeForCurrentBrowser(discovery.runtime);
   const runtime = {
     ...discoveredRuntime,
+    capabilities: discovery.capabilities,
     logo_url: resolveBrandLogoURL(
       discoveredRuntime.logo_url ?? discovery.zone.logo_url,
       discoveredRuntime.api_base_url
@@ -515,6 +672,26 @@ async function selectZone(
     throw new ZoneNavigationStartedError();
   }
   return discovery.domain;
+}
+
+function parseNativeOIDCCallback(raw: string): { code?: string; error?: string; server: string } | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "webtui:" || url.hostname !== "oidc" || url.pathname !== "/callback") {
+      return null;
+    }
+    const server = url.searchParams.get("server")?.trim() ?? "";
+    if (!server) {
+      return null;
+    }
+    return {
+      code: url.searchParams.get("oidc_code") ?? undefined,
+      error: url.searchParams.get("oidc_error") ?? undefined,
+      server
+    };
+  } catch {
+    return null;
+  }
 }
 
 function resolveBrandLogoURL(value?: string, apiBaseURL?: string): string | undefined {

@@ -42,9 +42,16 @@ func TestOpenAPIParsesAndContainsMobileP0Paths(t *testing.T) {
 		"/api/v1/auth/oidc/start",
 		"/api/v1/auth/oidc/callback",
 		"/api/v1/auth/oidc/complete",
+		"/api/v1/calls/ice-servers",
 		"/mobile/releases/{platform}/{channel}/{current_version}",
 		"/downloads/manifest/{channel}",
 		"/api/v1/mobile/devices",
+		"/api/v1/notifications/web-push/config",
+		"/api/v1/notifications/web-push/subscriptions",
+		"/api/v1/notifications/web-push/subscriptions/{subscription_id}",
+		"/api/v1/workspaces/{workspace_id}/admin/push",
+		"/api/v1/workspaces/{workspace_id}/admin/messages",
+		"/api/v1/workspaces/{workspace_id}/admin/push/dead-letters/{job_id}/replay",
 		"/api/v1/workspaces/{workspace_id}/sync",
 		"/api/v1/workspaces/{workspace_id}/calls",
 		"/api/v1/workspaces/{workspace_id}/channels/{channel_id}/media",
@@ -54,5 +61,25 @@ func TestOpenAPIParsesAndContainsMobileP0Paths(t *testing.T) {
 		if _, ok := paths[path]; !ok {
 			t.Fatalf("openapi.yaml thiếu path %s", path)
 		}
+	}
+	channelPreference, ok := paths["/api/v1/notifications/preferences/channels/{channel_id}"].(map[string]any)
+	if !ok || channelPreference["get"] == nil || channelPreference["put"] == nil {
+		t.Fatal("channel notification preference contract must contain GET and PUT")
+	}
+	webPushSubscription, ok := paths["/api/v1/notifications/web-push/subscriptions/{subscription_id}"].(map[string]any)
+	if !ok || webPushSubscription["delete"] == nil || webPushSubscription["put"] != nil {
+		t.Fatal("Web Push subscription item contract must contain only the expected DELETE operation")
+	}
+	relayContent, err := os.ReadFile("push-relay.yaml")
+	if err != nil {
+		t.Fatalf("push relay OpenAPI contract is missing: %v", err)
+	}
+	var relayDocument map[string]any
+	if err := yaml.Unmarshal(relayContent, &relayDocument); err != nil {
+		t.Fatalf("push-relay.yaml is not valid YAML: %v", err)
+	}
+	relayPaths, ok := relayDocument["paths"].(map[string]any)
+	if !ok || relayPaths["/v1/deliveries"] == nil || relayPaths["/ready"] == nil {
+		t.Fatal("push-relay.yaml is missing required relay paths")
 	}
 }

@@ -1,6 +1,5 @@
 export type RealtimeGatewayOptions = {
   accessToken: string;
-  authMode?: "query" | "subprotocol";
   baseUrl: string;
   protocols?: string[];
   workspaceId?: string;
@@ -26,18 +25,17 @@ export function createRealtimeGateway(defaultBaseUrl: string) {
   return {
     connect(options: Omit<RealtimeGatewayOptions, "baseUrl">) {
       const url = new URL(defaultBaseUrl);
-      const authMode = options.authMode ?? "query";
 
       if (options.workspaceId) {
         url.searchParams.set("workspace_id", options.workspaceId);
       }
 
-      if (authMode === "query") {
-        url.searchParams.set("access_token", options.accessToken);
-        return new WebSocket(url.toString(), options.protocols);
-      }
-
-      return new WebSocket(url.toString(), ["webtui.jwt", options.accessToken, ...(options.protocols ?? [])]);
+      // Browser WebSockets cannot set Authorization. Carry the JWT in the
+      // subprotocol request header so it never appears in URLs or access logs.
+      return new WebSocket(url.toString(), [
+        `webtui.jwt.${options.accessToken}`,
+        ...(options.protocols ?? [])
+      ]);
     },
     subscribe(socket: WebSocket, handler: RealtimeEventHandler) {
       socket.addEventListener("message", handler);

@@ -294,6 +294,25 @@ func TestOIDCRejectsCrossOriginRedirectsAndReturnTargets(t *testing.T) {
 	}
 }
 
+func TestOIDCAcceptsOnlyBoundNativeCallback(t *testing.T) {
+	callback, err := normalizeOIDCReturnTo(
+		"webtui://oidc/callback?server=chat.company.example",
+		"chat.company.example",
+	)
+	if err != nil || callback == "" {
+		t.Fatalf("normalizeOIDCReturnTo(native) = %q, %v", callback, err)
+	}
+	for _, invalid := range []string{
+		"webtui://evil/callback?server=chat.company.example",
+		"webtui://oidc/callback?server=evil.example",
+		"other://oidc/callback?server=chat.company.example",
+	} {
+		if _, err := normalizeOIDCReturnTo(invalid, "chat.company.example"); err == nil {
+			t.Fatalf("accepted invalid native callback %q", invalid)
+		}
+	}
+}
+
 func TestOIDCSecretReferencesUseExplicitAllowlist(t *testing.T) {
 	service := NewOIDCService(
 		nil,

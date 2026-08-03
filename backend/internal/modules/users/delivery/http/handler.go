@@ -5,13 +5,15 @@ import (
 	"strconv"
 
 	usersapp "github.com/duclamdev/application-chat/backend/internal/modules/users/application"
+	tenantstorage "github.com/duclamdev/application-chat/backend/internal/platform/storage/tenant"
 	"github.com/duclamdev/application-chat/backend/internal/shared/middleware"
 	"github.com/duclamdev/application-chat/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {
-	service *usersapp.Service
+	service         *usersapp.Service
+	storageResolver *tenantstorage.Resolver
 }
 
 type updateMeRequest struct {
@@ -32,19 +34,49 @@ type updateUserRequest struct {
 	WorkspaceID *string `json:"workspace_id"`
 }
 
+type deleteOwnAccountRequest struct {
+	Confirmation            string `json:"confirmation"`
+	OwnershipSuccessorEmail string `json:"ownership_successor_email"`
+}
+
 func NewHandler(service *usersapp.Service) *Handler {
 	return &Handler{service: service}
 }
 
+func (h *Handler) SetStorageResolver(resolver *tenantstorage.Resolver) {
+	h.storageResolver = resolver
+}
+
 func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+	router.GET("/avatars/:zone_id/:user_id/:file_name", h.ServeAvatar)
 	private := router.Group("")
 	private.Use(authMiddleware)
 	private.GET("/me", h.Me)
 	private.PATCH("/me", h.UpdateMe)
+	private.POST("/me/avatar", h.UploadMyAvatar)
+	private.DELETE("/me", h.DeleteMe)
 	private.GET("", h.List)
 	private.GET("/:user_id", h.Get)
 	private.PATCH("/:user_id", h.Update)
 	private.DELETE("/:user_id", h.Delete)
+}
+
+func (h *Handler) DeleteMe(c *gin.Context) {
+	var req deleteOwnAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON không hợp lệ.", nil)
+		return
+	}
+	if err := h.service.DeleteOwnAccount(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		req.Confirmation,
+		req.OwnershipSuccessorEmail,
+	); err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.NoContent(c)
 }
 
 func (h *Handler) Me(c *gin.Context) {
@@ -81,10 +113,11 @@ func (h *Handler) UpdateMe(c *gin.Context) {
 func (h *Handler) List(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	users, meta, err := h.service.List(c.Request.Context(), usersapp.ListUsersParams{
-		Query:  c.Query("q"),
-		Status: c.Query("status"),
-		ZoneID: middleware.CurrentZoneID(c),
-		Limit:  limit,
+		ActorUserID: middleware.CurrentUserID(c),
+		Query:       c.Query("q"),
+		Status:      c.Query("status"),
+		ZoneID:      middleware.CurrentZoneID(c),
+		Limit:       limit,
 	})
 	if err != nil {
 		response.Error(c, err)
@@ -94,7 +127,12 @@ func (h *Handler) List(c *gin.Context) {
 }
 
 func (h *Handler) Get(c *gin.Context) {
-	user, err := h.service.Get(c.Request.Context(), c.Param("user_id"), middleware.CurrentZoneID(c))
+	user, err := h.service.Get(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		c.Param("user_id"),
+		middleware.CurrentZoneID(c),
+	)
 	if err != nil {
 		response.Error(c, err)
 		return

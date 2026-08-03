@@ -25,6 +25,8 @@ type fakeRepo struct {
 	deletedInstallation string
 	oidcProviders       []tenancydomain.OIDCProvider
 	oidcCreateParams    CreateOIDCProviderParams
+	storageConfig       tenancydomain.ZoneStorageConfig
+	storageParams       UpsertZoneStorageConfigParams
 }
 
 func (r *fakeRepo) ResolveByDomain(_ context.Context, domain string) (tenancydomain.ResolvedZone, error) {
@@ -82,6 +84,20 @@ func (r *fakeRepo) GetZoneAdminOverview(context.Context, string) (tenancydomain.
 
 func (r *fakeRepo) UpdateZoneSettings(context.Context, UpdateZoneSettingsParams) (tenancydomain.ZoneAdminOverview, error) {
 	return tenancydomain.ZoneAdminOverview{}, r.err
+}
+
+func (r *fakeRepo) GetZoneStorageConfig(context.Context, string) (tenancydomain.ZoneStorageConfig, error) {
+	return r.storageConfig, r.err
+}
+
+func (r *fakeRepo) UpsertZoneStorageConfig(_ context.Context, params UpsertZoneStorageConfigParams) (tenancydomain.ZoneStorageConfig, error) {
+	r.storageParams = params
+	r.storageConfig = tenancydomain.ZoneStorageConfig{
+		ZoneID: params.ZoneID, Provider: params.Provider, Endpoint: params.Endpoint,
+		Region: params.Region, Bucket: params.Bucket, AccessKeyID: params.AccessKeyID,
+		SecretAccessKeyEncrypted: params.SecretAccessKeyEncrypted,
+	}
+	return r.storageConfig, r.err
 }
 
 func (r *fakeRepo) SetZoneLifecycle(context.Context, SetZoneLifecycleParams) error {

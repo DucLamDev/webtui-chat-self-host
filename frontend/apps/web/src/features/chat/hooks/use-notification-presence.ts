@@ -6,12 +6,15 @@ import { queryKeys } from "@webtui/api-client";
 import { getPlatformServices } from "@webtui/chat-core";
 import type { Notification, Presence, PresenceHeartbeatInput } from "@webtui/types";
 import { api } from "@/lib/api";
+import { useRealtimeStore } from "../stores/realtime-store";
 
 const heartbeatMs = 25_000;
 const presenceRefetchMs = 10_000;
 const notificationFallbackMs = 10_000;
+const notificationConnectedSafetyMs = 2 * 60_000;
 const deviceIdStorageKey = "webtui-device-id";
 let cachedDeviceId: string | null = null;
+let cachedDeviceIdPromise: Promise<string> | null = null;
 let cachedSocketId: string | null = null;
 
 export type NotificationPresenceOptions = {
@@ -27,13 +30,15 @@ export function useNotificationPresence({
 }: NotificationPresenceOptions) {
   const queryClient = useQueryClient();
   const isEnabled = Boolean(enabled && workspaceId);
+  const realtimeStatus = useRealtimeStore((state) => state.status);
 
   const notificationsQuery = useQuery({
     enabled: isEnabled,
     queryFn: () => api.notifications.listMine({ limit: 30, workspace_id: workspaceId }),
     queryKey: queryKeys.notifications.list(workspaceId),
-    refetchInterval: notificationFallbackMs,
-    refetchIntervalInBackground: true,
+    refetchInterval:
+      realtimeStatus === "connected" ? notificationConnectedSafetyMs : notificationFallbackMs,
+    refetchIntervalInBackground: false,
     retry: 2
   });
 
@@ -42,7 +47,7 @@ export function useNotificationPresence({
     queryFn: () => api.presence.list(workspaceId, { limit: 100 }),
     queryKey: queryKeys.presence.list(workspaceId),
     refetchInterval: presenceRefetchMs,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     retry: false
   });
 
@@ -68,10 +73,14 @@ export function useNotificationPresence({
     }
 
     let cancelled = false;
-    const deviceId = getPlatformDeviceId();
-    const socketId = getPresenceSocketId(deviceId, currentUserId);
+    const deviceIdPromise = getPlatformDeviceId();
 
     async function sendHeartbeat(status: "online" | "away" | "offline") {
+      const deviceId = await deviceIdPromise;
+      if (cancelled && status !== "offline") {
+        return;
+      }
+      const socketId = getPresenceSocketId(deviceId, currentUserId);
       const input: PresenceHeartbeatInput = {
         device_id: deviceId,
         metadata: {
@@ -95,19 +104,46 @@ export function useNotificationPresence({
     }
 
     function heartbeat() {
-      void sendHeartbeat("online");
+      if (document.visibilityState === "visible") {
+        void sendHeartbeat("online");
+      }
     }
 
-    heartbeat();
-    const intervalId = window.setInterval(heartbeat, heartbeatMs);
-    document.addEventListener("visibilitychange", heartbeat);
-    window.addEventListener("online", heartbeat);
+    let intervalId: number | undefined;
+
+    function stopHeartbeatLoop() {
+      if (intervalId !== undefined) {
+        window.clearInterval(intervalId);
+        intervalId = undefined;
+      }
+    }
+
+    function startHeartbeatLoop() {
+      stopHeartbeatLoop();
+      if (document.visibilityState === "visible") {
+        heartbeat();
+        intervalId = window.setInterval(heartbeat, heartbeatMs);
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        stopHeartbeatLoop();
+        void sendHeartbeat("away");
+        return;
+      }
+      startHeartbeatLoop();
+    }
+
+    startHeartbeatLoop();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("online", startHeartbeatLoop);
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", heartbeat);
-      window.removeEventListener("online", heartbeat);
+      stopHeartbeatLoop();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", startHeartbeatLoop);
       void sendHeartbeat("offline");
     };
   }, [currentUserId, isEnabled, queryClient, workspaceId]);
@@ -179,35 +215,43 @@ function upsertPresence(queryClient: ReturnType<typeof useQueryClient>, workspac
   });
 }
 
-function getPlatformDeviceId() {
+function getPlatformDeviceId(): Promise<string> {
   if (typeof window === "undefined") {
-    return "web-server";
+    return Promise.resolve("web-server");
   }
   if (cachedDeviceId) {
-    return cachedDeviceId;
+    return Promise.resolve(cachedDeviceId);
+  }
+  if (cachedDeviceIdPromise) {
+    return cachedDeviceIdPromise;
   }
 
-  const existing = getPlatformServices().storage.getItem(deviceIdStorageKey);
-  if (existing) {
-    if (!(existing instanceof Promise)) {
-      cachedDeviceId = existing;
-      return existing;
-    }
-    void existing.then((value) => {
-      if (value) {
-        cachedDeviceId = value;
+  cachedDeviceIdPromise = (async () => {
+    const storage = getPlatformServices().storage;
+    try {
+      const existing = (await storage.getItem(deviceIdStorageKey))?.trim();
+      if (existing) {
+        cachedDeviceId = existing;
+        return existing;
       }
-    });
-  }
+    } catch {
+      // Presence can continue with an in-memory identifier if secure storage is unavailable.
+    }
 
-  const next =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const next =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      await storage.setItem(deviceIdStorageKey, next, "persistent");
+    } catch {
+      // Keep the identifier stable for the current runtime even if persistence fails.
+    }
+    cachedDeviceId = next;
+    return next;
+  })();
 
-  void getPlatformServices().storage.setItem(deviceIdStorageKey, next, "persistent");
-  cachedDeviceId = next;
-  return next;
+  return cachedDeviceIdPromise;
 }
 
 function getPresenceSocketId(deviceId: string, userId: string) {

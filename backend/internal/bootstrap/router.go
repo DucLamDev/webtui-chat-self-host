@@ -147,29 +147,35 @@ func (a *API) registerAPIV1() {
 
 	tenancyRepo := tenancypostgres.NewRepository(pool, a.cfg.Registration.DefaultWorkspaceID)
 	tenancyService := tenancyapp.NewService(tenancyRepo, tenancyapp.Options{
-		AppName:              a.cfg.App.Name,
-		AppVersion:           a.cfg.App.Version,
-		DefaultLocale:        "vi-VN",
-		ReleaseChannel:       a.cfg.App.Env,
-		DeploymentMode:       a.cfg.Deployment.Mode,
-		RTCICEServers:        a.cfg.Calls.ICEServers,
-		WebhookSigningSecret: a.cfg.Security.WebhookSigningSecret,
-		OIDCEnabled:          len(a.cfg.Security.OIDCStateSecret) >= 32,
-		OIDCClientSecrets:    a.cfg.Security.OIDCClientSecrets,
-		RoutingDNSType:       a.cfg.Registration.CustomDomainDNSType,
-		RoutingDNSTarget:     a.cfg.Registration.CustomDomainDNSTarget,
+		AppName:               a.cfg.App.Name,
+		AppVersion:            a.cfg.App.Version,
+		DefaultLocale:         "vi-VN",
+		ReleaseChannel:        a.cfg.App.Env,
+		DeploymentMode:        a.cfg.Deployment.Mode,
+		RTCICEServers:         publicICEServers(a.cfg.Calls.ICEServers),
+		WebhookSigningSecret:  a.cfg.Security.WebhookSigningSecret,
+		StorageCredentialsKey: a.cfg.Security.StorageCredentialsKey,
+		OIDCEnabled:           len(a.cfg.Security.OIDCStateSecret) >= 32,
+		OIDCClientSecrets:     a.cfg.Security.OIDCClientSecrets,
+		RoutingDNSType:        a.cfg.Registration.CustomDomainDNSType,
+		RoutingDNSTarget:      a.cfg.Registration.CustomDomainDNSTarget,
 	})
+	if a.resources.TenantStorage != nil {
+		tenancyService.SetZoneStorageTester(a.resources.TenantStorage)
+	}
 	v1.Use(tenancyhttp.OptionalZoneContext(tenancyService))
-	authMiddleware := middleware.Auth(tokenManager, tenancyService)
-	zoneRecoveryAuthMiddleware := middleware.AuthForZoneRecovery(tokenManager, tenancyService)
+	authRepo := authpostgres.NewRepository(pool, a.cfg.Registration.DefaultWorkspaceID)
+	authMiddleware := middleware.Auth(tokenManager, tenancyService, authRepo)
+	zoneRecoveryAuthMiddleware := middleware.AuthForZoneRecovery(tokenManager, tenancyService, authRepo)
 	tenancyHandler := tenancyhttp.NewHandler(tenancyService, a.cfg.Security.CaddyAskSecret)
 	tenancyHandler.SetSaaSProvisioningEnabled(!a.cfg.Deployment.IsSelfHosted())
-	if strings.EqualFold(a.cfg.Storage.Provider, "local") {
+	if a.resources.TenantStorage != nil {
+		tenancyHandler.SetStorageResolver(a.resources.TenantStorage)
+	} else if strings.EqualFold(a.cfg.Storage.Provider, "local") {
 		tenancyHandler.SetBrandingStoragePath(a.cfg.Storage.LocalPath)
 	}
 	tenancyHandler.RegisterRoutes(a.engine, v1, authMiddleware, zoneRecoveryAuthMiddleware)
 
-	authRepo := authpostgres.NewRepository(pool, a.cfg.Registration.DefaultWorkspaceID)
 	authService := authapp.NewService(authRepo, tokenManager)
 	authHandler := authhttp.NewHandler(authService, a.cfg.Security.GoogleClientID)
 	if a.cfg.Deployment.IsSelfHosted() {
@@ -191,7 +197,13 @@ func (a *API) registerAPIV1() {
 
 	usersRepo := userspostgres.NewRepository(pool)
 	usersService := usersapp.NewService(usersRepo, rbacService)
+	if a.resources.WebSocket != nil {
+		usersService.SetAccountConnectionRevoker(a.resources.WebSocket)
+	}
 	usersHandler := usershttp.NewHandler(usersService)
+	if a.resources.TenantStorage != nil {
+		usersHandler.SetStorageResolver(a.resources.TenantStorage)
+	}
 	usersHandler.RegisterRoutes(v1.Group("/users"), authMiddleware)
 
 	pushDevicesRepo := pushdevicespostgres.NewRepository(pool)
@@ -260,13 +272,21 @@ func (a *API) registerAPIV1() {
 	if a.resources.WebSocket != nil {
 		wsHandler := wshttp.NewHandler(a.resources.WebSocket, tokenManager, channelsService)
 		wsHandler.SetWorkspaceZoneChecker(tenancyService)
+		wsHandler.SetActiveUserChecker(authRepo)
 		wsHandler.RegisterRoutes(v1)
 		// Keep the discovery URL usable without requiring an ingress rewrite.
-		wsHandler.RegisterPublicRoute(a.engine)
+		rootWebSocket := a.engine.Group("")
+		rootWebSocket.Use(tenancyhttp.OptionalZoneContext(tenancyService))
+		wsHandler.RegisterPublicRoute(rootWebSocket)
 	}
 
 	notificationsRepo := notificationspostgres.NewRepository(pool)
 	notificationsService := notificationsapp.NewService(notificationsRepo)
+	notificationsService.ConfigureWebPush(notificationsapp.WebPushOptions{
+		Enabled:                 a.cfg.WebPush.Enabled,
+		PublicKey:               a.cfg.WebPush.VAPIDPublicKey,
+		MaxSubscriptionsPerUser: a.cfg.WebPush.MaxSubscriptionsPerUser,
+	})
 	notificationsHandler := notificationshttp.NewHandler(notificationsService)
 	notificationsHandler.RegisterRoutes(v1, authMiddleware)
 
@@ -298,6 +318,12 @@ func (a *API) registerAPIV1() {
 	callsService := callsapp.NewService(callsRepo, rbacService, callsRealtime, notificationsService)
 	callsService.SetRingTimeout(a.cfg.Calls.RingTimeout)
 	callsHandler := callshttp.NewHandler(callsService)
+	callsHandler.SetICEConfiguration(
+		publicICEServers(a.cfg.Calls.ICEServers),
+		a.cfg.Calls.TURNURLs,
+		a.cfg.Calls.TURNSharedSecret,
+		a.cfg.Calls.TURNCredentialTTL,
+	)
 	callsHandler.RegisterRoutes(v1, authMiddleware)
 
 	orderRepo := orderpostgres.NewRepository(pool)
@@ -331,6 +357,9 @@ func (a *API) registerAPIV1() {
 		filesRepo := filespostgres.NewRepository(pool)
 		filesStore := filesstorage.NewStore(a.resources.Storage)
 		filesService := filesapp.NewService(filesRepo, filesStore, rbacService, a.cfg.Storage.Provider, a.cfg.Storage.Bucket)
+		if a.resources.TenantStorage != nil {
+			filesService.SetStorageResolver(filesstorage.NewResolver(a.resources.TenantStorage))
+		}
 		if a.resources.WebSocket != nil {
 			filesService.SetRealtimePublisher(filesws.NewPublisher(a.resources.WebSocket))
 		}
@@ -379,4 +408,61 @@ func (a *API) healthChecks() map[string]healthhttp.CheckFunc {
 	}
 
 	return checks
+}
+
+// publicICEServers removes both long-lived TURN credentials and TURN URLs from
+// unauthenticated discovery. Authenticated clients obtain short-lived TURN REST
+// credentials from /api/v1/calls/ice-servers instead.
+func publicICEServers(source []map[string]any) []map[string]any {
+	result := make([]map[string]any, 0, len(source))
+	for _, server := range source {
+		urls := publicICEURLs(server["urls"])
+		if urls == nil {
+			continue
+		}
+		copy := make(map[string]any, len(server))
+		for key, value := range server {
+			if key == "username" || key == "credential" || key == "urls" {
+				continue
+			}
+			copy[key] = value
+		}
+		copy["urls"] = urls
+		result = append(result, copy)
+	}
+	return result
+}
+
+func publicICEURLs(value any) any {
+	isPublic := func(raw string) bool {
+		normalized := strings.ToLower(strings.TrimSpace(raw))
+		return normalized != "" && !strings.HasPrefix(normalized, "turn:") && !strings.HasPrefix(normalized, "turns:")
+	}
+	switch typed := value.(type) {
+	case string:
+		if isPublic(typed) {
+			return typed
+		}
+	case []string:
+		filtered := make([]string, 0, len(typed))
+		for _, url := range typed {
+			if isPublic(url) {
+				filtered = append(filtered, url)
+			}
+		}
+		if len(filtered) > 0 {
+			return filtered
+		}
+	case []any:
+		filtered := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if url, ok := item.(string); ok && isPublic(url) {
+				filtered = append(filtered, url)
+			}
+		}
+		if len(filtered) > 0 {
+			return filtered
+		}
+	}
+	return nil
 }

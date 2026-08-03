@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/pusherror"
 )
 
 const firebaseMessagingScope = "https://www.googleapis.com/auth/firebase.messaging"
@@ -33,6 +35,7 @@ type Sender struct {
 	projectID   string
 	client      *http.Client
 	credential  serviceAccount
+	privateKey  *rsa.PrivateKey
 	mu          sync.Mutex
 	accessToken string
 	expiresAt   time.Time
@@ -82,12 +85,29 @@ func NewSender(config Config) *Sender {
 	}
 	if sender.projectID == "" || strings.TrimSpace(sender.credential.ClientEmail) == "" || strings.TrimSpace(sender.credential.PrivateKey) == "" {
 		sender.initErr = errors.New("Firebase service account is missing project_id, client_email, or private_key")
+		return sender
+	}
+	block, _ := pem.Decode([]byte(sender.credential.PrivateKey))
+	if block == nil {
+		sender.initErr = errors.New("Firebase private key is not valid PEM")
+		return sender
+	}
+	sender.privateKey, err = parsePrivateKey(block.Bytes)
+	if err != nil {
+		sender.initErr = err
 	}
 	return sender
 }
 
 func (s *Sender) Enabled() bool {
-	return s != nil && s.initErr == nil && s.projectID != "" && s.credential.ClientEmail != ""
+	return s != nil && s.initErr == nil && s.projectID != "" && s.credential.ClientEmail != "" && s.privateKey != nil
+}
+
+func (s *Sender) InitializationError() error {
+	if s == nil {
+		return errors.New("Firebase sender is nil")
+	}
+	return s.initErr
 }
 
 func (s *Sender) Send(ctx context.Context, token string, payload map[string]any) error {
@@ -126,7 +146,21 @@ func (s *Sender) Send(ctx context.Context, token string, payload map[string]any)
 		return nil
 	}
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-	return fmt.Errorf("FCM returned %s: %s", response.Status, strings.TrimSpace(string(raw)))
+	deliveryErr := fmt.Errorf("FCM returned %s: %s", response.Status, strings.TrimSpace(string(raw)))
+	if isPermanentDeliveryError(raw) {
+		return pusherror.PermanentError(deliveryErr)
+	}
+	return deliveryErr
+}
+
+func isPermanentDeliveryError(raw []byte) bool {
+	errorBody := strings.ToUpper(string(raw))
+	// A generic 404 can mean a wrong Firebase project/endpoint. Revoking every
+	// device in that case would turn a server misconfiguration into data loss.
+	// Only provider error codes that identify this registration token as
+	// permanently unusable are safe to classify as permanent.
+	return strings.Contains(errorBody, "UNREGISTERED") ||
+		strings.Contains(errorBody, "SENDER_ID_MISMATCH")
 }
 
 func (s *Sender) token(ctx context.Context) (string, error) {
@@ -174,13 +208,8 @@ func (s *Sender) token(ctx context.Context) (string, error) {
 }
 
 func (s *Sender) jwtAssertion() (string, error) {
-	block, _ := pem.Decode([]byte(s.credential.PrivateKey))
-	if block == nil {
-		return "", errors.New("Firebase private key is not valid PEM")
-	}
-	privateKey, err := parsePrivateKey(block.Bytes)
-	if err != nil {
-		return "", err
+	if s.privateKey == nil {
+		return "", errors.New("Firebase private key is unavailable")
 	}
 	now := time.Now().Unix()
 	header, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
@@ -194,7 +223,7 @@ func (s *Sender) jwtAssertion() (string, error) {
 	unsigned := encodeSegment(header) + "." + encodeSegment(claims)
 	digest := crypto.SHA256.New()
 	_, _ = digest.Write([]byte(unsigned))
-	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, digest.Sum(nil))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, s.privateKey, crypto.SHA256, digest.Sum(nil))
 	if err != nil {
 		return "", err
 	}

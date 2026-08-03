@@ -1,307 +1,219 @@
-# VPSTTT Chat self-hosted
+# VPSTTT Chat — self-hosted
 
-Tài liệu này mô tả cách một doanh nghiệp nhỏ tự cài VPSTTT Chat trên VPS/domain
-của họ. Mô hình hiện tại giống hướng Nextcloud Talk ở điểm client bắt đầu bằng
-server URL và discovery capability, nhưng khác ở điểm VPSTTT Chat không có
-control plane tự dựng VPS cho khách hàng.
+Nền tảng chat cộng tác đa nền tảng gồm web, admin, mobile và desktop. Mỗi tổ
+chức có thể chạy một instance độc lập trên domain của mình; dữ liệu hội thoại,
+file và khóa hệ thống nằm trên hạ tầng do tổ chức quản lý.
 
-Điểm cần nói rõ với customer: nhập `chat.example.com` trong web/mobile chỉ để
-kết nối tới instance đã được cài sẵn. Việc tự host vẫn cần người vận hành chuẩn
-bị VPS, DNS, Docker, firewall, backup và cập nhật.
+> Trạng thái hiện tại: phù hợp để triển khai một VPS đơn cho nhóm nhỏ và vừa.
+> Web Push, push relay, backup off-site và observability đã có dưới dạng cấu hình/profile
+> opt-in; quickstart vẫn giữ chúng tắt cho đến khi operator cấp credential. High
+> availability chưa nằm trong stack mặc định; xem [các giới hạn và lộ trình](docs/planning/self-host-feature-roadmap.md).
 
-## Mô hình triển khai
+Cuộc gọi nhóm mặc định tắt cho đến khi operator cấu hình Jitsi self-host; hệ
+thống không âm thầm chuyển media cuộc họp qua một Jitsi public.
 
-Mỗi customer sở hữu một instance độc lập:
+## Bắt đầu nhanh
 
-- một domain cố định, ví dụ `chat.company.com`;
-- một PostgreSQL, Redis, RabbitMQ, storage local và coturn riêng;
-- một bộ secret riêng trong `deploy/self-hosted/.env`;
-- web, admin, API và WebSocket cùng origin qua Caddy;
-- không lưu dữ liệu chat trên hạ tầng trung tâm VPSTTT.
+### Yêu cầu
 
-Trong backend vẫn có khái niệm `zone`, nhưng ở self-hosted nó là ranh giới nội
-bộ của chính instance đó, không phải tenant SaaS dùng chung. Khi API khởi động
-với `DEPLOYMENT_MODE=self_hosted`, backend tự cấu hình zone/workspace đầu tiên
-theo `INSTANCE_DOMAIN` và `INSTANCE_NAME`.
+- Ubuntu 22.04 hoặc 24.04 LTS, IPv4 public;
+- tối thiểu 4 vCPU, 8 GB RAM, 40 GB SSD;
+- một domain đã có bản ghi `A` trỏ về VPS;
+- mở TCP `80`, `443`, `3478` và UDP `443`, `3478`, `49160-49200`;
+- Docker Engine và Docker Compose v2 (bootstrap có thể tự cài).
 
-## Yêu cầu hạ tầng
-
-- Linux VPS có IPv4 public, khuyến nghị Ubuntu 22.04/24.04 LTS.
-- Tối thiểu 4 vCPU, 8 GB RAM, 40 GB SSD cho nhóm nhỏ; tăng disk theo file/media.
-- Docker Engine và Docker Compose v2.
-- Domain/subdomain riêng, ví dụ `chat.company.com`.
-- DNS `A` của domain trỏ vào IPv4 public của VPS trước khi cài.
-- Firewall mở TCP `80`, `443`, `3478`; UDP `443`, `3478`, `49160-49200`.
-- Không có Nginx/Apache/Caddy khác chiếm cổng `80` hoặc `443` nếu dùng compose mặc định.
-
-## Luồng triển khai cho customer
-
-1. Chọn domain chat, ví dụ `chat.company.com`.
-2. Tạo DNS `A chat.company.com -> <IPv4 VPS>`.
-3. Cài Docker và Docker Compose v2 trên VPS.
-4. Clone source hoặc tải bản release VPSTTT Chat.
-5. Chạy installer self-hosted.
-6. Mở `https://chat.vpsttt.com/portal`, nhập `chat.company.com`.
-7. Portal kiểm tra discovery rồi chuyển tới màn đăng ký trên `chat.company.com`.
-8. Tài khoản đầu tiên trở thành workspace owner. Trước khi có owner, đăng ký
-   luôn ở chế độ `open` để tránh khóa nhầm server mới.
-9. Owner có thể đổi sang `invite_only`/`closed`, mời nhân viên hoặc cấu hình SSO/OIDC.
-10. Người dùng cài mobile/desktop, nhập cùng domain `chat.company.com` để đăng nhập.
-
-## Cài mới
-
-### Cách nhanh nhất cho VPS Ubuntu mới
-
-Nếu VPS là Ubuntu 22.04/24.04 mới, có thể dùng bootstrap để tự cài gói nền,
-Docker, Docker Compose v2, UFW firewall rồi chạy installer self-hosted:
+### Cài trên VPS Ubuntu mới
 
 ```sh
+git clone https://github.com/DucLamDev/webtui-chat-self-host.git vpsttt-chat
+cd vpsttt-chat
 sudo sh deploy/self-hosted/bootstrap-ubuntu.sh \
   --domain chat.company.com \
   --email admin@company.com \
   --name "Company Chat"
 ```
 
-Nếu customer chạy trực tiếp từ một máy trống và muốn script tự clone source:
+Nếu Docker đã sẵn sàng, chạy thẳng installer:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/<tag-or-branch>/deploy/self-hosted/bootstrap-ubuntu.sh \
-  | sudo sh -s -- \
-    --domain chat.company.com \
-    --email admin@company.com \
-    --name "Company Chat" \
-    --repo-url https://github.com/<org>/<repo>.git
-```
-
-Thay `<org>/<repo>/<tag-or-branch>` bằng repository/release thật khi phát hành.
-Bootstrap sẽ mở các port cần thiết: `22`, `80`, `443`, `3478/tcp`,
-`3478/udp`, `443/udp` và `49160-49200/udp`.
-
-Ví dụ trên VPS:
-
-```sh
-git clone <repository-url> vpsttt-chat
-cd vpsttt-chat
 sh deploy/self-hosted/install.sh \
   --domain chat.company.com \
   --email admin@company.com \
   --name "Company Chat"
 ```
 
-Installer mặc định cho phép origin `https://chat.vpsttt.com` của portal gọi
-discovery từ browser. Người dùng mở portal tại `https://chat.vpsttt.com/portal`.
-Nếu vận hành portal riêng, truyền origin HTTPS không có path:
+Installer kiểm tra DNS, sinh secret bằng nguồn ngẫu nhiên, đặt quyền `0600` cho
+`deploy/self-hosted/.env`, build image, chạy migration và chờ endpoint `/ready`.
+Không dùng `--force` trên instance đã có dữ liệu.
 
-```sh
-sh deploy/self-hosted/install.sh \
-  --domain chat.company.com \
-  --email admin@company.com \
-  --name "Company Chat" \
-  --portal-origin https://portal.example.com
-```
+Sau khi hoàn tất:
 
-Installer sẽ:
+- web: `https://chat.company.com`;
+- admin: `https://chat.company.com/admin`;
+- health: `https://chat.company.com/ready`;
+- WebSocket: `wss://chat.company.com/ws`;
+- discovery cho client: `https://chat.company.com/api/v1/discovery?domain=chat.company.com`.
 
-- kiểm tra domain hợp lệ và DNS `A` trỏ về IPv4 của VPS;
-- tự phát sinh secret cho PostgreSQL, Redis, RabbitMQ, JWT, webhook, OIDC và TURN;
-- ghi secret vào `deploy/self-hosted/.env` với quyền file `0600`;
-- build image API, worker, web và admin;
-- chạy migration database;
-- bật PostgreSQL, Redis, RabbitMQ, API, worker, web, admin, Caddy và coturn;
-- chờ `https://chat.company.com/ready` sẵn sàng.
+Tài khoản đăng ký đầu tiên trở thành workspace owner. Sau đó nên đổi chế độ
+đăng ký từ `open` sang `invite_only` hoặc `closed` trong Admin Panel.
 
-Nếu VPS có nhiều IPv4 hoặc lệnh tự dò IP không đúng, truyền IP public thủ công:
+Hướng dẫn đầy đủ, gồm lỗi DNS/TLS và tùy chọn installer, nằm tại
+[deploy/self-hosted/README.md](deploy/self-hosted/README.md).
 
-```sh
-sh deploy/self-hosted/install.sh \
-  --domain chat.company.com \
-  --email admin@company.com \
-  --name "Company Chat" \
-  --external-ip 203.0.113.10
-```
+## Kiến trúc mặc định
 
-Nếu DNS vừa đổi và chưa propagate nhưng bạn đã chắc record đúng, có thể bỏ qua
-preflight DNS:
+| Thành phần | Vai trò | Public Internet |
+| --- | --- | --- |
+| Caddy | TLS, HTTP/3, reverse proxy | `80`, `443` |
+| Web / Admin | giao diện người dùng và quản trị | qua Caddy |
+| Go API / Worker | REST, WebSocket, job nền | qua Caddy / nội bộ |
+| PostgreSQL | dữ liệu nghiệp vụ | không |
+| Redis / RabbitMQ | realtime đa node, hàng đợi | không |
+| Storage volume | file tải lên và backup local | file được Caddy phục vụ có kiểm soát |
+| coturn | relay media WebRTC | `3478`, dải UDP media |
 
-```sh
-sh deploy/self-hosted/install.sh \
-  --domain chat.company.com \
-  --email admin@company.com \
-  --name "Company Chat" \
-  --skip-dns-check
-```
-
-Nếu gặp lỗi dạng:
-
-```text
-DNS for chat.company.com must contain A record <IPv4 VPS> before installation.
-Resolved IPv4 addresses: none
-```
-
-hãy kiểm tra lại trên VPS:
-
-```sh
-curl -4 https://api.ipify.org
-getent ahostsv4 chat.company.com
-```
-
-Nếu IP public của VPS trùng với bản ghi `A` trong DNS panel nhưng resolver của VPS
-chưa cập nhật, chạy lại installer với `--skip-dns-check`. Nếu domain vẫn chưa trỏ
-đúng ra public DNS, Caddy/Let's Encrypt sẽ chưa thể cấp TLS và bước chờ
-`https://chat.company.com/ready` sẽ thất bại.
-
-Chỉ dùng `--force` cho database/volume mới hoặc môi trường test. Không dùng
-`--force` để sửa instance đang có dữ liệu.
-
-## Sau khi cài xong
-
-Kiểm tra các URL chính:
-
-- Web app: `https://chat.company.com`
-- Admin Panel: `https://chat.company.com/admin`
-- API info: `https://chat.company.com/api`
-- Health check: `https://chat.company.com/ready`
-- Discovery: `https://chat.company.com/api/v1/discovery?domain=chat.company.com`
-- WebSocket: `wss://chat.company.com/ws`
-
-Mở `https://chat.vpsttt.com/portal`, nhập `chat.company.com` và tiếp tục tại màn
-đăng ký mà portal điều hướng tới. Backend sẽ cấp owner cho tài khoản đầu tiên
-nếu workspace chưa có owner. Sau đó, owner có thể đổi chính sách trong mục
-**Cài đặt → Thương hiệu & truy cập**. Có thể mở thẳng web customer khi cần khôi phục
-hoặc vận hành nội bộ; password và token trong cả hai trường hợp đều chỉ gửi tới
-instance customer.
-
-## Mobile và desktop
-
-Người dùng cuối không cần biết API URL. Họ chỉ cần nhập domain:
-
-```text
-chat.company.com
-```
-
-Mobile thực hiện:
-
-1. chuẩn hóa thành `https://chat.company.com`;
-2. gọi `GET /api/v1/discovery?domain=chat.company.com` trên chính domain đó;
-3. đọc `runtime.api_base_url`, `runtime.ws_base_url` và `capabilities`;
-4. lưu base URL của instance vào secure storage;
-5. gửi login/register tới `/api/v1/auth/*` trên instance đó;
-6. lưu refresh token trong secure storage và cache local theo workspace;
-7. xóa token/workspace/cache cũ nếu chuyển sang một instance khác.
-
-Với self-hosted, mobile không gọi endpoint claim/provision domain. Nếu discovery
-trả `ZONE_NOT_FOUND`, `TLS` lỗi hoặc không có JSON discovery hợp lệ, nghĩa là
-admin chưa cài instance hoặc DNS/TLS chưa sẵn sàng.
+Stack dùng một origin để đơn giản hóa TLS, CORS và kết nối client. TURN credential
+được cấp ngắn hạn qua API đã xác thực; `TURN_SHARED_SECRET` không đi vào bundle
+web/mobile.
 
 ## Push notification
 
-Realtime foreground dùng WebSocket trực tiếp tới instance. Khi app ở nền hoặc bị
-OS kill, push cần FCM/APNs. Một app official dùng chung được ký với một cấu hình
-push cố định; không thể yêu cầu mỗi customer đưa Firebase riêng vào binary đã
-phát hành trên store.
+Không có một cấu hình push duy nhất phù hợp cho mọi kiểu self-host. Chọn đúng
+một chế độ:
 
-MVP phải chọn rõ một trong ba chính sách:
+| Trường hợp | Cấu hình nên dùng |
+| --- | --- |
+| App iOS/Android official trên store | relay do publisher vận hành, token riêng cho từng instance |
+| App mobile do tổ chức tự build và ký | FCM service account và APNs key của chính tổ chức |
+| Không chấp nhận dịch vụ push ngoài | để trống toàn bộ cấu hình; vẫn có WebSocket và notification center khi online |
 
-- không dùng push relay: self-host thuần, nhưng notification nền bị giới hạn;
-- dùng push relay tối thiểu do WebTUI vận hành cho app official;
-- customer tự build/sign app riêng với Firebase/APNs riêng.
+Các biến relay mặc định để trống. Chỉ điền `PUSH_RELAY_URL`, `PUSH_RELAY_TOKEN`
+và `PUSH_RELAY_INSTANCE_ID` sau khi publisher cấp đủ bộ; không dùng giá trị mẫu
+và không dùng chung token giữa các VPS. Khóa FCM/APNs của app official không
+được phân phát cho customer.
 
-Không phân phát service account của Firebase project dùng cho app official tới
-các instance customer. Dù chọn chính sách nào, mobile vẫn phải catch-up bằng
-sync cursor khi mở lại để không mất sự kiện.
+Hiện trạng theo client:
 
-Đây là phần khác biệt lớn so với web: web có thể sống nhờ WebSocket khi tab mở,
-mobile cần push + sync cursor để không mất sự kiện sau background.
+- mobile: đăng ký FCM token; iOS đăng ký thêm APNs VoIP token cho cuộc gọi đến;
+- desktop: notification native khi tiến trình desktop đang chạy;
+- web: service worker + Web Push/VAPID theo từng instance, mặc định tắt và chỉ
+  xin quyền sau thao tác opt-in; khi chưa cấu hình vẫn dùng notification center
+  và realtime lúc tab đang chạy.
 
-## Bot AI theo nghiệp vụ của tổ chức
+Thiết kế, cấu hình direct/relay, kiểm thử thiết bị thật và ranh giới dữ liệu được
+mô tả tại [docs/operations/push-notifications.md](docs/operations/push-notifications.md).
 
-Owner tạo bot tại `Kênh & Bot`, cài bot vào kênh, chọn provider và tạo flow.
-Flow chỉ chạy sau khi được xuất bản. Trigger hỗ trợ:
+Admin Panel có trang **Push** theo dõi queue depth, delivery rate 24 giờ, tuổi job
+cũ nhất, phân bổ provider và dead-letter đã che dữ liệu nhạy cảm. Người có quyền
+`notification.manage` có thể replay một dead-letter theo cơ chế idempotent.
 
-- `{"type":"mention"}`: chạy khi tin nhắn nhắc `@slug-bot`;
-- `{"type":"keyword","keywords":["nghỉ phép","chấm công"]}`;
-- `{"type":"command","prefix":"/hr"}`;
-- `{"type":"all"}`: nhận mọi tin nhắn trong kênh đã cài bot.
+Web client có outbox IndexedDB tách theo server/tài khoản/workspace. Tin nhắn text
+được gửi lại với `client_message_id`, backoff và lease đa tab; delta sync áp dụng
+server timestamp, tombstone và cursor bền vững để tránh hồi sinh dữ liệu cũ. Xem
+[chính sách offline và conflict](docs/operations/offline-outbox-and-sync.md).
 
-Ollama và LocalAI trong mạng Docker dùng được ngay khi endpoint nằm trong
-`BOT_AI_ALLOWED_HOSTS`. Với endpoint tương thích OpenAI hoặc webhook bên ngoài,
-thêm đúng hostname vào biến này. API key không lưu trực tiếp trong database:
-
-```dotenv
-BOT_AI_ALLOWED_HOSTS=ollama,local-ai,ai.company.com
-BOT_AI_OPENAI_KEY=replace-with-a-secret
-```
-
-Sau đó nhập `env://BOT_AI_OPENAI_KEY` vào `Secret reference`. Runtime chỉ cho
-đọc biến môi trường bắt đầu bằng `BOT_AI_`, chặn URL có credentials và chặn
-hostname công khai chưa nằm trong allowlist.
-
-## Cuộc gọi và media
-
-Cuộc gọi 1:1 dùng WebRTC và coturn trong stack. Mặc định installer tạo:
-
-- STUN: `stun:chat.company.com:3478`
-- TURN UDP/TCP: `turn:chat.company.com:3478`
-- port media UDP: `49160-49200`
-
-TURN đang dùng credential tĩnh riêng của instance. Nếu credential bị lộ, đổi
-`TURN_PASSWORD`, cập nhật `NEXT_PUBLIC_RTC_ICE_SERVERS` và `RTC_ICE_SERVERS`,
-sau đó build lại web/admin và restart stack.
-
-Nhóm gọi quy mô lớn hoặc ghi hình cần bổ sung SFU/HPB chuyên dụng; compose mặc
-định chỉ nhắm nhóm nhỏ và cuộc gọi 1:1.
-
-## Vận hành hằng ngày
-
-Kiểm tra trạng thái:
+## Vận hành
 
 ```sh
+# Kiểm tra container, HTTPS, chế độ push và hàng đợi notification
 sh deploy/self-hosted/check.sh
-```
 
-Xem log:
-
-```sh
+# Theo dõi log quan trọng
 cd deploy/self-hosted
 docker compose --env-file .env -f compose.yml logs -f api worker caddy
+
+# Backup off-site trước khi update (sau khi cấu hình S3/MinIO và init một lần)
+./backup.sh backup --maintenance
+sh update.sh
+
+# Restore có chủ đích từ snapshot ID cụ thể
+./restore.sh 0123abcd --apply --confirm RESTORE:0123abcd
+
+# Bật tracing, dashboard p95/p99 và cảnh báo nội bộ (Grafana chỉ bind localhost)
+docker compose --env-file .env -f compose.yml --profile observability up -d
 ```
 
-Backup:
+Backup off-site chứa database, file/object storage, manifest và checksum trong
+repository Restic mã hóa phía client. Tính năng mặc định tắt và không làm đổi
+quickstart. Cấu hình bucket, retention, scheduler, verify và restore guardrail
+nằm trong [runbook backup/restore](docs/operations/offsite-backup-restore.md);
+quy trình ngày/tuần/tháng, xoay secret và xử lý sự cố nằm trong
+[runbook vận hành](docs/operations/self-host-runbook.md).
+
+Profile observability gồm OpenTelemetry Collector, Tempo, Prometheus,
+Alertmanager và Grafana. Cấu hình dashboard, ngưỡng p95/p99, push/backup alert và
+cách nối webhook/email riêng nằm trong
+[runbook observability](docs/operations/observability.md).
+
+Trước mỗi bản production, dùng
+[checklist phát hành](docs/operations/production-checklist.md) làm điều kiện go/no-go.
+
+## Bảo mật và quyền riêng tư
+
+- Không commit `.env`, Firebase service account, APNs `.p8`, keystore hoặc token relay.
+- Chỉ public Caddy và coturn; không public PostgreSQL, Redis hay RabbitMQ.
+- Bật rate limit, giữ CORS theo đúng domain, backup có mã hóa và giới hạn SSH.
+- Thu hồi session, thiết bị push và tài khoản ngay khi nhân sự rời tổ chức.
+- Payload qua push relay có thể chứa tiêu đề/nội dung preview; tắt preview cho
+  hội thoại nhạy cảm và công bố bên xử lý dữ liệu trong privacy policy.
+
+Bản phát hành có chức năng tạo tài khoản phải có luồng tự xóa bằng
+`DELETE /api/v1/users/me`, màn xác nhận trong app và một URL công khai như
+`https://download.example.com/account-deletion` để người không còn cài app vẫn
+gửi yêu cầu. Nếu user đang là owner, request nhận email một thành viên active và
+chuyển quyền sở hữu trong cùng transaction trước khi xóa, tránh instance bị
+chiếm quyền. Sau commit, middleware từ chối JWT cũ và WebSocket của user được
+ngắt trên các API node qua Redis (kèm active-user check dự phòng). Chính sách
+phải nói rõ dữ liệu xóa ngay, dữ liệu giữ lại theo nghĩa vụ pháp lý và thời hạn
+backup hết hiệu lực.
+
+## Phát triển local
+
+Backend:
 
 ```sh
-sh deploy/self-hosted/backup.sh
+cd backend
+go test ./...
+go run ./cmd/migrate up
+go run ./cmd/api
 ```
 
-Update:
+Frontend:
 
 ```sh
-sh deploy/self-hosted/update.sh
+cd frontend
+npm ci
+npm run typecheck
+npm run test:unit
+npm run dev:web
 ```
 
-Restore:
+Xem [hướng dẫn backend local](backend/docs/local-run.md),
+[tổng quan kiến trúc](docs/architecture/overview.md) và
+[mục lục tài liệu](docs/README.md).
 
-```sh
-sh deploy/self-hosted/restore.sh /absolute/path/to/backup --yes
+## Giấy phép
+
+Repository hiện chưa có file `LICENSE`. Trước khi public hoặc mời bên ngoài
+self-host, chủ dự án phải chọn giấy phép rõ ràng (ví dụ Apache-2.0/MIT nếu muốn
+permissive, hoặc AGPL-3.0/commercial nếu muốn ràng buộc bản sửa và phân phối).
+Không nên để người dùng tự suy đoán quyền sử dụng từ việc source đang public.
+
+## Cấu trúc repository
+
+```text
+backend/               Go API, worker, migration và OpenAPI
+frontend/apps/web/      ứng dụng chat web
+frontend/apps/admin/    Admin Panel
+frontend/packages/      API client, types, UI và platform abstraction
+deploy/self-hosted/     compose, Caddy, installer, backup/update/restore
+docs/                   kiến trúc, vận hành và roadmap
 ```
 
-Backup cần bao gồm PostgreSQL dump, storage volume và file `.env`. Nếu mất
-`.env`, secret JWT/webhook/TURN/OIDC cũ không thể khôi phục nguyên trạng.
+## Chức năng có thể phát triển tiếp
 
-## Bảo mật tối thiểu
-
-- Không commit hoặc gửi `deploy/self-hosted/.env` cho VPSTTT.
-- Chỉ cấp SSH cho người vận hành thật sự cần.
-- Bật firewall và chỉ mở các port đã liệt kê.
-- Backup ra nơi khác VPS, có mã hóa.
-- Theo dõi dung lượng disk vì file/media nằm trong storage của instance.
-- Khi nhân sự rời công ty, revoke session và khóa tài khoản trong Admin Panel.
-- Nếu public lên store mobile, cần chính sách privacy/account deletion riêng
-  cho tổ chức hoặc cho sản phẩm phát hành chung.
-
-## Khi nào không dùng self-hosted mặc định
-
-- Khách muốn bấm domain là tự tạo server hoàn toàn mà không đụng VPS: cần xây
-  control plane SaaS/provisioner riêng, không phải scope compose này.
-- Khách cần HA, nhiều node, database managed hoặc Kubernetes: dùng blueprint
-  dedicated infra riêng.
-- Khách cần federation giữa nhiều công ty: capability hiện đang fail-closed.
+Các hướng tiếp theo phù hợp nhất là tìm kiếm full-text/OpenSearch, retention và
+legal hold, SSO/SCIM, SFU cho gọi nhóm lớn, high availability đa node, antivirus/
+DLP cho file, federation giữa instance và mobile background sync có attachment.
+Danh sách có thứ tự, giá trị và dependency tại
+[docs/planning/self-host-feature-roadmap.md](docs/planning/self-host-feature-roadmap.md).

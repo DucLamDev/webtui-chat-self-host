@@ -31,6 +31,13 @@ export type CreateCallInput = {
 
 export type CallSignalType = "offer" | "answer" | "ice_candidate" | "ready";
 
+export type CallIceServer = {
+  credential?: string;
+  credentialType?: "password";
+  urls: string | string[];
+  username?: string;
+};
+
 export function createCallsClient(http: HttpClient) {
   const basePath = (workspaceId: string) => `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/calls`;
   const callPath = (workspaceId: string, callId: string) => `${basePath(workspaceId)}/${encodeURIComponent(callId)}`;
@@ -45,6 +52,12 @@ export function createCallsClient(http: HttpClient) {
   }
 
   return {
+    async iceServers() {
+      const result = await http.get<{ expires_at?: string; ice_servers?: CallIceServer[] }>(
+        "/api/v1/calls/ice-servers"
+      );
+      return result?.ice_servers ?? [];
+    },
     create(workspaceId: string, input: CreateCallInput) {
       return unwrapCall(http.post<unknown>(basePath(workspaceId), input));
     },

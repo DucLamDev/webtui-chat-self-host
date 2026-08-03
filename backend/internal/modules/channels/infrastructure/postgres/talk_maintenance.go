@@ -11,6 +11,8 @@ import (
 type TalkMaintenanceResult struct {
 	ExpiredPins       int
 	EndedMeetings     int
+	ArchivedMeetings  int
+	DeletedMeetings   int
 	ClosedBreakouts   int
 	StoppedVoiceRooms int
 	FailedRecordings  int
@@ -98,6 +100,32 @@ closed_breakouts AS (
       AND room.channel_id IN (SELECT channel_id FROM ended_meetings)
     RETURNING room.id
 ),
+due_meeting_cleanup_ids AS (
+    SELECT id, room_policy
+    FROM channel_meetings
+    WHERE status IN ('ended', 'cancelled')
+      AND cleanup_after IS NOT NULL
+      AND cleanup_after <= now()
+      AND room_policy IN ('archive', 'delete')
+    ORDER BY cleanup_after
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+),
+archived_meetings AS (
+    UPDATE channel_meetings meeting
+    SET cleanup_after = NULL
+    FROM due_meeting_cleanup_ids candidate
+    WHERE meeting.id = candidate.id
+      AND candidate.room_policy = 'archive'
+    RETURNING meeting.id
+),
+deleted_meetings AS (
+    DELETE FROM channel_meetings meeting
+    USING due_meeting_cleanup_ids candidate
+    WHERE meeting.id = candidate.id
+      AND candidate.room_policy = 'delete'
+    RETURNING meeting.id
+),
 stale_voice_ids AS (
     SELECT channel_id
     FROM channel_voice_rooms
@@ -137,12 +165,16 @@ failed_recordings AS (
 SELECT
     (SELECT count(*) FROM expired_pins),
     (SELECT count(*) FROM ended_meetings),
+    (SELECT count(*) FROM archived_meetings),
+    (SELECT count(*) FROM deleted_meetings),
     (SELECT count(*) FROM closed_breakouts),
     (SELECT count(*) FROM stopped_voice_rooms),
     (SELECT count(*) FROM failed_recordings)
 `, limit).Scan(
 		&result.ExpiredPins,
 		&result.EndedMeetings,
+		&result.ArchivedMeetings,
+		&result.DeletedMeetings,
 		&result.ClosedBreakouts,
 		&result.StoppedVoiceRooms,
 		&result.FailedRecordings,

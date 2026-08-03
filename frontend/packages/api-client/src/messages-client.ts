@@ -42,7 +42,10 @@ export function createMessagesClient(http: HttpClient) {
     send(workspaceId: string, channelId: string, input: SendMessageInput) {
       return http.post<Message>(
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/messages`,
-        input
+        input,
+        input.client_message_id
+          ? { headers: { "Idempotency-Key": input.client_message_id } }
+          : undefined
       );
     },
     async scheduled(workspaceId: string, params: QueryParams = {}) {

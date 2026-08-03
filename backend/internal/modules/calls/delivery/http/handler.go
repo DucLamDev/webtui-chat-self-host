@@ -1,8 +1,14 @@
 package http
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	nethttp "net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	callsapp "github.com/duclamdev/application-chat/backend/internal/modules/calls/application"
 	"github.com/duclamdev/application-chat/backend/internal/shared/middleware"
@@ -11,7 +17,12 @@ import (
 )
 
 type Handler struct {
-	service *callsapp.Service
+	service           *callsapp.Service
+	publicICEServers  []map[string]any
+	turnURLs          []string
+	turnSharedSecret  string
+	turnCredentialTTL time.Duration
+	now               func() time.Time
 }
 
 type createCallRequest struct {
@@ -32,10 +43,23 @@ type signalRequest struct {
 }
 
 func NewHandler(service *callsapp.Service) *Handler {
-	return &Handler{service: service}
+	return &Handler{service: service, turnCredentialTTL: 10 * time.Minute, now: time.Now}
+}
+
+func (h *Handler) SetICEConfiguration(publicServers []map[string]any, turnURLs []string, sharedSecret string, ttl time.Duration) {
+	h.publicICEServers = publicServers
+	h.turnURLs = append([]string(nil), turnURLs...)
+	h.turnSharedSecret = strings.TrimSpace(sharedSecret)
+	if ttl > 0 {
+		h.turnCredentialTTL = ttl
+	}
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+	credentials := router.Group("/calls")
+	credentials.Use(authMiddleware)
+	credentials.GET("/ice-servers", h.ICEServers)
+
 	private := router.Group("/workspaces/:workspace_id/calls")
 	private.Use(authMiddleware)
 	private.POST("", h.Create)
@@ -47,6 +71,37 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.POST("/:call_id/hangup", h.Hangup)
 	private.POST("/:call_id/miss", h.Miss)
 	private.POST("/:call_id/signals", h.Signal)
+}
+
+func (h *Handler) ICEServers(c *gin.Context) {
+	servers := cloneICEServers(h.publicICEServers)
+	expiresAt := h.now().UTC().Add(h.turnCredentialTTL)
+	if h.turnSharedSecret != "" && len(h.turnURLs) > 0 {
+		username := strconv.FormatInt(expiresAt.Unix(), 10) + ":" + middleware.CurrentUserID(c)
+		mac := hmac.New(sha1.New, []byte(h.turnSharedSecret))
+		_, _ = mac.Write([]byte(username))
+		servers = append(servers, map[string]any{
+			"urls":       append([]string(nil), h.turnURLs...),
+			"username":   username,
+			"credential": base64.StdEncoding.EncodeToString(mac.Sum(nil)),
+		})
+	}
+	response.OK(c, nethttp.StatusOK, gin.H{
+		"ice_servers": servers,
+		"expires_at":  expiresAt.Format(time.RFC3339),
+	})
+}
+
+func cloneICEServers(source []map[string]any) []map[string]any {
+	result := make([]map[string]any, 0, len(source))
+	for _, server := range source {
+		copy := make(map[string]any, len(server))
+		for key, value := range server {
+			copy[key] = value
+		}
+		result = append(result, copy)
+	}
+	return result
 }
 
 func (h *Handler) Incoming(c *gin.Context) {

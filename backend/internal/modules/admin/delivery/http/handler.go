@@ -29,6 +29,37 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.GET("/health", h.Health)
 	private.GET("/channels", h.Channels)
 	private.GET("/messages", h.Messages)
+	private.GET("/push", h.PushQueue)
+	private.POST("/push/dead-letters/:job_id/replay", h.ReplayPushDeadLetter)
+}
+
+func (h *Handler) PushQueue(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("dead_letter_limit", "50"))
+	overview, err := h.service.PushQueue(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		c.Param("workspace_id"),
+		limit,
+	)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, nethttp.StatusOK, overview)
+}
+
+func (h *Handler) ReplayPushDeadLetter(c *gin.Context) {
+	result, err := h.service.ReplayDeadPushJob(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		c.Param("workspace_id"),
+		c.Param("job_id"),
+	)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, nethttp.StatusAccepted, result)
 }
 
 func (h *Handler) Channels(c *gin.Context) {

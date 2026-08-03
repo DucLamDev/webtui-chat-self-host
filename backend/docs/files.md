@@ -44,7 +44,26 @@ Khi upload thành công, backend:
 3. Ghi bản ghi vào `files`.
 4. Tạo `file_versions` version `1`.
 
-## Cấu hình MinIO dev
+## Cấu hình storage riêng theo host
+
+Ảnh, video, file và logo mới resolve storage theo `workspace -> zone/host`. Quản trị viên
+cấu hình tại trang **Cài đặt > Lưu trữ ảnh và video** hoặc qua:
+
+- `GET /api/v1/zones/current/storage`: đọc cấu hình đã che Secret Key.
+- `PUT /api/v1/zones/current/storage`: kiểm tra kết nối rồi lưu Local/MinIO/S3.
+
+Mỗi zone có đúng một hàng trong `zone_storage_configs`; không dùng chung credential hoặc
+client S3 với zone khác. `secret_access_key` được mã hóa AES-GCM bằng
+`STORAGE_CREDENTIALS_KEY` trước khi ghi database và không được trả lại qua API.
+
+Bucket phải tồn tại và để private. Object key luôn chứa workspace/zone để tiếp tục tách
+namespace bên trong bucket. Download file cũ vẫn có fallback chỉ-đọc về cấu hình instance
+nếu `storage_provider` và `bucket` đã lưu trên file khớp cấu hình cũ.
+
+## Cấu hình MinIO dev cho storage instance
+
+Các biến môi trường dưới đây vẫn dùng cho backup và fallback tương thích file cũ. Media
+mới nên được cấu hình riêng cho host trong trang Cài đặt.
 
 Dùng các biến môi trường sau để bật MinIO/S3 dev:
 

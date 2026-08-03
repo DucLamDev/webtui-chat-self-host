@@ -7,7 +7,9 @@ Tài liệu này mô tả phần phase 7 của backend WebTui Chat: xử lý eve
 - API ghi dữ liệu nghiệp vụ và ghi event vào `outbox_events` trong cùng transaction.
 - Worker lấy event từ `outbox_events`, xử lý handler nội bộ, publish RabbitMQ nếu bật, rồi đánh dấu `published`.
 - Mention trong message tạo bản ghi `notifications` và `notification_jobs`.
-- Notification job hiện có kênh `desktop` ở mức nền; các kênh `push`, `email`, `webhook`, `sms` đã có schema để nối provider sau.
+- Notification job kênh `push` đã nối FCM HTTP v1, APNs VoIP và publisher relay;
+  worker retry tối đa năm lần, đưa job lỗi lâu dài sang `dead` và revoke device
+  token khi provider báo `unregistered`/không hợp lệ vĩnh viễn.
 - Presence lưu trong PostgreSQL qua `user_presence`, không phụ thuộc bộ nhớ của một API node.
 
 ## Luồng outbox
@@ -46,6 +48,30 @@ PUT /api/v1/notifications/read-all?workspace_id={workspace_id}
 ```
 
 Notification mention được tạo idempotent theo `event_id`, nên worker chạy lại cùng event không tạo trùng notification cho cùng user.
+
+Mobile đăng ký/thu hồi provider token qua:
+
+```text
+POST /api/v1/mobile/devices
+GET /api/v1/mobile/devices
+DELETE /api/v1/mobile/devices/{device_id}
+```
+
+Browser đăng ký Web Push theo VAPID của instance qua:
+
+```text
+GET /api/v1/notifications/web-push/config
+POST /api/v1/notifications/web-push/subscriptions
+DELETE /api/v1/notifications/web-push/subscriptions/{subscription_id}
+```
+
+Web Push mặc định tắt. API không trả endpoint, `p256dh`, `auth` hay VAPID private
+key; worker tự revoke subscription khi push service trả `404/410`.
+
+API list chỉ trả `has_push_token`, không trả raw provider token. Thiết bị phải
+thuộc cùng zone/workspace với notification trước khi worker gửi. Cấu hình relay,
+direct provider và giới hạn Web Push được mô tả trong
+[`docs/operations/push-notifications.md`](../../docs/operations/push-notifications.md).
 
 ## Presence API
 

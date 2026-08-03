@@ -18,7 +18,7 @@ Tài liệu này chia nhỏ kế hoạch frontend thành các phase và task có
 - Tách rõ `apps/*`, `features/*`, `packages/*`.
 - Server state dùng TanStack Query; client UI state dùng Zustand.
 - UI gate bằng permission từ `/api/v1/rbac/me`, không suy từ role name.
-- WebSocket browser dùng query `?access_token=...` vì native WebSocket không set được header Authorization.
+- WebSocket browser dùng subprotocol `webtui.jwt.{token}`; native client dùng header `Authorization`. Không truyền token trong URL.
 - Không log URL có `access_token`; subprotocol `["webtui.jwt", accessToken]` chỉ là fallback khi cần tránh token trong URL.
 - Mỗi task phải có acceptance rõ, ưu tiên test mapper/API client/permission/realtime cache.
 - Nếu backend API chưa có, không giả endpoint production; ghi rõ mock/placeholder.
@@ -209,7 +209,7 @@ Trạng thái hiện tại:
 | Task | Công việc | Phụ thuộc | Kết quả | Acceptance | Ưu tiên |
 |---|---|---|---|---|---|
 | F8.1 | WS URL builder | F3.13, F0.5 | `http` -> `ws`, `https` -> `wss` | URL đúng env | P0 |
-| F8.2 | Connect with browser query token | F3.13, F4 | `?access_token=...` | Backend nhận auth | P0 |
+| F8.2 | Connect with authenticated subprotocol/header | F3.13, F4 | Browser subprotocol, native Authorization header | Backend nhận auth mà không lộ token trong URL | P0 |
 | F8.3 | Join/leave room | F6.3 | Room lifecycle | Đổi channel leave/join đúng | P0 |
 | F8.4 | Reconnect strategy | F8.2 | Backoff reconnect | Offline/online không crash | P0 |
 | F8.5 | Socket Zustand state | F8.2 | connected/reconnecting/offline | UI hiển thị trạng thái | P0 |
@@ -479,7 +479,7 @@ Nếu bắt đầu code ngay, thứ tự commit nên là:
 ### Hướng làm tốt hơn cho F7/F8/F9
 
 - F7 đã tách timeline thành `useMessageTimeline` với infinite cursor, optimistic sending, edit/delete, reaction, thread và search.
-- F8 đã dùng `RealtimeGateway` query token, join/leave room, reconnect backoff, socket status store và merge cache chống trùng event.
+- F8 dùng `RealtimeGateway` với browser subprotocol, join/leave room, reconnect backoff, socket status store và merge cache chống trùng event.
 - F9 cần nâng upload một file hiện tại thành upload queue có progress, retry, remove, file preview và download action đầy đủ.
 
 ### Phase F7 hoàn thành

@@ -39,11 +39,22 @@ type channelPreferenceRequest struct {
 	Archived    *bool    `json:"archived"`
 }
 
+type webPushSubscriptionRequest struct {
+	WorkspaceID    string `json:"workspace_id"`
+	Endpoint       string `json:"endpoint"`
+	ExpirationTime string `json:"expiration_time"`
+	Keys           struct {
+		P256DH string `json:"p256dh"`
+		Auth   string `json:"auth"`
+	} `json:"keys"`
+}
+
 func NewHandler(service *notificationsapp.Service) *Handler {
 	return &Handler{service: service}
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+	router.GET("/notifications/web-push/config", h.GetWebPushConfig)
 	private := router.Group("/notifications")
 	private.Use(authMiddleware)
 	private.GET("", h.ListMine)
@@ -51,8 +62,46 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.PUT("/preferences", h.UpsertPreferences)
 	private.GET("/preferences/channels/:channel_id", h.GetChannelPreference)
 	private.PUT("/preferences/channels/:channel_id", h.UpsertChannelPreference)
+	private.POST("/web-push/subscriptions", h.RegisterWebPushSubscription)
+	private.DELETE("/web-push/subscriptions/:subscription_id", h.RevokeWebPushSubscription)
 	private.PUT("/:notification_id/read", h.MarkRead)
 	private.PUT("/read-all", h.MarkAllRead)
+}
+
+func (h *Handler) GetWebPushConfig(c *gin.Context) {
+	response.OK(c, nethttp.StatusOK, h.service.WebPushConfig())
+}
+
+func (h *Handler) RegisterWebPushSubscription(c *gin.Context) {
+	var req webPushSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Request body must be valid JSON.", nil)
+		return
+	}
+	subscription, err := h.service.RegisterWebPushSubscription(c.Request.Context(), notificationsapp.WebPushSubscriptionInput{
+		ZoneID:         middleware.CurrentZoneID(c),
+		UserID:         middleware.CurrentUserID(c),
+		WorkspaceID:    requestWorkspaceID(c, req.WorkspaceID),
+		Endpoint:       req.Endpoint,
+		P256DH:         req.Keys.P256DH,
+		Auth:           req.Keys.Auth,
+		ExpirationTime: req.ExpirationTime,
+	})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.Created(c, subscription)
+}
+
+func (h *Handler) RevokeWebPushSubscription(c *gin.Context) {
+	if err := h.service.RevokeWebPushSubscription(
+		c.Request.Context(), middleware.CurrentZoneID(c), middleware.CurrentUserID(c), c.Param("subscription_id"),
+	); err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.NoContent(c)
 }
 
 func (h *Handler) ListMine(c *gin.Context) {

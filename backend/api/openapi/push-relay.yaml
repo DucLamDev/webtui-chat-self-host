@@ -1,0 +1,170 @@
+openapi: 3.0.3
+info:
+  title: WebTui Push Relay API
+  version: 1.0.0
+  description: >-
+    Self-hostable publisher relay. Delivery tokens and payloads are accepted
+    into a durable PostgreSQL queue and are never returned by this API.
+servers:
+  - url: https://relay.example.com
+paths:
+  /health:
+    get:
+      security: []
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Process is alive
+  /ready:
+    get:
+      security: []
+      summary: Database/provider readiness probe
+      responses:
+        "200":
+          description: Relay is ready
+        "503":
+          description: Relay is not ready
+  /metrics:
+    get:
+      security: []
+      summary: Internal aggregate Prometheus metrics
+      description: >-
+        Backend-network endpoint. It exposes queue counts and rolling outcomes
+        without publisher IDs, device tokens, payloads, or provider errors and
+        must not be published through the edge proxy.
+      responses:
+        "200":
+          description: Prometheus text exposition, including collection_success=0 when PostgreSQL cannot be queried
+  /v1/deliveries:
+    post:
+      summary: Enqueue an idempotent push delivery
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeliveryRequest"
+      responses:
+        "202":
+          description: Queued, including an identical idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryAccepted"
+        "401":
+          description: Publisher authentication failed
+        "409":
+          description: Idempotency key was reused with different content
+        "413":
+          description: Request exceeds configured maximum
+        "425":
+          description: Relay admission is temporarily deferred
+          headers:
+            Retry-After:
+              description: Minimum suggested retry delay in seconds
+              schema:
+                type: integer
+        "429":
+          description: Publisher rate limit exceeded
+          headers:
+            Retry-After:
+              description: Minimum suggested retry delay in seconds
+              schema:
+                type: integer
+  /v1/deliveries/{job_id}:
+    get:
+      summary: Read delivery status without destination credentials
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Push-Relay-Publisher
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Delivery status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliveryStatus"
+        "404":
+          description: Delivery does not exist for this publisher
+components:
+  securitySchemes:
+    publisherBearer:
+      type: http
+      scheme: bearer
+  schemas:
+    DeliveryRequest:
+      type: object
+      additionalProperties: false
+      required: [provider, device_token, instance_id, payload]
+      properties:
+        provider:
+          type: string
+          enum: [fcm, apns]
+          description: APNs uses PushKit and therefore accepts only payload event_type=call_invite.
+        device_token:
+          type: string
+          writeOnly: true
+          minLength: 8
+          maxLength: 4096
+        instance_id:
+          type: string
+          maxLength: 128
+        payload:
+          type: object
+          additionalProperties:
+            type: string
+    DeliveryAccepted:
+      type: object
+      required: [id, status, deduplicated]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, processing, retry, sent, dead]
+        deduplicated:
+          type: boolean
+    DeliveryStatus:
+      type: object
+      required: [id, provider, status, attempt_count, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [fcm, apns]
+        status:
+          type: string
+          enum: [pending, processing, retry, sent, dead]
+        attempt_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type: string
+          format: date-time
+security:
+  - publisherBearer: []

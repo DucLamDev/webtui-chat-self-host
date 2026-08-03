@@ -19,22 +19,35 @@ type WorkspaceZoneChecker interface {
 	ZoneDomainBelongsToRecoverableZone(ctx context.Context, zoneID string, domain string) (bool, error)
 }
 
-func Auth(tokens *sharedauth.Manager, zoneCheckers ...WorkspaceZoneChecker) gin.HandlerFunc {
-	return authWithZonePolicy(tokens, false, zoneCheckers...)
+type ActiveUserChecker interface {
+	UserIsActive(ctx context.Context, userID string) (bool, error)
 }
 
-func AuthForZoneRecovery(tokens *sharedauth.Manager, zoneCheckers ...WorkspaceZoneChecker) gin.HandlerFunc {
-	return authWithZonePolicy(tokens, true, zoneCheckers...)
+func Auth(
+	tokens *sharedauth.Manager,
+	zoneChecker WorkspaceZoneChecker,
+	activeUserCheckers ...ActiveUserChecker,
+) gin.HandlerFunc {
+	return authWithZonePolicy(tokens, false, zoneChecker, activeUserCheckers...)
+}
+
+func AuthForZoneRecovery(
+	tokens *sharedauth.Manager,
+	zoneChecker WorkspaceZoneChecker,
+	activeUserCheckers ...ActiveUserChecker,
+) gin.HandlerFunc {
+	return authWithZonePolicy(tokens, true, zoneChecker, activeUserCheckers...)
 }
 
 func authWithZonePolicy(
 	tokens *sharedauth.Manager,
 	allowSuspendedZone bool,
-	zoneCheckers ...WorkspaceZoneChecker,
+	zoneChecker WorkspaceZoneChecker,
+	activeUserCheckers ...ActiveUserChecker,
 ) gin.HandlerFunc {
-	var zoneChecker WorkspaceZoneChecker
-	if len(zoneCheckers) > 0 {
-		zoneChecker = zoneCheckers[0]
+	var activeUserChecker ActiveUserChecker
+	if len(activeUserCheckers) > 0 {
+		activeUserChecker = activeUserCheckers[0]
 	}
 	return func(c *gin.Context) {
 		raw := strings.TrimSpace(c.GetHeader("Authorization"))
@@ -60,6 +73,19 @@ func authWithZonePolicy(
 			response.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", message, nil)
 			c.Abort()
 			return
+		}
+		if activeUserChecker != nil {
+			active, checkErr := activeUserChecker.UserIsActive(c.Request.Context(), claims.Subject)
+			if checkErr != nil {
+				response.Error(c, checkErr)
+				c.Abort()
+				return
+			}
+			if !active {
+				response.Fail(c, http.StatusUnauthorized, "ACCOUNT_INACTIVE", "Tài khoản không còn hoạt động.", nil)
+				c.Abort()
+				return
+			}
 		}
 
 		resolvedZoneID := contextString(c, constants.ContextResolvedZoneID)

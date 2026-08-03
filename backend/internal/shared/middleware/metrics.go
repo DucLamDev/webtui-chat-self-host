@@ -17,6 +17,7 @@ type HTTPMetrics struct {
 	started    time.Time
 	requests   map[metricLabels]metricValue
 	gaugeFuncs []GaugeFunc
+	excluded   map[string]struct{}
 }
 
 type GaugeFunc func() []Gauge
@@ -37,13 +38,23 @@ type metricLabels struct {
 type metricValue struct {
 	Count           int64
 	DurationSeconds float64
+	DurationBuckets []int64
 }
 
-func NewHTTPMetrics() *HTTPMetrics {
-	return &HTTPMetrics{
+var httpDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
+
+func NewHTTPMetrics(excludedPaths ...string) *HTTPMetrics {
+	metrics := &HTTPMetrics{
 		started:  time.Now(),
 		requests: make(map[metricLabels]metricValue),
+		excluded: map[string]struct{}{`/metrics`: {}, `/health`: {}, `/ready`: {}},
 	}
+	for _, path := range excludedPaths {
+		if path = strings.TrimSpace(path); path != "" {
+			metrics.excluded[path] = struct{}{}
+		}
+	}
+	return metrics
 }
 
 func (m *HTTPMetrics) RegisterGaugeFunc(fn GaugeFunc) {
@@ -63,7 +74,15 @@ func (m *HTTPMetrics) Middleware() gin.HandlerFunc {
 
 		path := c.FullPath()
 		if path == "" {
-			path = c.Request.URL.Path
+			// Avoid leaking identifiers and creating unbounded metric labels for
+			// unmatched URLs.
+			path = "unmatched"
+		}
+		if _, excluded := m.excluded[path]; excluded {
+			// Scrapes and liveness/readiness probes are infrastructure traffic.
+			// Including them makes p95/p99 misleading on low-traffic self-hosts and
+			// lets /metrics measure the DB-backed metric queries it runs itself.
+			return
 		}
 
 		labels := metricLabels{
@@ -74,8 +93,17 @@ func (m *HTTPMetrics) Middleware() gin.HandlerFunc {
 
 		m.mu.Lock()
 		value := m.requests[labels]
+		duration := time.Since(start).Seconds()
 		value.Count++
-		value.DurationSeconds += time.Since(start).Seconds()
+		value.DurationSeconds += duration
+		if value.DurationBuckets == nil {
+			value.DurationBuckets = make([]int64, len(httpDurationBuckets))
+		}
+		for index, upperBound := range httpDurationBuckets {
+			if duration <= upperBound {
+				value.DurationBuckets[index]++
+			}
+		}
 		m.requests[labels] = value
 		m.mu.Unlock()
 	}
@@ -115,11 +143,52 @@ func (m *HTTPMetrics) Handler() gin.HandlerFunc {
 			)
 		}
 
+		fmt.Fprintln(c.Writer, "# HELP webtui_http_request_latency_seconds HTTP request latency distribution in seconds.")
+		fmt.Fprintln(c.Writer, "# TYPE webtui_http_request_latency_seconds histogram")
+		for _, item := range snapshot {
+			for index, upperBound := range httpDurationBuckets {
+				fmt.Fprintf(c.Writer,
+					"webtui_http_request_latency_seconds_bucket{method=\"%s\",path=\"%s\",status=\"%s\",le=\"%s\"} %d\n",
+					escapeLabel(item.labels.Method),
+					escapeLabel(item.labels.Path),
+					escapeLabel(item.labels.Status),
+					strconv.FormatFloat(upperBound, 'f', -1, 64),
+					item.value.DurationBuckets[index],
+				)
+			}
+			fmt.Fprintf(c.Writer,
+				"webtui_http_request_latency_seconds_bucket{method=\"%s\",path=\"%s\",status=\"%s\",le=\"+Inf\"} %d\n",
+				escapeLabel(item.labels.Method),
+				escapeLabel(item.labels.Path),
+				escapeLabel(item.labels.Status),
+				item.value.Count,
+			)
+			fmt.Fprintf(c.Writer,
+				"webtui_http_request_latency_seconds_sum{method=\"%s\",path=\"%s\",status=\"%s\"} %.6f\n",
+				escapeLabel(item.labels.Method),
+				escapeLabel(item.labels.Path),
+				escapeLabel(item.labels.Status),
+				item.value.DurationSeconds,
+			)
+			fmt.Fprintf(c.Writer,
+				"webtui_http_request_latency_seconds_count{method=\"%s\",path=\"%s\",status=\"%s\"} %d\n",
+				escapeLabel(item.labels.Method),
+				escapeLabel(item.labels.Path),
+				escapeLabel(item.labels.Status),
+				item.value.Count,
+			)
+		}
+
+		seenGaugeFamilies := make(map[string]struct{})
 		for _, gauge := range m.gauges() {
-			if gauge.Help != "" {
+			_, familySeen := seenGaugeFamilies[gauge.Name]
+			if !familySeen && gauge.Help != "" {
 				fmt.Fprintf(c.Writer, "# HELP %s %s\n", gauge.Name, escapeHelp(gauge.Help))
 			}
-			fmt.Fprintf(c.Writer, "# TYPE %s gauge\n", gauge.Name)
+			if !familySeen {
+				fmt.Fprintf(c.Writer, "# TYPE %s gauge\n", gauge.Name)
+				seenGaugeFamilies[gauge.Name] = struct{}{}
+			}
 			fmt.Fprintf(c.Writer, "%s%s %.6f\n", gauge.Name, formatLabels(gauge.Labels), gauge.Value)
 		}
 	}
@@ -136,6 +205,7 @@ func (m *HTTPMetrics) snapshot() []metricSnapshotItem {
 
 	items := make([]metricSnapshotItem, 0, len(m.requests))
 	for labels, value := range m.requests {
+		value.DurationBuckets = append([]int64(nil), value.DurationBuckets...)
 		items = append(items, metricSnapshotItem{labels: labels, value: value})
 	}
 

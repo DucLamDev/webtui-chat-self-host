@@ -20,6 +20,7 @@ import { HttpClient, type HttpClientOptions } from "./http-client";
 import { createMessagesClient } from "./messages-client";
 import { createRbacClient } from "./rbac-client";
 import { createTicketsClient } from "./tickets-client";
+import { createSyncClient } from "./sync-client";
 import { createTenancyClient } from "./tenancy-client";
 import { createUsersClient } from "./users-client";
 import { createWorkspacesClient } from "./workspaces-client";
@@ -46,6 +47,7 @@ export function createWebTuiApiClient(options: HttpClientOptions) {
     orderBot: createOrderBotClient(http),
     presence: createPresenceClient(http),
     rbac: createRbacClient(http),
+    sync: createSyncClient(http),
     tenancy: createTenancyClient(http),
     tickets: createTicketsClient(http),
     users: createUsersClient(http),

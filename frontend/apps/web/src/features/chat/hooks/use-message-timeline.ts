@@ -175,23 +175,27 @@ export function useMessageTimeline({
     }
     void writeTimelineCache(workspaceId, channelId, remoteApiMessages).catch(() => undefined);
   }, [channelId, messagesQuery.isSuccess, remoteApiMessages, workspaceId]);
-  const attachmentMessageIds = useMemo(
-    () => apiMessages.filter((message) => !message.id.startsWith("local-") && !message.deleted_at).map((message) => message.id),
+  const attachmentMessages = useMemo(
+    () => apiMessages.filter((message) =>
+      !message.id.startsWith("local-") &&
+      !message.deleted_at &&
+      !message.attachments?.length &&
+      (
+        message.kind === "file" ||
+        message.metadata?.has_attachments === true ||
+        /đã gửi(?: \d+)? (?:ảnh|file|video|tin nhắn thoại)/i.test(message.body)
+      )
+    ),
     [apiMessages]
   );
   const attachmentQueries = useQueries({
-    queries: attachmentMessageIds.map((messageId) => {
-      const message = apiMessages.find((item) => item.id === messageId);
+    queries: attachmentMessages.map((message) => {
+      const messageId = message.id;
       const attachmentQueryKey = queryKeys.files.attachments(workspaceId, channelId, messageId);
       const cachedAttachments = queryClient.getQueryData<MessageAttachment[]>(attachmentQueryKey);
-      const expectsAttachment =
-        message?.kind === "file" ||
-        message?.metadata?.has_attachments === true ||
-        Boolean(cachedAttachments?.length) ||
-        /đã gửi(?: \d+)? (?:ảnh|file|tin nhắn thoại)/i.test(message?.body ?? "");
-      const attachmentWaitDeadline = Date.parse(message?.created_at ?? "") + 30_000;
+      const attachmentWaitDeadline = Date.parse(message.created_at ?? "") + 30_000;
       return {
-        enabled: Boolean(enabled && workspaceId && channelId && expectsAttachment),
+        enabled: Boolean(enabled && workspaceId && channelId),
         gcTime: 30 * 60_000,
         queryFn: async () => {
           try {
@@ -204,14 +208,14 @@ export function useMessageTimeline({
         },
         queryKey: attachmentQueryKey,
         refetchInterval: (query: { state: { data?: MessageAttachment[] } }) =>
-          expectsAttachment && !query.state.data?.length && Date.now() < attachmentWaitDeadline ? 2_000 : false,
-        staleTime: expectsAttachment ? 2_000 : Infinity
+          !query.state.data?.length && Date.now() < attachmentWaitDeadline ? 2_000 : false,
+        staleTime: 5 * 60_000
       };
     })
   });
   const attachmentsByMessageId = useMemo(
-    () => new Map(attachmentMessageIds.map((messageId, index) => [messageId, attachmentQueries[index]?.data ?? []])),
-    [attachmentMessageIds, attachmentQueries]
+    () => new Map(attachmentMessages.map((message, index) => [message.id, attachmentQueries[index]?.data ?? []])),
+    [attachmentMessages, attachmentQueries]
   );
   const messages = useMemo(
     () =>
@@ -357,6 +361,9 @@ export function useMessageTimeline({
       if (context?.previous) {
         queryClient.setQueryData(timelineKey, context.previous);
       }
+    },
+    onSuccess: (_result, input) => {
+      removeMessageFromTimeline(queryClient, workspaceId, channelId, input.messageId, new Date().toISOString());
     }
   });
 
@@ -489,6 +496,8 @@ export function mapMessage(
     canDelete: !callEvent && !systemAuthor && !message.deleted_at && !isLocal && canTargetMessageAPI && (isOwner || canManageMessages),
     canEdit: !callEvent && !poll && !systemAuthor && !message.deleted_at && isOwner,
     callEvent,
+    clientMessageId: typeof message.metadata?.client_message_id === "string" ? message.metadata.client_message_id : undefined,
+    deliveryState: isLocal ? "sending" : undefined,
     editedAt: message.edited_at ? formatTime(message.edited_at) : undefined,
     id: message.id,
     isDeleted: Boolean(message.deleted_at),

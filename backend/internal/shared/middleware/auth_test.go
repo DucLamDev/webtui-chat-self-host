@@ -18,6 +18,14 @@ type fakeWorkspaceZoneChecker struct {
 	recoverableDomainMatches bool
 }
 
+type fakeActiveUserChecker struct {
+	active bool
+}
+
+func (checker fakeActiveUserChecker) UserIsActive(context.Context, string) (bool, error) {
+	return checker.active, nil
+}
+
 func (checker fakeWorkspaceZoneChecker) WorkspaceBelongsToZone(context.Context, string, string) (bool, error) {
 	return checker.matches, nil
 }
@@ -49,6 +57,28 @@ func TestAuthRejectsTokenFromAnotherResolvedZone(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+}
+
+func TestAuthRejectsValidTokenForDeletedUser(t *testing.T) {
+	tokenManager, token := zoneToken(t, "zone-a")
+	router := gin.New()
+	router.Use(Auth(
+		tokenManager,
+		fakeWorkspaceZoneChecker{matches: true, domainMatches: true},
+		fakeActiveUserChecker{active: false},
+	))
+	router.GET("/resource", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/resource", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
 	}
 }
 

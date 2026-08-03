@@ -2,11 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { PlatformStorage } from "@webtui/chat-core";
 import type { Message } from "@webtui/types";
 import {
-  enqueueOutbox,
+  discardLegacyOutbox,
   readDraft,
-  readOutbox,
   readTimelineCache,
-  removeOutboxItem,
   writeDraft,
   writeTimelineCache
 } from "../../apps/web/src/features/chat/model/offline-cache";
@@ -57,24 +55,12 @@ describe("offline cache", () => {
     expect(await readDraft("workspace-1", "channel-1", storage)).toBe("");
   });
 
-  it("upserts and removes outbox entries by client message id", async () => {
+  it("discards the unscoped legacy outbox instead of migrating it", async () => {
     const storage = createMemoryStorage();
-    await enqueueOutbox({
-      body: "hello",
-      channelId: "channel-1",
-      clientMessageId: "client-1",
-      workspaceId: "workspace-1"
-    }, storage);
-    await enqueueOutbox({
-      body: "hello updated",
-      channelId: "channel-1",
-      clientMessageId: "client-1",
-      workspaceId: "workspace-1"
-    }, storage);
+    await storage.setItem("webtui:offline:v1:outbox", JSON.stringify({ value: [{ body: "private" }] }));
 
-    expect(await readOutbox(storage)).toMatchObject([{ body: "hello updated", clientMessageId: "client-1" }]);
+    await discardLegacyOutbox(storage);
 
-    await removeOutboxItem("client-1", storage);
-    expect(await readOutbox(storage)).toEqual([]);
+    expect(await storage.getItem("webtui:offline:v1:outbox")).toBeNull();
   });
 });

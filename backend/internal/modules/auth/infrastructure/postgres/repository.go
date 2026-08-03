@@ -24,6 +24,23 @@ type Repository struct {
 	defaultWorkspaceID string
 }
 
+// UserIsActive is intentionally a narrow indexed lookup used at authenticated
+// request boundaries. It prevents a still-valid short-lived access token from
+// outliving account deletion or administrative disablement.
+func (r *Repository) UserIsActive(ctx context.Context, userID string) (bool, error) {
+	var active bool
+	err := r.pool.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM users
+    WHERE id = $1::uuid
+      AND status = 'active'
+      AND deleted_at IS NULL
+)
+`, userID).Scan(&active)
+	return active, err
+}
+
 func NewRepository(pool *pgxpool.Pool, defaultWorkspaceID ...string) *Repository {
 	workspaceID := ""
 	if len(defaultWorkspaceID) > 0 {

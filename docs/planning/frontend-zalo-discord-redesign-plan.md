@@ -63,7 +63,7 @@ API cần đảm bảo:
 API/WebSocket cần đảm bảo:
 - REST message list/send/update/delete/pin/reaction.
 - WebSocket events: `MessageCreated`, `MessageUpdated`, `MessageDeleted`, `TypingStarted`, `TypingStopped`, `ReadStateUpdated`.
-- Browser WebSocket dùng được qua cookie, query token hoặc subprotocol.
+- Browser WebSocket dùng subprotocol `webtui.jwt.{token}`; native client dùng header `Authorization`. Token trong query bị từ chối.
 
 ## P4 - Thông báo kiểu popup
 

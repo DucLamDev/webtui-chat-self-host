@@ -19,6 +19,7 @@ var (
 	ErrDeploymentRequestConflict      = errors.New("deployment request da ton tai")
 	ErrOIDCProviderConflict           = errors.New("OIDC provider da ton tai")
 	ErrOIDCProviderNotFound           = errors.New("khong tim thay OIDC provider")
+	ErrZoneStorageConfigNotFound      = errors.New("khong tim thay cau hinh storage cua zone")
 	ErrZoneQuotaExceeded              = errors.New("zone da vuot quota")
 	ErrWorkspaceZoneMismatch          = errors.New("workspace khong thuoc zone")
 	ErrZoneAccessDenied               = errors.New("khong co quyen quan ly zone")
@@ -57,6 +58,18 @@ type ZoneAdminOverview struct {
 	Zone        Zone
 	Domains     []Domain
 	Deployments []Deployment
+}
+
+type ZoneStorageConfig struct {
+	ZoneID                   string
+	Provider                 string
+	Endpoint                 string
+	Region                   string
+	Bucket                   string
+	AccessKeyID              string
+	SecretAccessKeyEncrypted string
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }
 
 type ZoneQuota struct {

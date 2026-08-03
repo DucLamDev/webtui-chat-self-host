@@ -167,7 +167,7 @@ export function TalkCollaborationHub({
       }),
     onError: (error) => onToast(error instanceof Error ? error.message : "Không tạo được link công khai."),
     onSuccess: async (link) => {
-      const url = `${window.location.origin}/join/${link.token}`;
+      const url = window.location.origin + "/join?token=" + encodeURIComponent(link.token);
       setPublicUrl(url);
       await navigator.clipboard?.writeText(url).catch(() => undefined);
       await invalidateCollaboration();
@@ -614,7 +614,11 @@ function MeetingLifecyclePanel({
 }) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [startsAt, setStartsAt] = useState(() => localDateTimeValue(new Date(Date.now() + 30 * 60_000)));
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [lobbyMinutes, setLobbyMinutes] = useState(10);
+  const [roomPolicy, setRoomPolicy] = useState<ChannelMeeting["room_policy"]>("keep");
   const meetingsQuery = useQuery({
     queryFn: () => api.channels.meetings(workspaceId, channelId),
     queryKey: queryKeys.channels.meetings(workspaceId, channelId)
@@ -638,14 +642,32 @@ function MeetingLifecyclePanel({
     queryClient.invalidateQueries({ queryKey: queryKeys.channels.talkHome(workspaceId) })
   ]);
   const createMeetingMutation = useMutation({
-    mutationFn: () => api.channels.createMeeting(workspaceId, channelId, {
-      starts_at: new Date(startsAt).toISOString(),
-      title,
-      room_policy: "keep"
-    }),
+    mutationFn: () => {
+      const startsAtDate = new Date(startsAt);
+      if (Number.isNaN(startsAtDate.getTime()) || startsAtDate.getTime() < Date.now() + 60_000) {
+        throw new Error("Thời gian bắt đầu phải sau hiện tại ít nhất 1 phút.");
+      }
+      const endsAtDate = new Date(startsAtDate.getTime() + durationMinutes * 60_000);
+      const lobbyOpensAt = lobbyMinutes
+        ? new Date(startsAtDate.getTime() - lobbyMinutes * 60_000)
+        : undefined;
+      return api.channels.createMeeting(workspaceId, channelId, {
+        cleanup_after: roomPolicy === "keep"
+          ? undefined
+          : new Date(endsAtDate.getTime() + 24 * 60 * 60_000).toISOString(),
+        description: description.trim() || undefined,
+        ends_at: endsAtDate.toISOString(),
+        lobby_opens_at: lobbyOpensAt?.toISOString(),
+        room_policy: roomPolicy,
+        starts_at: startsAtDate.toISOString(),
+        title: title.trim()
+      });
+    },
     onError: (error) => onToast(error instanceof Error ? error.message : "Không tạo được lịch họp."),
     onSuccess: async () => {
       setTitle("");
+      setDescription("");
+      setStartsAt(localDateTimeValue(new Date(Date.now() + 30 * 60_000)));
       await invalidateMeetings();
       onToast("Đã lên lịch cuộc họp.");
     }
@@ -707,45 +729,170 @@ function MeetingLifecyclePanel({
   const activeRecording = recordingsQuery.data?.find((recording) =>
     recording.status === "pending" || recording.status === "recording"
   );
-  const scheduled = meetingsQuery.data?.filter((meeting) =>
+  const scheduled = [...(meetingsQuery.data?.filter((meeting) =>
     meeting.status === "scheduled" || meeting.status === "active"
-  ) ?? [];
+  ) ?? [])].sort((left, right) => {
+    if (left.status === "active" && right.status !== "active") return -1;
+    if (right.status === "active" && left.status !== "active") return 1;
+    return new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime();
+  });
+  const history = meetingsQuery.data?.filter((meeting) =>
+    meeting.status === "ended" || meeting.status === "cancelled"
+  ).slice(0, 5) ?? [];
   const voiceActive = voiceQuery.data?.status === "active";
+  const canCreateMeeting = Boolean(
+    title.trim()
+    && startsAt
+    && new Date(startsAt).getTime() >= Date.now() + 60_000
+  );
   return (
     <>
       <section className="talk-card talk-schedule-card">
         <header><CalendarClock size={17} /><strong>Lịch và vòng đời phòng họp</strong></header>
         {canManage ? (
-          <div className="talk-grid-form">
-            <label>
-              Tiêu đề
-              <input maxLength={160} onChange={(event) => setTitle(event.target.value)} placeholder="Họp sprint tuần" value={title} />
-            </label>
-            <label>
-              Bắt đầu
-              <input min={localDateTimeValue(new Date())} onChange={(event) => setStartsAt(event.target.value)} type="datetime-local" value={startsAt} />
-            </label>
-            <Button disabled={!title.trim() || !startsAt || createMeetingMutation.isPending} onClick={() => createMeetingMutation.mutate()} size="sm">
-              Lên lịch
-            </Button>
+          <div className="talk-meeting-composer">
+            <div className="talk-grid-form">
+              <label className="talk-grid-form__wide">
+                Tiêu đề
+                <input
+                  maxLength={160}
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder="Ví dụ: Họp sprint tuần"
+                  value={title}
+                />
+              </label>
+              <label>
+                Bắt đầu
+                <input
+                  min={localDateTimeValue(new Date(Date.now() + 60_000))}
+                  onChange={(event) => setStartsAt(event.target.value)}
+                  type="datetime-local"
+                  value={startsAt}
+                />
+              </label>
+              <label>
+                Thời lượng
+                <select onChange={(event) => setDurationMinutes(Number(event.target.value))} value={durationMinutes}>
+                  <option value={15}>15 phút</option>
+                  <option value={30}>30 phút</option>
+                  <option value={45}>45 phút</option>
+                  <option value={60}>1 giờ</option>
+                  <option value={90}>1 giờ 30 phút</option>
+                  <option value={120}>2 giờ</option>
+                </select>
+              </label>
+              <label>
+                Mở phòng chờ
+                <select onChange={(event) => setLobbyMinutes(Number(event.target.value))} value={lobbyMinutes}>
+                  <option value={0}>Khi cuộc họp bắt đầu</option>
+                  <option value={5}>Trước 5 phút</option>
+                  <option value={10}>Trước 10 phút</option>
+                  <option value={15}>Trước 15 phút</option>
+                  <option value={30}>Trước 30 phút</option>
+                </select>
+              </label>
+              <label>
+                Sau cuộc họp
+                <select
+                  onChange={(event) => setRoomPolicy(event.target.value as ChannelMeeting["room_policy"])}
+                  value={roomPolicy}
+                >
+                  <option value="keep">Giữ phòng và nội dung</option>
+                  <option value="archive">Lưu trữ sau 24 giờ</option>
+                  <option value="delete">Dọn phòng sau 24 giờ</option>
+                </select>
+              </label>
+              <label className="talk-grid-form__wide">
+                Nội dung / chương trình họp
+                <textarea
+                  maxLength={2_000}
+                  onChange={(event) => setDescription(event.target.value)}
+                  placeholder="Mục tiêu, nội dung cần chuẩn bị hoặc đường dẫn tài liệu…"
+                  rows={3}
+                  value={description}
+                />
+              </label>
+            </div>
+            <div className="talk-meeting-composer__footer">
+              <small>
+                Kết thúc dự kiến lúc {startsAt
+                  ? formatTalkDate(new Date(new Date(startsAt).getTime() + durationMinutes * 60_000).toISOString())
+                  : "—"}
+              </small>
+              <Button
+                disabled={!canCreateMeeting || createMeetingMutation.isPending}
+                onClick={() => createMeetingMutation.mutate()}
+                size="sm"
+              >
+                <Plus size={14} /> {createMeetingMutation.isPending ? "Đang tạo…" : "Lên lịch họp"}
+              </Button>
+            </div>
           </div>
         ) : null}
         <div className="talk-meeting-list">
+          {meetingsQuery.isLoading ? <p className="talk-muted-state">Đang tải lịch họp…</p> : null}
+          {!meetingsQuery.isLoading && !scheduled.length ? (
+            <p className="talk-muted-state">Chưa có cuộc họp sắp diễn ra.</p>
+          ) : null}
           {scheduled.map((meeting: ChannelMeeting) => (
-            <article key={meeting.id}>
-              <span><strong>{meeting.title}</strong><small>{formatTalkDate(meeting.starts_at)}</small></span>
-              <div>
+            <article className={meeting.status === "active" ? "is-live" : ""} key={meeting.id}>
+              <span>
+                <strong>
+                  {meeting.status === "active" ? <Badge tone="green">LIVE</Badge> : null}
+                  {meeting.title}
+                </strong>
+                <small>
+                  {formatMeetingSchedule(meeting)}
+                  {meeting.lobby_opens_at ? ` · Phòng chờ ${formatTalkDate(meeting.lobby_opens_at)}` : ""}
+                </small>
+                {meeting.description ? <small className="talk-meeting-description">{meeting.description}</small> : null}
+              </span>
+              <div className="talk-meeting-actions">
                 {meeting.status === "active" ? <Button onClick={onOpenMeeting} size="sm">Vào họp</Button> : null}
                 {canManage && meeting.status === "scheduled" ? (
                   <Button onClick={() => transitionMeetingMutation.mutate({ action: "start", id: meeting.id })} size="sm">Bắt đầu</Button>
                 ) : null}
+                <Button
+                  aria-label={`Thêm ${meeting.title} vào lịch`}
+                  onClick={() => downloadMeetingCalendar(meeting)}
+                  size="sm"
+                  title="Thêm vào lịch"
+                  variant="ghost"
+                >
+                  <CalendarClock size={14} />
+                </Button>
                 {canManage && meeting.status === "active" ? (
                   <Button onClick={() => transitionMeetingMutation.mutate({ action: "end", id: meeting.id })} size="sm" variant="ghost">Kết thúc</Button>
+                ) : null}
+                {canManage && meeting.status === "scheduled" ? (
+                  <Button
+                    disabled={transitionMeetingMutation.isPending}
+                    onClick={() => transitionMeetingMutation.mutate({ action: "cancel", id: meeting.id })}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    Hủy
+                  </Button>
                 ) : null}
               </div>
             </article>
           ))}
         </div>
+        {history.length ? (
+          <details className="talk-meeting-history">
+            <summary>Lịch sử gần đây ({history.length})</summary>
+            <div className="talk-meeting-list">
+              {history.map((meeting) => (
+                <article key={meeting.id}>
+                  <span>
+                    <strong>{meeting.title}</strong>
+                    <small>{meeting.status === "cancelled" ? "Đã hủy" : "Đã kết thúc"} · {formatTalkDate(meeting.starts_at)}</small>
+                  </span>
+                </article>
+              ))}
+            </div>
+          </details>
+        ) : null}
       </section>
       <section className="talk-card talk-voice-card">
         <header><Mic size={17} /><strong>Voice room</strong><Badge tone={voiceActive ? "green" : "slate"}>{voiceActive ? "LIVE" : "OFF"}</Badge></header>
@@ -822,6 +969,50 @@ function formatTalkDate(value: string) {
   return Number.isNaN(date.getTime())
     ? value
     : new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
+function formatMeetingSchedule(meeting: ChannelMeeting) {
+  const startsAt = formatTalkDate(meeting.starts_at);
+  if (!meeting.ends_at) {
+    return startsAt;
+  }
+  return `${startsAt} – ${new Intl.DateTimeFormat("vi-VN", { timeStyle: "short" }).format(new Date(meeting.ends_at))}`;
+}
+
+function downloadMeetingCalendar(meeting: ChannelMeeting) {
+  const endsAt = meeting.ends_at
+    ? new Date(meeting.ends_at)
+    : new Date(new Date(meeting.starts_at).getTime() + 60 * 60_000);
+  const calendar = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//VPSTTT Chat//Meeting//VI",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${meeting.id}@vpsttt-chat`,
+    `DTSTAMP:${calendarTimestamp(new Date())}`,
+    `DTSTART:${calendarTimestamp(new Date(meeting.starts_at))}`,
+    `DTEND:${calendarTimestamp(endsAt)}`,
+    `SUMMARY:${escapeCalendarText(meeting.title)}`,
+    meeting.description ? `DESCRIPTION:${escapeCalendarText(meeting.description)}` : "",
+    "END:VEVENT",
+    "END:VCALENDAR"
+  ].filter(Boolean).join("\r\n");
+  const url = URL.createObjectURL(new Blob([calendar], { type: "text/calendar;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${meeting.title.toLowerCase().replace(/[^a-z0-9\u00c0-\u024f]+/gi, "-").replace(/^-|-$/g, "") || "cuoc-hop"}.ics`;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function calendarTimestamp(value: Date) {
+  return value.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function escapeCalendarText(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/,/g, "\\,").replace(/;/g, "\\;");
 }
 
 function localDateTimeValue(date: Date) {

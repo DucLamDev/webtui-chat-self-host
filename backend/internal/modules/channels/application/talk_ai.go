@@ -99,7 +99,7 @@ func (s *Service) SummarizeChannel(
 	}
 	repository, ok := s.collab.(TalkAIRepository)
 	if !ok {
-		panic("channels collaboration repository does not implement TalkAIRepository")
+		return TalkSummaryDTO{}, talkCapabilityUnavailable()
 	}
 	messages, err := repository.ListMessagesForSummary(
 		ctx,

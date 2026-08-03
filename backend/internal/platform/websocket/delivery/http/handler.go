@@ -18,10 +18,11 @@ import (
 )
 
 type Handler struct {
-	manager     *platformws.Manager
-	tokens      *sharedauth.Manager
-	authorizer  RoomAuthorizer
-	zoneChecker WorkspaceZoneChecker
+	manager           *platformws.Manager
+	tokens            *sharedauth.Manager
+	authorizer        RoomAuthorizer
+	zoneChecker       WorkspaceZoneChecker
+	activeUserChecker ActiveUserChecker
 }
 
 type RoomAuthorizer interface {
@@ -30,6 +31,10 @@ type RoomAuthorizer interface {
 
 type WorkspaceZoneChecker interface {
 	WorkspaceBelongsToZone(ctx context.Context, workspaceID string, zoneID string) (bool, error)
+}
+
+type ActiveUserChecker interface {
+	UserIsActive(ctx context.Context, userID string) (bool, error)
 }
 
 type clientCommand struct {
@@ -48,6 +53,10 @@ func NewHandler(manager *platformws.Manager, tokens *sharedauth.Manager, authori
 
 func (h *Handler) SetWorkspaceZoneChecker(checker WorkspaceZoneChecker) {
 	h.zoneChecker = checker
+}
+
+func (h *Handler) SetActiveUserChecker(checker ActiveUserChecker) {
+	h.activeUserChecker = checker
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRouter) {
@@ -94,6 +103,15 @@ func (h *Handler) authenticateRequest(req *nethttp.Request) (*sharedauth.AccessC
 	if err != nil {
 		return nil, err
 	}
+	if h.activeUserChecker != nil {
+		active, err := h.activeUserChecker.UserIsActive(req.Context(), claims.Subject)
+		if err != nil {
+			return nil, err
+		}
+		if !active {
+			return nil, sharedauth.ErrInvalidToken
+		}
+	}
 	return claims, nil
 }
 
@@ -112,15 +130,10 @@ func accessTokenFromRequest(req *nethttp.Request) string {
 	if token := bearerToken(req.Header.Get("Authorization")); token != "" {
 		return token
 	}
-	if req.URL == nil {
-		return tokenFromSubprotocol(req.Header.Get("Sec-WebSocket-Protocol"))
-	}
-	if token := strings.TrimSpace(req.URL.Query().Get("access_token")); token != "" {
-		return token
-	}
-	if token := strings.TrimSpace(req.URL.Query().Get("token")); token != "" {
-		return token
-	}
+	// Never accept bearer credentials from the URL. Query strings are commonly
+	// persisted by reverse proxies, access logs, browser history and telemetry.
+	// Native clients use Authorization and browser clients use the WebSocket
+	// subprotocol header, which is the only header the browser API can control.
 	return tokenFromSubprotocol(req.Header.Get("Sec-WebSocket-Protocol"))
 }
 
@@ -155,10 +168,11 @@ func tokenFromSubprotocol(header string) string {
 
 func (h *Handler) serve(conn *xwebsocket.Conn, userID string, zoneID string) {
 	client := &platformws.Client{
-		ID:     newClientID(),
-		UserID: userID,
-		ZoneID: zoneID,
-		Send:   make(chan platformws.Event, 64),
+		ID:         newClientID(),
+		UserID:     userID,
+		ZoneID:     zoneID,
+		Send:       make(chan platformws.Event, 64),
+		Disconnect: func() { _ = conn.Close() },
 	}
 	if err := h.manager.Register(client); err != nil {
 		_ = xwebsocket.JSON.Send(conn, map[string]string{
@@ -168,6 +182,11 @@ func (h *Handler) serve(conn *xwebsocket.Conn, userID string, zoneID string) {
 		return
 	}
 	defer h.manager.Unregister(client.ID)
+	monitorCtx, stopMonitor := context.WithCancel(context.Background())
+	defer stopMonitor()
+	if h.activeUserChecker != nil {
+		go h.monitorActiveUser(monitorCtx, client)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -192,6 +211,26 @@ func (h *Handler) serve(conn *xwebsocket.Conn, userID string, zoneID string) {
 		case <-done:
 			return
 		default:
+		}
+	}
+}
+
+func (h *Handler) monitorActiveUser(ctx context.Context, client *platformws.Client) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			active, err := h.activeUserChecker.UserIsActive(ctx, client.UserID)
+			if err != nil {
+				continue
+			}
+			if !active {
+				h.manager.Unregister(client.ID)
+				return
+			}
 		}
 	}
 }
