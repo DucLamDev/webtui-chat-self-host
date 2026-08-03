@@ -4,9 +4,19 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 ENV_FILE="$SCRIPT_DIR/.env"
+OFFSITE_ENV_FILE="$SCRIPT_DIR/offsite-backup.env"
+
+read_file_env_value() {
+  file=$1
+  key=$2
+  if [ ! -f "$file" ]; then
+    return 0
+  fi
+  sed -n "s/^$key=//p" "$file" | tail -n 1 | tr -d '\r'
+}
 
 read_env_value() {
-  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+  read_file_env_value "$ENV_FILE" "$1"
 }
 
 write_env_value() {
@@ -28,19 +38,35 @@ ensure_secret() {
   esac
 }
 
-sh "$SCRIPT_DIR/backup.sh"
 cd "$REPO_DIR"
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "Tracked files have local changes. Commit or revert them before updating." >&2
   exit 1
 fi
-git pull --ff-only
-
-cd "$SCRIPT_DIR"
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing $ENV_FILE. Run install.sh first." >&2
   exit 1
 fi
+
+BACKUP_ENABLED=$(read_file_env_value "$OFFSITE_ENV_FILE" OFFSITE_BACKUP_ENABLED)
+BACKUP_ENABLED=$(printf '%s' "$BACKUP_ENABLED" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+case "$BACKUP_ENABLED" in
+  1|true|yes|on)
+    echo "Creating the configured off-site backup before updating..."
+    sh "$SCRIPT_DIR/backup.sh" backup --maintenance
+    ;;
+  ""|0|false|no|off)
+    echo "Off-site backup is not enabled; continuing without an automatic backup."
+    ;;
+  *)
+    echo "OFFSITE_BACKUP_ENABLED in $OFFSITE_ENV_FILE must be true or false." >&2
+    exit 1
+    ;;
+esac
+
+git pull --ff-only
+
+cd "$SCRIPT_DIR"
 if ! command -v openssl >/dev/null 2>&1; then
   echo "OpenSSL is required to create missing self-hosted service credentials." >&2
   exit 1

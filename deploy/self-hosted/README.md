@@ -332,6 +332,10 @@ Update:
 sh deploy/self-hosted/update.sh
 ```
 
+Lệnh update chỉ tự tạo backup trước khi cập nhật nếu
+`OFFSITE_BACKUP_ENABLED=true` trong `offsite-backup.env`. Cài đặt mặc định chưa
+bật backup off-site vẫn cập nhật bình thường.
+
 Restore từ một snapshot ID cụ thể:
 
 ```sh
