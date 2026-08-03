@@ -551,6 +551,7 @@ export function ChatWorkspace() {
   const [messageSidebarTab, setMessageSidebarTab] = useState<MessageSidebarTab>(routedMessageSidebarTab);
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
   const [detailTab, setDetailTab] = useState<DetailTab>("workspace");
+  const [isMeetingOpenRequested, setIsMeetingOpenRequested] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [friendSearchQuery, setFriendSearchQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -3125,6 +3126,9 @@ export function ChatWorkspace() {
               onOpenCollaboration={() => {
                 setDetailTab("workspace");
                 setIsDetailPanelOpen(true);
+                if (selectedChatChannel.type !== "direct") {
+                  setIsMeetingOpenRequested(true);
+                }
               }}
               onStartAudioCall={selectedChatChannel.type === "direct" && serverCapabilities?.calls !== false ? () => void callControls.startCall("audio") : undefined}
               onStartVideoCall={selectedChatChannel.type === "direct" && serverCapabilities?.calls !== false ? () => void callControls.startCall("video") : undefined}
@@ -3579,6 +3583,7 @@ export function ChatWorkspace() {
           isThreadLoading={data.threadQuery.isLoading}
           mediaItems={data.mediaItems}
           messages={selectedChatChannel?.messages ?? []}
+          isMeetingOpenRequested={isMeetingOpenRequested}
           onClose={() => setIsDetailPanelOpen(false)}
           onCloseThread={() => setThreadMessageId(null)}
           onCollaborationDisplayChange={updateCollaborationDisplay}
@@ -3591,6 +3596,7 @@ export function ChatWorkspace() {
           onToast={setToast}
           onFileSelect={handleDownload}
           onMediaSelect={handlePreviewMediaItem}
+          onMeetingOpenHandled={() => setIsMeetingOpenRequested(false)}
           onResolveMedia={data.downloadAttachment}
           onSendThread={async (body) => {
             try {
@@ -10063,6 +10069,7 @@ function RightDetailPanel({
   files,
   isDirectChat = false,
   isLoading,
+  isMeetingOpenRequested,
   isSendingThread,
   isThreadLoading,
   mediaItems,
@@ -10075,6 +10082,7 @@ function RightDetailPanel({
   onToast,
   onFileSelect,
   onMediaSelect,
+  onMeetingOpenHandled,
   onResolveMedia,
   onSendThread,
   onTabChange,
@@ -10094,6 +10102,7 @@ function RightDetailPanel({
   files: FileItem[];
   isDirectChat?: boolean;
   isLoading: boolean;
+  isMeetingOpenRequested: boolean;
   isSendingThread: boolean;
   isThreadLoading: boolean;
   mediaItems: MediaItem[];
@@ -10109,6 +10118,7 @@ function RightDetailPanel({
   onToast: (message: string) => void;
   onFileSelect: (file: FileItem) => void;
   onMediaSelect: (item: MediaItem, source?: string) => void;
+  onMeetingOpenHandled: () => void;
   onResolveMedia: (fileId: string) => Promise<Blob>;
   onSendThread: (body: string) => Promise<boolean>;
   onTabChange: (tab: DetailTab) => void;
@@ -10275,9 +10285,11 @@ function RightDetailPanel({
           files={files}
           members={channelMembers}
           messages={messages}
+          isMeetingOpenRequested={isMeetingOpenRequested}
           onCollaborationDisplayChange={onCollaborationDisplayChange}
           onConversationPreferenceChange={onConversationPreferenceChange}
           onCreatePoll={onCreatePoll}
+          onMeetingOpenHandled={onMeetingOpenHandled}
           onToast={onToast}
           pinnedMessages={pinnedMessages}
           workspaceId={workspaceId}
@@ -10365,9 +10377,11 @@ function CollaborationWorkspacePanel({
   files,
   members,
   messages,
+  isMeetingOpenRequested,
   onCollaborationDisplayChange,
   onConversationPreferenceChange,
   onCreatePoll,
+  onMeetingOpenHandled,
   onToast,
   pinnedMessages,
   workspaceId
@@ -10380,12 +10394,14 @@ function CollaborationWorkspacePanel({
   files: FileItem[];
   members: ChannelMember[];
   messages: ChatMessage[];
+  isMeetingOpenRequested: boolean;
   onCollaborationDisplayChange: (
     compactMode: boolean,
     callJoin: CallJoinPreferences
   ) => void;
   onConversationPreferenceChange: (preference: ConversationPreference) => void;
   onCreatePoll: () => void;
+  onMeetingOpenHandled: () => void;
   onToast: (message: string) => void;
   pinnedMessages: PinnedMessage[];
   workspaceId: string;
@@ -10409,22 +10425,13 @@ function CollaborationWorkspacePanel({
 
   return (
     <div className="collaboration-workspace">
-      <section className="collaboration-hero">
-        <div>
-          <span className="collaboration-hero__icon"><Sparkles size={18} /></span>
-          <span>
-            <small>Không gian cộng tác</small>
-            <strong>{channel?.name ?? "Cuộc trò chuyện"}</strong>
-          </span>
-        </div>
-        <p>File, quyết định và việc cần làm nằm cạnh luồng chat, không cần đổi tab.</p>
-      </section>
-
       {channel && workspaceId ? (
         <TalkCollaborationHub
           channel={channel}
           currentUser={currentUser}
+          isMeetingOpenRequested={isMeetingOpenRequested}
           members={members}
+          onMeetingOpenHandled={onMeetingOpenHandled}
           onToast={onToast}
           workspaceId={workspaceId}
         />

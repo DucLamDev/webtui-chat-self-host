@@ -135,7 +135,7 @@ export class HttpClient {
     });
 
     if (!response.ok) {
-      await this.throwResponseError(response);
+      await this.throwResponseError(response, options.auth !== false);
     }
 
     return response.blob();
@@ -166,7 +166,11 @@ export class HttpClient {
       return undefined as TData;
     }
 
-    return this.readJsonResponse<TData>(response, options.unwrap !== false);
+    return this.readJsonResponse<TData>(
+      response,
+      options.unwrap !== false,
+      options.auth !== false
+    );
   }
 
   private async fetch(path: string, options: InternalRequestOptions): Promise<Response> {
@@ -235,11 +239,15 @@ export class HttpClient {
     return headers;
   }
 
-  private async readJsonResponse<TData>(response: Response, unwrap: boolean): Promise<TData> {
+  private async readJsonResponse<TData>(
+    response: Response,
+    unwrap: boolean,
+    notifyUnauthorized: boolean
+  ): Promise<TData> {
     const payload = await this.parseJson(response);
 
     if (!response.ok) {
-      throw this.toError(response, payload);
+      throw this.toError(response, payload, notifyUnauthorized);
     }
 
     if (!unwrap) {
@@ -248,7 +256,7 @@ export class HttpClient {
 
     if (this.isEnvelope<TData>(payload)) {
       if (!payload.success) {
-        throw this.toError(response, payload);
+        throw this.toError(response, payload, notifyUnauthorized);
       }
 
       return payload.data as TData;
@@ -257,9 +265,9 @@ export class HttpClient {
     return payload as TData;
   }
 
-  private async throwResponseError(response: Response): Promise<never> {
+  private async throwResponseError(response: Response, notifyUnauthorized: boolean): Promise<never> {
     const payload = await this.parseJson(response);
-    throw this.toError(response, payload);
+    throw this.toError(response, payload, notifyUnauthorized);
   }
 
   private async parseJson(response: Response): Promise<unknown> {
@@ -276,7 +284,7 @@ export class HttpClient {
     }
   }
 
-  private toError(response: Response, payload: unknown): ApiClientError {
+  private toError(response: Response, payload: unknown, notifyUnauthorized = true): ApiClientError {
     const envelope = this.isEnvelope<unknown>(payload) ? payload : undefined;
     const fallbackMessage =
       typeof payload === "object" && payload && "message" in payload
@@ -288,7 +296,10 @@ export class HttpClient {
       ? `${responseMessage} (Mã yêu cầu: ${requestId})`
       : responseMessage;
 
-    if (response.status === 401) {
+    // Public auth endpoints (login, refresh, SSO) may legitimately return 401.
+    // They must not implicitly destroy an already persisted session; the
+    // caller that owns the refresh flow decides whether the failure is final.
+    if (response.status === 401 && notifyUnauthorized) {
       this.onUnauthorized?.();
     }
 

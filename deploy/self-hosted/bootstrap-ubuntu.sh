@@ -119,6 +119,8 @@ ufw allow 443/tcp
 ufw allow 3478/tcp
 ufw allow 3478/udp
 ufw allow 443/udp
+ufw allow 8443/tcp
+ufw allow 10000/udp
 ufw allow 49160:49200/udp
 ufw --force enable
 

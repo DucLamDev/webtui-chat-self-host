@@ -14600,13 +14600,11 @@ button.message-reply-preview:hover {
 
 .talk-hub__hero {
   align-items: center;
-  background:
-    radial-gradient(circle at 100% 0, rgb(96 165 250 / 24%), transparent 44%),
-    linear-gradient(135deg, #152d55, #244b83);
-  border: 1px solid rgb(147 197 253 / 24%);
+  background: #f7faff;
+  border: 1px solid #dce8f7;
   border-radius: 16px;
-  box-shadow: 0 12px 30px rgb(30 64 175 / 18%);
-  color: #fff;
+  box-shadow: 0 8px 22px rgb(30 91 166 / 8%);
+  color: #172b47;
   display: flex;
   gap: 10px;
   min-height: 72px;
@@ -14625,20 +14623,21 @@ button.message-reply-preview:hover {
 }
 
 .talk-hub__hero small {
-  color: #d8e8ff;
+  color: #6d7f96;
   font-size: 9px;
   line-height: 1.35;
 }
 
 .talk-hub__hero-icon {
   align-items: center;
-  background: rgb(255 255 255 / 13%);
-  border: 1px solid rgb(255 255 255 / 20%);
+  background: #e8f2ff;
+  border: 1px solid #d0e3fb;
   border-radius: 12px;
   display: inline-flex;
   height: 38px;
   justify-content: center;
   width: 38px;
+  color: #1769d2;
 }
 
 .talk-hub__tabs {
@@ -15157,10 +15156,10 @@ button.message-reply-preview:hover {
 }
 
 .talk-meeting-overlay {
-  background: #0d1420;
-  border: 1px solid #2e3c51;
+  background: #f7f9fc;
+  border: 1px solid #d7e0ec;
   border-radius: 18px;
-  box-shadow: 0 28px 80px rgb(0 0 0 / 55%);
+  box-shadow: 0 28px 80px rgb(24 54 90 / 24%);
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
   inset: 24px;
@@ -15171,8 +15170,9 @@ button.message-reply-preview:hover {
 
 .talk-meeting-overlay > header {
   align-items: center;
-  background: #182233;
-  color: #fff;
+  background: #fff;
+  border-bottom: 1px solid #dfe7f1;
+  color: #172b47;
   display: flex;
   justify-content: space-between;
   padding: 0 14px;
@@ -15186,10 +15186,10 @@ button.message-reply-preview:hover {
 
 .talk-meeting-overlay > header button {
   align-items: center;
-  background: #2b374a;
+  background: #eef3f9;
   border: 0;
   border-radius: 9px;
-  color: #fff;
+  color: #4b6079;
   cursor: pointer;
   display: inline-flex;
   height: 32px;
@@ -15205,7 +15205,7 @@ button.message-reply-preview:hover {
 
 .talk-meeting-missing {
   align-content: center;
-  color: #cbd5e1;
+  color: #334a66;
   display: grid;
   gap: 8px;
   justify-items: center;
@@ -15214,7 +15214,7 @@ button.message-reply-preview:hover {
 }
 
 .talk-meeting-missing p {
-  color: #8fa0b7;
+  color: #71839a;
   font-size: 11px;
   margin: 0;
 }

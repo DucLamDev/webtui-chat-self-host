@@ -234,13 +234,14 @@ type UpdateAutomationInstallationParams struct {
 }
 
 type DiscoveryDTO struct {
-	Version      string           `json:"version"`
-	Domain       string           `json:"domain"`
-	Zone         ZoneDTO          `json:"zone"`
-	Workspace    *WorkspaceRefDTO `json:"workspace,omitempty"`
-	Runtime      RuntimeDTO       `json:"runtime"`
-	Capabilities CapabilitiesDTO  `json:"capabilities"`
-	Deployment   DeploymentDTO    `json:"deployment"`
+	Version       string           `json:"version"`
+	Domain        string           `json:"domain"`
+	SetupRequired bool             `json:"setup_required"`
+	Zone          ZoneDTO          `json:"zone"`
+	Workspace     *WorkspaceRefDTO `json:"workspace,omitempty"`
+	Runtime       RuntimeDTO       `json:"runtime"`
+	Capabilities  CapabilitiesDTO  `json:"capabilities"`
+	Deployment    DeploymentDTO    `json:"deployment"`
 }
 
 type ZoneDTO struct {
@@ -899,9 +900,10 @@ func (s *Service) toDiscovery(
 	}
 
 	return DiscoveryDTO{
-		Version:   "1",
-		Domain:    domain,
-		Workspace: workspace,
+		Version:       "1",
+		Domain:        domain,
+		SetupRequired: capabilities.SelfHosted && resolved.Workspace != nil && !resolved.Workspace.HasOwner,
+		Workspace:     workspace,
 		Zone: ZoneDTO{
 			ID:               resolved.Zone.ID,
 			Slug:             resolved.Zone.Slug,

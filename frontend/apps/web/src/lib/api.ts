@@ -1,4 +1,5 @@
 import {
+  ApiClientError,
   createRuntimeEnvironment,
   createWebTuiApiClient
 } from "@webtui/api-client";
@@ -32,32 +33,50 @@ export const api = createWebTuiApiClient({
     clearMediaObjectUrlCache();
     useAuthStore.getState().clearSession();
   },
-  refreshAccessToken: () => {
-    const state = useAuthStore.getState();
-    const refreshToken = state.refreshToken;
-
-    if (!refreshToken) {
-      return Promise.resolve(null);
-    }
-
-    if (!refreshRequest) {
-      refreshRequest = api.auth
-        .refresh({
-          refresh_token: refreshToken
-        })
-        .then((result) => {
-          useAuthStore.getState().setSession(result);
-          return result.tokens?.access_token ?? result.access_token ?? null;
-        })
-        .catch(() => {
-          useAuthStore.getState().clearSession();
-          return null;
-        })
-        .finally(() => {
-          refreshRequest = null;
-        });
-    }
-
-    return refreshRequest;
-  }
+  refreshAccessToken: refreshApiSession
 });
+
+/**
+ * Refreshes the short-lived access token without turning a temporary network
+ * or server interruption into a logout. All requests in this browser tab
+ * share one rotation request so the one-time refresh token is never raced.
+ */
+export function refreshApiSession(): Promise<string | null> {
+  const state = useAuthStore.getState();
+  const refreshToken = state.refreshToken;
+
+  if (!refreshToken) {
+    return Promise.resolve(null);
+  }
+
+  if (!refreshRequest) {
+    refreshRequest = api.auth
+      .refresh({
+        domain: state.zoneDomain ?? undefined,
+        refresh_token: refreshToken
+      })
+      .then((result) => {
+        useAuthStore.getState().setSession(result);
+        return result.tokens?.access_token ?? result.access_token ?? null;
+      })
+      .catch((error: unknown) => {
+        // Only an explicit authentication rejection proves that the stored
+        // refresh token can no longer be used. A timeout, a deploy/restart or
+        // a 5xx response must keep the session so React Query can retry.
+        if (isTerminalRefreshFailure(error)) {
+          clearMediaObjectUrlCache();
+          useAuthStore.getState().clearSession();
+        }
+        throw error;
+      })
+      .finally(() => {
+        refreshRequest = null;
+      });
+  }
+
+  return refreshRequest;
+}
+
+function isTerminalRefreshFailure(error: unknown): boolean {
+  return error instanceof ApiClientError && (error.status === 401 || error.status === 403);
+}

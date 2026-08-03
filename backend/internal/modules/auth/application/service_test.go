@@ -173,6 +173,39 @@ func TestNormalizeRegisterRequiresValidServerDomain(t *testing.T) {
 	}
 }
 
+func TestNormalizeRegisterAcceptsUsernameWithoutSpecialCharacters(t *testing.T) {
+	normalized, err := normalizeRegister(RegisterInput{
+		Email:       "member@example.com",
+		Username:    "  DucLam24  ",
+		DisplayName: "Đức Lâm",
+		Domain:      "chat.company.com",
+		Password:    "password",
+	})
+	if err != nil {
+		t.Fatalf("normalizeRegister() rejected a plain username: %v", err)
+	}
+	if normalized.Username != "duclam24" {
+		t.Fatalf("username = %q, want duclam24", normalized.Username)
+	}
+}
+
+func TestNormalizeRegisterAllowsOptionalUsernameSeparators(t *testing.T) {
+	for _, username := range []string{"duc.lam", "duc_lam", "duc-lam"} {
+		t.Run(username, func(t *testing.T) {
+			_, err := normalizeRegister(RegisterInput{
+				Email:       "member@example.com",
+				Username:    username,
+				DisplayName: "Đức Lâm",
+				Domain:      "chat.company.com",
+				Password:    "password",
+			})
+			if err != nil {
+				t.Fatalf("normalizeRegister() rejected %q: %v", username, err)
+			}
+		})
+	}
+}
+
 func TestGoogleUsernameIsStableAndValid(t *testing.T) {
 	username := googleUsername("Ho.Duc.Lam@example.com", "google-subject-123")
 	if !usernamePattern.MatchString(username) {

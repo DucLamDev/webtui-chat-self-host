@@ -18,6 +18,8 @@ import (
 	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
+// A username never needs a symbol. Dots, underscores and dashes are optional
+// separators for people who want them; plain letters and numbers are valid.
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{2,39}$`)
 
 type Repository interface {
@@ -698,7 +700,7 @@ func normalizeRegister(input RegisterInput) (RegisterInput, error) {
 		return input, apperrors.BadRequest("VALIDATION_ERROR", "Email không đúng định dạng.")
 	}
 	if !usernamePattern.MatchString(input.Username) {
-		return input, apperrors.BadRequest("VALIDATION_ERROR", "Username phải dài 3-40 ký tự và chỉ gồm chữ thường, số, dấu gạch dưới, gạch ngang hoặc dấu chấm.")
+		return input, apperrors.BadRequest("VALIDATION_ERROR", "Tên đăng nhập cần 3-40 ký tự. Bạn có thể dùng chữ, số, dấu chấm, gạch dưới hoặc gạch ngang; không bắt buộc ký tự đặc biệt.")
 	}
 	if input.DisplayName == "" || len([]rune(input.DisplayName)) > 120 {
 		return input, apperrors.BadRequest("VALIDATION_ERROR", "Tên hiển thị phải dài từ 1 đến 120 ký tự.")

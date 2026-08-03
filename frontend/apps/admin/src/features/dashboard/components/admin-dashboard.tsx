@@ -117,7 +117,7 @@ const backupStatuses = [
 ] as const;
 
 export function AdminDashboard() {
-  const { logout, user } = useAuth();
+  const { logout, organizationLogo, organizationName, user } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const pathname = usePathname();
   const router = useRouter();
@@ -269,6 +269,7 @@ export function AdminDashboard() {
         onPrefetch={data.prefetchSection}
         onSelect={setActiveNavItem}
         onToggleCollapsed={toggleSidebar}
+        organization={{ logo: organizationLogo, name: organizationName }}
         profile={profile}
       />
 

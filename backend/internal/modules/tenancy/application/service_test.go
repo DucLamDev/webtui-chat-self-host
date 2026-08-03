@@ -244,7 +244,7 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 				DatabaseMode: "dedicated_database",
 				Status:       "ready",
 			},
-			Workspace: &tenancydomain.WorkspaceRef{ID: "workspace-1", Slug: "abc", Name: "ABC Chat"},
+			Workspace: &tenancydomain.WorkspaceRef{ID: "workspace-1", Slug: "abc", Name: "ABC Chat", HasOwner: true},
 		},
 	}
 	service := NewService(repo, Options{
@@ -277,6 +277,31 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 	}
 	if discovery.Workspace == nil || discovery.Workspace.ID != "workspace-1" {
 		t.Fatalf("workspace = %+v", discovery.Workspace)
+	}
+	if discovery.SetupRequired {
+		t.Fatal("setup_required = true for an instance that already has an owner")
+	}
+}
+
+func TestDiscoverRequiresSetupForOwnerlessSelfHostedInstance(t *testing.T) {
+	repo := &fakeRepo{
+		resolved: tenancydomain.ResolvedZone{
+			Zone: tenancydomain.Zone{
+				ID:     "zone-1",
+				Name:   "ABC",
+				Status: "active",
+			},
+			Workspace: &tenancydomain.WorkspaceRef{ID: "workspace-1", Name: "ABC Chat"},
+		},
+	}
+	service := NewService(repo, Options{DeploymentMode: "self_hosted"})
+
+	discovery, err := service.Discover(context.Background(), "chat.abc.com")
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if !discovery.SetupRequired {
+		t.Fatal("setup_required = false for an ownerless self-hosted instance")
 	}
 }
 

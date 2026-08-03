@@ -16,10 +16,21 @@ docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T api wget -qO- http://localhost:8080/ready
 echo
 
+RUNNING_SERVICES=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps --status running --services)
+for service in jitsi-prosody jitsi-jicofo jitsi-jvb jitsi-web; do
+  if ! printf '%s\n' "$RUNNING_SERVICES" | grep -qx "$service"; then
+    echo "Meeting service is not running: $service" >&2
+    exit 1
+  fi
+done
+echo "Meeting containers: running"
+
 INSTANCE_DOMAIN=$(sed -n 's/^INSTANCE_DOMAIN=//p' "$ENV_FILE" | tail -n 1)
 if [ -n "$INSTANCE_DOMAIN" ] && command -v curl >/dev/null 2>&1; then
   curl -fsS --max-time 15 "https://$INSTANCE_DOMAIN/ready" >/dev/null
   echo "Public HTTPS: OK (https://$INSTANCE_DOMAIN/ready)"
+  curl -fsS --max-time 15 "https://$INSTANCE_DOMAIN:8443/" >/dev/null
+  echo "Group meetings: OK (https://$INSTANCE_DOMAIN:8443/)"
 fi
 
 PUSH_RELAY_URL=$(sed -n 's/^PUSH_RELAY_URL=//p' "$ENV_FILE" | tail -n 1)

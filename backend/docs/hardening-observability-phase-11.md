@@ -8,7 +8,7 @@ API server bật các middleware dùng chung ở `internal/shared/middleware`:
 
 - `SecurityHeaders`: thêm `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` và `Strict-Transport-Security` khi `APP_ENV=production`.
 - `CORS`: chỉ cho phép origin nằm trong `CORS_ALLOWED_ORIGINS`.
-- `RateLimit`: giới hạn request theo IP trong cửa sổ 1 phút, trả `429 RATE_LIMITED` khi vượt ngưỡng.
+- `RateLimit`: chỉ giới hạn riêng đăng nhập/đăng ký theo IP và theo từng đường dẫn; request nền của chat không bị tính chung. Khi vượt ngưỡng bất thường, API trả `429 AUTH_TEMPORARILY_UNAVAILABLE`.
 - `RequestID`, `Recovery`, `AccessLog`: giữ chuẩn request id, log có dấu và response lỗi thống nhất.
 
 Biến môi trường:

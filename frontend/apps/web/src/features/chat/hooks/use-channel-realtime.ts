@@ -28,6 +28,9 @@ import {
   removeMessageFromTimeline
 } from "./use-message-timeline";
 
+const realtimeHeartbeatMs = 25_000;
+const realtimeHeartbeatTimeoutMs = 70_000;
+
 type RealtimeMessagePayload = {
   call?: CallSignalPayload;
   signal?: Pick<CallSignalPayload, "candidate" | "sdp">;
@@ -200,6 +203,8 @@ export function useChannelRealtime({
     let disposed = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    let lastHeartbeatAt = 0;
     let attempt = 0;
     let catchUpRunning = false;
     const syncScope: MessageOutboxScope | null = currentUserId
@@ -215,6 +220,36 @@ export function useChannelRealtime({
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+    }
+
+    function clearHeartbeatTimer() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    }
+
+    function startHeartbeat() {
+      clearHeartbeatTimer();
+      lastHeartbeatAt = Date.now();
+      const heartbeatRoom = room || rooms[0] || `workspace:${workspaceId}:heartbeat`;
+      heartbeatTimer = setInterval(() => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+          // Browsers throttle timers in background tabs. Do not mistake that
+          // throttling for a dead connection; focus/visibility already forces
+          // a fresh lifecycle and query catch-up.
+          lastHeartbeatAt = Date.now();
+          return;
+        }
+        if (Date.now() - lastHeartbeatAt > realtimeHeartbeatTimeoutMs) {
+          socket.close();
+          return;
+        }
+        gateway.send(socket, { room: heartbeatRoom, type: "ping" });
+      }, realtimeHeartbeatMs);
     }
 
     function connect() {
@@ -246,6 +281,7 @@ export function useChannelRealtime({
           room: room || null,
           status: "connected"
         });
+        startHeartbeat();
         void catchUpMissedEvents();
       });
 
@@ -262,6 +298,7 @@ export function useChannelRealtime({
       });
 
       socket.addEventListener("close", () => {
+        clearHeartbeatTimer();
         if (disposed) {
           return;
         }
@@ -378,6 +415,15 @@ export function useChannelRealtime({
     function handleRealtimeMessage(raw: string) {
       const event = parseRealtimeEvent(raw);
       if (!event) {
+        return;
+      }
+      if (event.type === "pong") {
+        lastHeartbeatAt = Date.now();
+        setConnection({
+          lastEventAt: event.timestamp ?? new Date().toISOString(),
+          room: room || null,
+          status: "connected"
+        });
         return;
       }
       const callPayload = isCallSignalType(event.type) ? normalizeCallSignalPayload(event.payload) : null;
@@ -562,6 +608,7 @@ export function useChannelRealtime({
     return () => {
       disposed = true;
       clearReconnectTimer();
+      clearHeartbeatTimer();
       if (socket && socket.readyState === WebSocket.OPEN) {
         rooms.forEach((nextRoom) => gateway.leave(socket as WebSocket, nextRoom));
       }

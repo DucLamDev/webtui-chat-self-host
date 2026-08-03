@@ -9,7 +9,7 @@ import {
   useQueryClient,
   type InfiniteData
 } from "@tanstack/react-query";
-import { queryKeys, type MessagePage } from "@webtui/api-client";
+import { ApiClientError, queryKeys, type MessagePage } from "@webtui/api-client";
 import type {
   AuthUser,
   FileAttachment,
@@ -44,6 +44,7 @@ export {
 } from "../model/message-cache";
 
 const timelineLimit = 50;
+const failedTimelineRecoveryMs = 10_000;
 type MessageTimelineQueryKey = ReturnType<typeof messageTimelineKey>;
 
 const uuidLikePattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -133,7 +134,12 @@ export function useMessageTimeline({
         before: typeof pageParam === "string" ? pageParam : undefined,
         limit: timelineLimit
       }),
-    queryKey: timelineKey
+    queryKey: timelineKey,
+    refetchInterval: (query) =>
+      isRecoverableTimelineError(query.state.error) ? failedTimelineRecoveryMs : false,
+    refetchIntervalInBackground: false,
+    refetchOnReconnect: "always",
+    refetchOnWindowFocus: "always"
   });
 
   const remoteApiMessages = useMemo(
@@ -420,6 +426,16 @@ export function useMessageTimeline({
     toggleReactionMutation,
     unpinMessageMutation
   };
+}
+
+function isRecoverableTimelineError(error: unknown): boolean {
+  if (!error || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+    return false;
+  }
+  if (error instanceof ApiClientError) {
+    return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+  }
+  return isLikelyOfflineError(error);
 }
 
 export function mapAuthUser(user: AuthUser | null): ChatUser {

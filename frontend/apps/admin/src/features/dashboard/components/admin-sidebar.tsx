@@ -50,6 +50,7 @@ export function AdminSidebar({
   onPrefetch,
   onSelect,
   onToggleCollapsed,
+  organization,
   profile
 }: {
   activeId: AdminNavId;
@@ -59,6 +60,7 @@ export function AdminSidebar({
   onPrefetch: (id: AdminNavId) => void;
   onSelect: (id: AdminNavId) => void;
   onToggleCollapsed: () => void;
+  organization: { logo?: string; name: string };
   profile: { name: string; src?: string; status: "online" | "offline" | "busy" };
 }) {
   return (
@@ -74,10 +76,16 @@ export function AdminSidebar({
         id="admin-navigation"
       >
         <div className="admin-sidebar__brand">
-          <span aria-hidden="true" className="admin-sidebar__brand-mark">W</span>
+          <span aria-hidden="true" className="admin-sidebar__brand-mark">
+            {organization.logo ? (
+              <img alt="" src={organization.logo} />
+            ) : (
+              organization.name.slice(0, 1).toUpperCase()
+            )}
+          </span>
           <span className="admin-sidebar__brand-copy">
-            <strong>WebTui Admin</strong>
-            <small>Operations Center</small>
+            <strong>{organization.name}</strong>
+            <small>Trang quản trị</small>
           </span>
           <button
             aria-label="Đóng menu"

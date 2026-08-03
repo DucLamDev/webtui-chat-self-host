@@ -217,6 +217,26 @@ func (m *Manager) IsUserMember(room string, userID string) bool {
 	return false
 }
 
+// Send delivers a control event to one connected client without broadcasting
+// it to every member of a chat room.
+func (m *Manager) Send(clientID string, event Event) bool {
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	m.mu.RLock()
+	client := m.clients[clientID]
+	m.mu.RUnlock()
+	if client == nil {
+		return false
+	}
+	if client.deliver(event) {
+		return true
+	}
+	m.dropped.Add(1)
+	m.Unregister(clientID)
+	return false
+}
+
 func (m *Manager) Broadcast(ctx context.Context, room string, event Event) error {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()

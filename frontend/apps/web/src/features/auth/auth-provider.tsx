@@ -11,6 +11,7 @@ import type {
   ZoneRuntime
 } from "@webtui/types";
 import {
+  ApiClientError,
   createWebTuiApiClient,
   isLocalHostname,
   localizeZoneRuntime,
@@ -19,12 +20,11 @@ import {
   zoneWebNavigationTarget
 } from "@webtui/api-client";
 import { getPlatformServices } from "@webtui/chat-core";
-import { api, runtimeEnvironment } from "@/lib/api";
+import { api, refreshApiSession, runtimeEnvironment } from "@/lib/api";
 import { useAuthStore } from "./auth-store";
 import type { AuthAccount } from "./auth-store";
 import { DesktopAppLockProvider } from "./desktop-app-lock";
 import { clearMediaObjectUrlCache } from "@/features/chat/model/media-cache";
-import { isLikelyOfflineError } from "@/features/chat/model/offline-cache";
 import {
   accountKey as offlineAccountKey,
   clearOfflineAccount,
@@ -240,6 +240,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [meQuery.data, setUser]);
 
   useEffect(() => {
+    if (!hydrated || !accessToken || !refreshToken) {
+      return undefined;
+    }
+
+    const expiresAt = accessTokenExpiry(accessToken);
+    if (!expiresAt) {
+      return undefined;
+    }
+
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const currentToken = accessToken;
+
+    const schedule = (delay: number) => {
+      timer = setTimeout(() => {
+        if (disposed || useAuthStore.getState().accessToken !== currentToken) {
+          return;
+        }
+        void refreshApiSession().catch(() => {
+          // The session owner intentionally keeps transient refresh failures.
+          // Retry while the same access token is active instead of waiting for
+          // a user action to discover that the short-lived token has expired.
+          if (!disposed && useAuthStore.getState().accessToken === currentToken) {
+            schedule(10_000);
+          }
+        });
+      }, Math.max(0, delay));
+    };
+
+    schedule(expiresAt - Date.now() - 60_000);
+    return () => {
+      disposed = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [accessToken, hydrated, refreshToken]);
+
+  useEffect(() => {
     if (!hydrated) {
       return;
     }
@@ -261,7 +300,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [hydrated, user?.id, zoneRuntime?.api_base_url]);
 
   useEffect(() => {
-    if (meQuery.isError && !isLikelyOfflineError(meQuery.error)) {
+    // A temporary API/transport failure must not destroy a valid remembered
+    // login. HttpClient already tries token rotation; only an explicit auth
+    // rejection proves that this session is no longer usable.
+    if (
+      meQuery.isError &&
+      meQuery.error instanceof ApiClientError &&
+      (meQuery.error.status === 401 || meQuery.error.status === 403)
+    ) {
       clearSession();
     }
   }, [clearSession, meQuery.error, meQuery.isError]);
@@ -272,33 +318,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryScheduled = false;
     setIsRestoringSession(true);
     setRestoreAttemptedToken(refreshToken);
 
-    api.auth
-      .refresh({
-        refresh_token: refreshToken
-      })
-      .then((result) => {
+    refreshApiSession()
+      .then(() => {
         if (!active) {
           return;
         }
-        setSession(result);
         void queryClient.invalidateQueries({ queryKey: queryKeys.auth.me });
       })
-      .catch(() => {
-        if (active) {
-          clearSession();
+      .catch((error: unknown) => {
+        if (!active) {
+          return;
         }
+        if (error instanceof ApiClientError && (error.status === 401 || error.status === 403)) {
+          clearSession();
+          return;
+        }
+        retryScheduled = true;
+        retryTimer = setTimeout(() => {
+          if (active) {
+            setRestoreAttemptedToken(null);
+          }
+        }, 10_000);
       })
       .finally(() => {
-        if (active) {
+        if (active && !retryScheduled) {
           setIsRestoringSession(false);
         }
       });
 
     return () => {
       active = false;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
   }, [
     accessToken,
@@ -307,7 +364,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient,
     refreshToken,
     restoreAttemptedToken,
-    setSession,
     zoneDomain
   ]);
 
@@ -759,6 +815,23 @@ class ZoneNavigationStartedError extends Error {
 
 function isZoneNavigationStarted(error: unknown): boolean {
   return error instanceof ZoneNavigationStartedError;
+}
+
+function accessTokenExpiry(token: string): number | null {
+  const payload = token.split(".")[1];
+  if (!payload || typeof globalThis.atob !== "function") {
+    return null;
+  }
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const parsed = JSON.parse(globalThis.atob(padded)) as { exp?: unknown };
+    return typeof parsed.exp === "number" && Number.isFinite(parsed.exp)
+      ? parsed.exp * 1_000
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function useAuth() {

@@ -144,6 +144,51 @@ describe("HttpClient", () => {
     ).toBe("Bearer fresh-token");
   });
 
+  it("does not clear an existing session for a public auth 401", async () => {
+    const onUnauthorized = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          {
+            error: { code: "UNAUTHORIZED", message: "Refresh token khÃ´ng há»£p lá»‡." },
+            success: false,
+          },
+          401,
+        ),
+      ),
+    );
+    const client = new HttpClient({
+      baseUrl: "https://chat.vpsttt.com",
+      onUnauthorized,
+    });
+
+    await expect(
+      client.post("/api/v1/auth/refresh", { refresh_token: "expired" }, { auth: false }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("still notifies the session owner for a final protected 401", async () => {
+    const onUnauthorized = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(
+          { error: { code: "UNAUTHORIZED", message: "Háº¿t phiÃªn." }, success: false },
+          401,
+        ),
+      ),
+    );
+    const client = new HttpClient({
+      baseUrl: "https://chat.vpsttt.com",
+      onUnauthorized,
+    });
+
+    await expect(client.get("/api/v1/auth/me")).rejects.toMatchObject({ status: 401 });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
   it("throws ApiClientError with backend request id", async () => {
     vi.stubGlobal(
       "fetch",

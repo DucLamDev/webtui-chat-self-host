@@ -271,7 +271,7 @@ export function AuthScreen({
           {mode === "register" ? <>
             <label>Họ và tên<Input autoComplete="name" onChange={(event) => setDisplayName(event.target.value)} placeholder="Nhập họ và tên của bạn" required value={displayName} /></label>
             <label>Email công việc<Input autoComplete="email" onChange={(event) => setEmail(event.target.value)} placeholder="Nhập email công việc" required type="email" value={email} /></label>
-            <label>Tên đăng nhập<Input autoComplete="username" onChange={(event) => setUsername(event.target.value)} placeholder="Nhập tên đăng nhập" required value={username} /></label>
+            <label>Tên đăng nhập<Input autoCapitalize="none" autoComplete="username" maxLength={40} minLength={3} onChange={(event) => setUsername(event.target.value)} placeholder="Ví dụ: duclam24" required spellCheck={false} value={username} /><small>Chỉ cần chữ hoặc số; dấu chấm, gạch dưới và gạch ngang là tùy chọn.</small></label>
             <label>Mã mời (nếu cần)<Input autoComplete="one-time-code" onChange={(event) => setInviteToken(event.target.value)} placeholder="Nhập mã mời của workspace" value={inviteToken} /></label>
           </> : <label>Email hoặc tên đăng nhập<Input autoComplete="username" onChange={(event) => setIdentifier(event.target.value)} placeholder="Nhập email hoặc tên đăng nhập" required value={identifier} /></label>}
           <label>Mật khẩu<Input autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "login" ? "Nhập mật khẩu của bạn" : "Tạo mật khẩu ít nhất 8 ký tự"} required type="password" value={password} /></label>

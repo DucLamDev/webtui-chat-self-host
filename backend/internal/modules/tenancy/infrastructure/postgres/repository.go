@@ -1047,7 +1047,8 @@ SELECT
     deployment.metadata,
     workspace.id::text,
     workspace.slug::text,
-    workspace.name
+    workspace.name,
+    workspace.owner_id IS NOT NULL
 FROM zone_domains zd
 JOIN zones z
   ON z.id = zd.zone_id
@@ -1111,6 +1112,7 @@ func scanResolvedZone(row rowScanner) (tenancydomain.ResolvedZone, error) {
 	var workspaceID sql.NullString
 	var workspaceSlug sql.NullString
 	var workspaceName sql.NullString
+	var workspaceHasOwner bool
 
 	if err := row.Scan(
 		&resolved.Zone.ID,
@@ -1153,6 +1155,7 @@ func scanResolvedZone(row rowScanner) (tenancydomain.ResolvedZone, error) {
 		&workspaceID,
 		&workspaceSlug,
 		&workspaceName,
+		&workspaceHasOwner,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return tenancydomain.ResolvedZone{}, tenancydomain.ErrZoneNotFound
@@ -1186,9 +1189,10 @@ func scanResolvedZone(row rowScanner) (tenancydomain.ResolvedZone, error) {
 
 	if workspaceID.Valid {
 		resolved.Workspace = &tenancydomain.WorkspaceRef{
-			ID:   workspaceID.String,
-			Slug: workspaceSlug.String,
-			Name: workspaceName.String,
+			ID:       workspaceID.String,
+			Slug:     workspaceSlug.String,
+			Name:     workspaceName.String,
+			HasOwner: workspaceHasOwner,
 		}
 	}
 	return resolved, nil

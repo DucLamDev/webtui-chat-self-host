@@ -3,6 +3,30 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+ENV_FILE="$SCRIPT_DIR/.env"
+
+read_env_value() {
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+}
+
+write_env_value() {
+  key=$1
+  value=$2
+  escaped=$(printf '%s' "$value" | sed 's/[&|]/\\&/g')
+  if grep -q "^$key=" "$ENV_FILE"; then
+    sed -i "s|^$key=.*|$key=$escaped|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+ensure_secret() {
+  key=$1
+  current=$(read_env_value "$key")
+  case "$current" in
+    ""|CHANGE_ME*) write_env_value "$key" "$(openssl rand -hex 32)" ;;
+  esac
+}
 
 sh "$SCRIPT_DIR/backup.sh"
 cd "$REPO_DIR"
@@ -13,9 +37,54 @@ fi
 git pull --ff-only
 
 cd "$SCRIPT_DIR"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Missing $ENV_FILE. Run install.sh first." >&2
+  exit 1
+fi
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "OpenSSL is required to create missing self-hosted service credentials." >&2
+  exit 1
+fi
+
+# Upgrade older installations in place. Existing custom Jitsi URLs and strong
+# credentials are preserved; missing values are generated automatically.
+INSTANCE_DOMAIN=$(read_env_value INSTANCE_DOMAIN)
+if [ -z "$INSTANCE_DOMAIN" ]; then
+  echo "INSTANCE_DOMAIN is missing from $ENV_FILE." >&2
+  exit 1
+fi
+MEETING_URL=$(read_env_value JITSI_BASE_URL)
+if [ -z "$MEETING_URL" ]; then
+  MEETING_URL=$(read_env_value NEXT_PUBLIC_JITSI_BASE_URL)
+fi
+if [ -z "$MEETING_URL" ]; then
+  MEETING_URL="https://$INSTANCE_DOMAIN:8443"
+fi
+if [ -z "$(read_env_value JITSI_BASE_URL)" ]; then
+  write_env_value JITSI_BASE_URL "$MEETING_URL"
+fi
+if [ -z "$(read_env_value NEXT_PUBLIC_JITSI_BASE_URL)" ]; then
+  write_env_value NEXT_PUBLIC_JITSI_BASE_URL "$MEETING_URL"
+fi
+ensure_secret JICOFO_AUTH_PASSWORD
+ensure_secret JVB_AUTH_PASSWORD
+# Older installations may predate this key or still contain the documented
+# placeholder. Generate it before migrations so a hidden, unused Bot module
+# cannot prevent the rest of the application from being updated.
+ensure_secret BOT_AI_SECRET_KEY
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  if [ "$(id -u)" -eq 0 ]; then
+    ufw allow 8443/tcp >/dev/null
+    ufw allow 10000/udp >/dev/null
+  else
+    echo "Warning: allow TCP 8443 and UDP 10000 in the VPS firewall for group video." >&2
+  fi
+fi
+
 # The customer VPS may only contain this self-host repository. Build the
 # deployable services explicitly so an optional sibling portal source does not
 # block updates to the chat application.
+docker compose --env-file .env -f compose.yml pull caddy jitsi-prosody jitsi-jicofo jitsi-jvb jitsi-web
 docker compose --env-file .env -f compose.yml build --pull api worker web admin
 if ! docker compose --env-file .env -f compose.yml run --rm migrate; then
   echo "" >&2
@@ -29,4 +98,8 @@ if ! docker compose --env-file .env -f compose.yml run --rm migrate; then
   exit 1
 fi
 docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate api worker web admin
+docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-prosody
+docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-jicofo jitsi-jvb
+docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-web
+docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate caddy
 sh "$SCRIPT_DIR/check.sh"

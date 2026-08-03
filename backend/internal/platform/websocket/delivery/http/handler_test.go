@@ -208,6 +208,38 @@ func TestHandleCommandBroadcastsTypingState(t *testing.T) {
 	}
 }
 
+func TestHandleCommandRepliesToHeartbeatOnlyToSender(t *testing.T) {
+	manager := platformws.NewManager()
+	handler := NewHandler(manager, nil)
+	sender := &platformws.Client{ID: "sender", UserID: "user-a", ZoneID: "zone-1", Send: make(chan platformws.Event, 1)}
+	receiver := &platformws.Client{ID: "receiver", UserID: "user-b", ZoneID: "zone-1", Send: make(chan platformws.Event, 1)}
+	if err := manager.Register(sender); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(receiver); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Unregister(sender.ID)
+	defer manager.Unregister(receiver.ID)
+
+	room := "workspace:workspace-1:heartbeat"
+	handler.handleCommand(sender, clientCommand{Type: "ping", Room: room})
+
+	select {
+	case event := <-sender.Send:
+		if event.Type != "pong" || event.Room != room || event.Timestamp.IsZero() {
+			t.Fatalf("unexpected heartbeat response: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat response was not delivered")
+	}
+	select {
+	case event := <-receiver.Send:
+		t.Fatalf("heartbeat leaked to another client: %#v", event)
+	default:
+	}
+}
+
 func TestHandleCommandRejectsUnvalidatedCallSignal(t *testing.T) {
 	manager := platformws.NewManager()
 	handler := NewHandler(manager, nil)

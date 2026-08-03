@@ -58,6 +58,7 @@ export type ZoneDeployment = {
 export type ZoneDiscovery = {
   version: string;
   domain: string;
+  setup_required?: boolean;
   zone: ZoneSummary;
   workspace?: ZoneWorkspaceRef | null;
   runtime: ZoneRuntime;

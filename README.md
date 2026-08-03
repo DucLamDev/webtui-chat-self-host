@@ -9,8 +9,8 @@ file và khóa hệ thống nằm trên hạ tầng do tổ chức quản lý.
 > opt-in; quickstart vẫn giữ chúng tắt cho đến khi operator cấp credential. High
 > availability chưa nằm trong stack mặc định; xem [các giới hạn và lộ trình](docs/planning/self-host-feature-roadmap.md).
 
-Cuộc gọi nhóm mặc định tắt cho đến khi operator cấu hình Jitsi self-host; hệ
-thống không âm thầm chuyển media cuộc họp qua một Jitsi public.
+Cuộc gọi nhóm dùng Jitsi được đóng gói trong stack self-host; installer tự tạo
+cấu hình và không chuyển media cuộc họp qua một dịch vụ Jitsi công cộng.
 
 ## Bắt đầu nhanh
 
@@ -19,7 +19,7 @@ thống không âm thầm chuyển media cuộc họp qua một Jitsi public.
 - Ubuntu 22.04 hoặc 24.04 LTS, IPv4 public;
 - tối thiểu 4 vCPU, 8 GB RAM, 40 GB SSD;
 - một domain đã có bản ghi `A` trỏ về VPS;
-- mở TCP `80`, `443`, `3478` và UDP `443`, `3478`, `49160-49200`;
+- mở TCP `80`, `443`, `3478`, `8443` và UDP `443`, `3478`, `10000`, `49160-49200`;
 - Docker Engine và Docker Compose v2 (bootstrap có thể tự cài).
 
 ### Cài trên VPS Ubuntu mới

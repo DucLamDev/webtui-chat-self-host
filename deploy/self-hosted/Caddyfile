@@ -54,3 +54,23 @@
 		format console
 	}
 }
+
+# Jitsi does not reliably support a subdirectory. Reusing the instance domain
+# on a dedicated TLS port keeps installation automatic while preserving the
+# root paths required by its room, BOSH and WebSocket endpoints.
+https://{$INSTANCE_DOMAIN}:8443 {
+	encode zstd gzip
+	reverse_proxy jitsi-web:80
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

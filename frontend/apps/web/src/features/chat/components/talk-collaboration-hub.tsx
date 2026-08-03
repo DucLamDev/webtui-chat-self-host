@@ -69,13 +69,17 @@ type CollaborationTab = (typeof collaborationTabs)[number]["id"];
 export function TalkCollaborationHub({
   channel,
   currentUser,
+  isMeetingOpenRequested,
   members,
+  onMeetingOpenHandled,
   onToast,
   workspaceId
 }: {
   channel: HubChannel;
   currentUser: { id: string; name: string };
+  isMeetingOpenRequested: boolean;
   members: ChannelMember[];
+  onMeetingOpenHandled: () => void;
   onToast: (message: string) => void;
   workspaceId: string;
 }) {
@@ -100,6 +104,38 @@ export function TalkCollaborationHub({
     queryKey: queryKeys.channels.collaboration(workspaceId, channel.id)
   });
   const settings = settingsQuery.data;
+
+  useEffect(() => {
+    if (!isMeetingOpenRequested || settingsQuery.isLoading) return;
+    setActiveTab("meeting");
+    const roomKey = settings?.meeting_room_key?.trim() ?? "";
+    if (channel.type === "direct") {
+      onToast("Hãy chuyển cuộc trò chuyện thành phòng nhóm trước khi mở cuộc họp.");
+    } else if (roomKey) {
+      setMeetingRoomKey(roomKey);
+    } else {
+      onToast("Phòng họp đang được chuẩn bị. Vui lòng thử lại sau giây lát.");
+      void settingsQuery.refetch();
+    }
+    onMeetingOpenHandled();
+  }, [
+    channel.type,
+    isMeetingOpenRequested,
+    onMeetingOpenHandled,
+    onToast,
+    settings?.meeting_room_key,
+    settingsQuery.isLoading
+  ]);
+
+  const openMeeting = () => {
+    const roomKey = settings?.meeting_room_key?.trim() ?? "";
+    if (!roomKey) {
+      onToast("Phòng họp đang được chuẩn bị. Vui lòng thử lại sau giây lát.");
+      void settingsQuery.refetch();
+      return;
+    }
+    setMeetingRoomKey(roomKey);
+  };
 
   const rolesQuery = useQuery({
     enabled: Boolean(settings && channel.type !== "direct"),
@@ -185,7 +221,11 @@ export function TalkCollaborationHub({
   const moderationMutation = useMutation({
     mutationFn: ({ action, id }: { action: "approve" | "reject"; id: string }) =>
       api.channels.moderateGuest(workspaceId, channel.id, id, action),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.channels.guestRequests(workspaceId, channel.id) })
+    onError: (error) => onToast(error instanceof Error ? error.message : "Không xử lý được yêu cầu tham gia."),
+    onSuccess: async (_guest, input) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.channels.guestRequests(workspaceId, channel.id) });
+      onToast(input.action === "approve" ? "Đã duyệt khách vào phòng họp." : "Đã từ chối yêu cầu tham gia.");
+    }
   });
   const roleMutation = useMutation({
     mutationFn: ({ role, userId }: { role: CollaborationParticipantRole; userId: string }) =>
@@ -263,7 +303,7 @@ export function TalkCollaborationHub({
       {activeTab === "home" ? (
         <TalkHomePanel
           channelId={channel.id}
-          onOpenMeeting={() => setMeetingRoomKey(settings.meeting_room_key ?? "")}
+          onOpenMeeting={openMeeting}
           workspaceId={workspaceId}
         />
       ) : null}
@@ -305,11 +345,11 @@ export function TalkCollaborationHub({
                   <span><VideoOff size={13} /> Blur nền</span>
                   <span><ExternalLink size={13} /> Screen share</span>
                 </div>
-                <Button onClick={() => setMeetingRoomKey(settings.meeting_room_key ?? "")}>
+                <Button onClick={openMeeting}>
                   Vào phòng họp
                 </Button>
                 {!settings.meeting_base_url && !jitsiBaseUrl() ? (
-                  <small className="talk-warning">Cần đặt NEXT_PUBLIC_JITSI_BASE_URL tới máy chủ Jitsi self-host.</small>
+                  <small className="talk-warning">Dịch vụ họp đang được khởi động. Vui lòng thử lại sau ít phút.</small>
                 ) : null}
               </section>
 
@@ -455,7 +495,7 @@ export function TalkCollaborationHub({
                 channelId={channel.id}
                 currentUserId={currentUser.id}
                 members={members}
-                onOpenMeeting={() => setMeetingRoomKey(settings.meeting_room_key ?? "")}
+                onOpenMeeting={openMeeting}
                 onToast={onToast}
                 workspaceId={workspaceId}
               />
@@ -1578,8 +1618,8 @@ function JitsiMeetingOverlay({
       ) : (
         <div className="talk-meeting-missing">
           <ShieldCheck size={28} />
-          <strong>Chưa cấu hình Jitsi self-host</strong>
-          <p>Đặt NEXT_PUBLIC_JITSI_BASE_URL, ví dụ https://meet.congty.vn, rồi build lại web/desktop.</p>
+          <strong>Chưa thể mở phòng họp</strong>
+          <p>Dịch vụ họp chưa sẵn sàng. Vui lòng đóng cửa sổ này và thử lại sau ít phút.</p>
         </div>
       )}
     </div>
@@ -1609,7 +1649,12 @@ function memberName(members: ChannelMember[], userId: string) {
 }
 
 function jitsiBaseUrl() {
-  return process.env.NEXT_PUBLIC_JITSI_BASE_URL?.trim() ?? "";
+  const configured = process.env.NEXT_PUBLIC_JITSI_BASE_URL?.trim();
+  if (configured) return configured;
+  if (typeof window === "undefined") return "";
+  const url = new URL(window.location.origin);
+  url.port = "8443";
+  return url.origin;
 }
 
 function jitsiToolbarButtons(canPresent: boolean, chatEnabled: boolean) {

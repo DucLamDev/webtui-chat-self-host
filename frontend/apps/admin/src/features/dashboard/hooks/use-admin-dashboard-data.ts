@@ -590,6 +590,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     }) => api.tenancy.updateCurrentZone(input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.tenancy.currentZone });
+      void queryClient.invalidateQueries({ queryKey: ["tenancy", "discovery"] });
     }
   });
 

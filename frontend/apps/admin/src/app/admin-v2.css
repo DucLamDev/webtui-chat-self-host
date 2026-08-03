@@ -74,6 +74,15 @@
   width: 40px;
 }
 
+.admin-sidebar__brand-mark img {
+  background: #fff;
+  border-radius: 8px;
+  height: 100%;
+  object-fit: contain;
+  padding: 4px;
+  width: 100%;
+}
+
 .admin-sidebar__brand-copy,
 .admin-sidebar__profile > span {
   display: grid;

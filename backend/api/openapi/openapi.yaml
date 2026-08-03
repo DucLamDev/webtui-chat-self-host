@@ -3177,6 +3177,9 @@ components:
           type: string
         domain:
           type: string
+        setup_required:
+          type: boolean
+          description: True when a self-hosted instance still needs its first owner account.
         zone:
           $ref: "#/components/schemas/ZoneSummary"
         workspace:

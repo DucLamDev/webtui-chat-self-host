@@ -17,8 +17,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
             gcTime: 10 * 60_000,
             networkMode: "offlineFirst",
             refetchOnReconnect: "always",
-            refetchOnWindowFocus: false,
+            // A laptop can sleep or a self-hosted API can restart without the
+            // browser ever emitting an offline/online transition. Refetching
+            // stale data when the user returns lets those brief interruptions
+            // heal without a page reload.
+            refetchOnWindowFocus: true,
             retry: retryTransientQuery,
+            retryDelay: transientRetryDelay,
             staleTime: 30_000
           }
         }
@@ -37,13 +42,17 @@ export function AppProviders({ children }: { children: ReactNode }) {
 }
 
 function retryTransientQuery(failureCount: number, error: Error) {
-  if (failureCount >= 2) {
+  if (failureCount >= 4) {
     return false;
   }
 
   if (error instanceof ApiClientError) {
-    return error.status === 408 || error.status === 429 || error.status >= 500;
+    return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
   }
 
   return true;
+}
+
+function transientRetryDelay(attempt: number) {
+  return Math.min(8_000, 500 * 2 ** attempt);
 }

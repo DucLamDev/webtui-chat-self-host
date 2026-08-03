@@ -54,6 +54,127 @@ services:
       retries: 10
       start_period: 30s
 
+  # Jitsi is part of the default self-host stack. It is served through Caddy
+  # at https://<instance-domain>:8443, so operators do not need another DNS
+  # record, certificate, or a separately managed Jitsi installation.
+  jitsi-prosody:
+    image: jitsi/prosody:${JITSI_IMAGE_VERSION:-stable-11031}
+    restart: unless-stopped
+    expose: ["5222", "5269", "5280", "5347"]
+    environment:
+      ENABLE_AUTH: "0"
+      ENABLE_BREAKOUT_ROOMS: "1"
+      ENABLE_END_CONFERENCE: "1"
+      ENABLE_GUESTS: "1"
+      ENABLE_LOBBY: "1"
+      ENABLE_XMPP_WEBSOCKET: "1"
+      JICOFO_AUTH_PASSWORD: ${JICOFO_AUTH_PASSWORD}
+      JVB_AUTH_PASSWORD: ${JVB_AUTH_PASSWORD}
+      PUBLIC_URL: https://${INSTANCE_DOMAIN}:8443
+      TZ: ${TZ:-UTC}
+      XMPP_AUTH_DOMAIN: auth.meet.jitsi
+      XMPP_DOMAIN: meet.jitsi
+      XMPP_GUEST_DOMAIN: guest.meet.jitsi
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.meet.jitsi
+      XMPP_MUC_DOMAIN: muc.meet.jitsi
+      XMPP_SERVER: xmpp.meet.jitsi
+    volumes:
+      - jitsi_prosody_config:/config
+      - jitsi_prosody_plugins:/prosody-plugins-custom
+    networks:
+      backend:
+        aliases: [xmpp.meet.jitsi]
+
+  jitsi-jicofo:
+    image: jitsi/jicofo:${JITSI_IMAGE_VERSION:-stable-11031}
+    restart: unless-stopped
+    environment:
+      ENABLE_AUTH: "0"
+      ENABLE_AUTO_OWNER: "1"
+      ENABLE_BREAKOUT_ROOMS: "1"
+      ENABLE_GUESTS: "1"
+      JICOFO_AUTH_PASSWORD: ${JICOFO_AUTH_PASSWORD}
+      JVB_BREWERY_MUC: jvbbrewery
+      PUBLIC_URL: https://${INSTANCE_DOMAIN}:8443
+      TZ: ${TZ:-UTC}
+      XMPP_AUTH_DOMAIN: auth.meet.jitsi
+      XMPP_DOMAIN: meet.jitsi
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.meet.jitsi
+      XMPP_MUC_DOMAIN: muc.meet.jitsi
+      XMPP_SERVER: xmpp.meet.jitsi
+    volumes:
+      - jitsi_jicofo_config:/config
+    networks: [backend]
+    depends_on:
+      jitsi-prosody:
+        condition: service_started
+
+  jitsi-jvb:
+    image: jitsi/jvb:${JITSI_IMAGE_VERSION:-stable-11031}
+    restart: unless-stopped
+    environment:
+      ENABLE_COLIBRI_WEBSOCKET: "1"
+      JVB_ADVERTISE_IPS: ${TURN_EXTERNAL_IP}
+      JVB_AUTH_PASSWORD: ${JVB_AUTH_PASSWORD}
+      JVB_AUTH_USER: jvb
+      JVB_BREWERY_MUC: jvbbrewery
+      JVB_PORT: "10000"
+      PUBLIC_URL: https://${INSTANCE_DOMAIN}:8443
+      TZ: ${TZ:-UTC}
+      XMPP_AUTH_DOMAIN: auth.meet.jitsi
+      XMPP_DOMAIN: meet.jitsi
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.meet.jitsi
+      XMPP_MUC_DOMAIN: muc.meet.jitsi
+      XMPP_SERVER: xmpp.meet.jitsi
+      XMPP_PORT: "5222"
+    ports:
+      - "10000:10000/udp"
+    volumes:
+      - jitsi_jvb_config:/config
+    networks:
+      backend:
+        # The official web image resolves the bridge name `jvb` when it builds
+        # the allowlisted Colibri WebSocket proxy regex.
+        aliases: [jvb]
+    depends_on:
+      jitsi-prosody:
+        condition: service_started
+
+  jitsi-web:
+    image: jitsi/web:${JITSI_IMAGE_VERSION:-stable-11031}
+    restart: unless-stopped
+    expose: ["80"]
+    environment:
+      BOSH_RELATIVE: "0"
+      DEFAULT_LANGUAGE: vi
+      DISABLE_DEEP_LINKING: "1"
+      DISABLE_HTTPS: "1"
+      ENABLE_AUTH: "0"
+      ENABLE_BREAKOUT_ROOMS: "1"
+      ENABLE_CLOSE_PAGE: "0"
+      ENABLE_COLIBRI_WEBSOCKET: "1"
+      ENABLE_GUESTS: "1"
+      ENABLE_HTTP_REDIRECT: "0"
+      ENABLE_LETSENCRYPT: "0"
+      ENABLE_LOBBY: "1"
+      ENABLE_PREJOIN_PAGE: "0"
+      ENABLE_SUBDOMAINS: "0"
+      ENABLE_WELCOME_PAGE: "0"
+      ENABLE_XMPP_WEBSOCKET: "1"
+      PUBLIC_URL: https://${INSTANCE_DOMAIN}:8443
+      TZ: ${TZ:-UTC}
+      XMPP_BOSH_URL_BASE: http://xmpp.meet.jitsi:5280
+      XMPP_DOMAIN: meet.jitsi
+      XMPP_GUEST_DOMAIN: guest.meet.jitsi
+      XMPP_MUC_DOMAIN: muc.meet.jitsi
+    volumes:
+      - jitsi_web_config:/config
+      - jitsi_transcripts:/usr/share/jitsi-meet/transcripts
+    networks: [backend]
+    depends_on:
+      jitsi-jvb:
+        condition: service_started
+
   ollama:
     image: ollama/ollama:latest
     profiles: ["ai"]
@@ -459,6 +580,7 @@ services:
       - "80:80"
       - "443:443"
       - "443:443/udp"
+      - "8443:8443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - storage_data:/srv/vpsttt-storage:ro
@@ -471,6 +593,8 @@ services:
       web:
         condition: service_started
       admin:
+        condition: service_started
+      jitsi-web:
         condition: service_started
 
   coturn:
@@ -536,3 +660,15 @@ volumes:
     name: vpsttt_chat_alertmanager_data
   grafana_data:
     name: vpsttt_chat_grafana_data
+  jitsi_web_config:
+    name: vpsttt_chat_jitsi_web_config
+  jitsi_transcripts:
+    name: vpsttt_chat_jitsi_transcripts
+  jitsi_prosody_config:
+    name: vpsttt_chat_jitsi_prosody_config
+  jitsi_prosody_plugins:
+    name: vpsttt_chat_jitsi_prosody_plugins
+  jitsi_jicofo_config:
+    name: vpsttt_chat_jitsi_jicofo_config
+  jitsi_jvb_config:
+    name: vpsttt_chat_jitsi_jvb_config

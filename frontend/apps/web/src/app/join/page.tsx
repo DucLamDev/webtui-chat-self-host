@@ -80,12 +80,20 @@ export default function PublicConversationJoinPage() {
         guestSession?.accessToken ?? ""
       ),
     queryKey: ["public-conversation", token, "join", guestSession?.requestId],
-    refetchInterval: (query) => query.state.data?.status === "waiting" ? 3_000 : false,
-    retry: false
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return !status || status === "waiting" ? 2_000 : false;
+    },
+    refetchIntervalInBackground: true,
+    retry: 3
   });
 
-  const joinedRoom = joinMutation.data?.room ?? statusQuery.data?.room;
-  const joinStatus = joinMutation.data?.status ?? statusQuery.data?.status;
+  // Polling data is newer than the original join response. Preferring it is
+  // important because the first response remains "waiting" after a host has
+  // approved the guest.
+  const latestGuest = statusQuery.data ?? joinMutation.data;
+  const joinedRoom = latestGuest?.room;
+  const joinStatus = latestGuest?.status;
 
   if (roomQuery.isError) {
     return (
@@ -136,6 +144,17 @@ export default function PublicConversationJoinPage() {
             <span><Clock3 size={24} /></span>
             <strong>Đang chờ chủ trì duyệt</strong>
             <p>Giữ trang này mở. Bạn sẽ tự động được đưa vào phòng sau khi được chấp nhận.</p>
+            {statusQuery.isError ? (
+              <Button onClick={() => void statusQuery.refetch()} variant="ghost">
+                Kết nối lại
+              </Button>
+            ) : null}
+          </div>
+        ) : joinStatus === "approved" ? (
+          <div className="guest-lobby-waiting">
+            <strong>Đã được chấp nhận</strong>
+            <p>Phòng họp đang được chuẩn bị. Bạn sẽ được đưa vào tự động.</p>
+            <Button onClick={() => void statusQuery.refetch()} variant="ghost">Thử lại</Button>
           </div>
         ) : joinStatus === "rejected" || joinStatus === "expired" ? (
           <div className="guest-lobby-waiting guest-lobby-waiting--rejected">
@@ -209,7 +228,9 @@ function PublicMeetingRoom({
   roomKey: string;
   videoEnabled: boolean;
 }) {
-  const baseUrl = meetingBaseUrl?.trim() || process.env.NEXT_PUBLIC_JITSI_BASE_URL?.trim() || "";
+  const baseUrl = meetingBaseUrl?.trim()
+    || process.env.NEXT_PUBLIC_JITSI_BASE_URL?.trim()
+    || defaultMeetingBaseUrl();
   const source = useMemo(() => {
     if (!baseUrl) return "";
     const url = new URL(encodeURIComponent(roomKey), `${baseUrl.replace(/\/+$/, "")}/`);
@@ -236,8 +257,8 @@ function PublicMeetingRoom({
     return (
       <main className="guest-join-page">
         <ErrorState
-          description="Server cần đặt NEXT_PUBLIC_JITSI_BASE_URL tới instance Jitsi self-host."
-          title="Media server chưa được cấu hình"
+          description="Dịch vụ họp chưa sẵn sàng. Vui lòng thử lại sau ít phút."
+          title="Chưa thể mở phòng họp"
         />
       </main>
     );
@@ -254,4 +275,11 @@ function PublicMeetingRoom({
       />
     </main>
   );
+}
+
+function defaultMeetingBaseUrl() {
+  if (typeof window === "undefined") return "";
+  const url = new URL(window.location.origin);
+  url.port = "8443";
+  return url.origin;
 }

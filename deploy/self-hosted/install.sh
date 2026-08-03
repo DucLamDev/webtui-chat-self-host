@@ -128,6 +128,8 @@ WEBHOOK_SIGNING_SECRET=$(openssl rand -hex 48)
 BOT_AI_SECRET_KEY=$(openssl rand -hex 48)
 OIDC_STATE_SECRET=$(openssl rand -hex 48)
 TURN_SHARED_SECRET=$(openssl rand -hex 48)
+JICOFO_AUTH_PASSWORD=$(openssl rand -hex 32)
+JVB_AUTH_PASSWORD=$(openssl rand -hex 32)
 GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 24)
 
 umask 077
@@ -227,8 +229,10 @@ TURN_URLS=turn:$DOMAIN:3478?transport=udp,turn:$DOMAIN:3478?transport=tcp
 TURN_CREDENTIAL_TTL=10m
 NEXT_PUBLIC_RTC_ICE_SERVERS=[{"urls":"stun:$DOMAIN:3478"}]
 RTC_ICE_SERVERS=[{"urls":"stun:$DOMAIN:3478"}]
-NEXT_PUBLIC_JITSI_BASE_URL=
-JITSI_BASE_URL=
+NEXT_PUBLIC_JITSI_BASE_URL=https://$DOMAIN:8443
+JITSI_BASE_URL=https://$DOMAIN:8443
+JICOFO_AUTH_PASSWORD=$JICOFO_AUTH_PASSWORD
+JVB_AUTH_PASSWORD=$JVB_AUTH_PASSWORD
 LETSENCRYPT_EMAIL=$EMAIL
 WORKER_CONCURRENCY=4
 EOF
@@ -282,7 +286,20 @@ until curl -fsS --max-time 10 "https://$DOMAIN/ready" >/dev/null 2>&1; do
   sleep 5
 done
 
+echo "Waiting for https://$DOMAIN:8443/ ..."
+attempt=0
+until curl -fsS --max-time 10 "https://$DOMAIN:8443/" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 36 ]; then
+    echo "Meeting service did not become ready. Inspect Jitsi logs in $COMPOSE_FILE." >&2
+    exit 1
+  fi
+  sleep 5
+done
+
 echo "VPSTTT Chat is ready at https://$DOMAIN"
+echo "The bundled meeting service is ready at https://$DOMAIN:8443"
+echo "Make sure TCP 8443 and UDP 10000 are allowed by the VPS firewall for group video."
 echo "Download portal is ready at $PORTAL_ORIGIN"
 echo "Register or sign in through $PORTAL_ORIGIN with domain $DOMAIN"
 echo "The first account registered on this domain becomes workspace owner."

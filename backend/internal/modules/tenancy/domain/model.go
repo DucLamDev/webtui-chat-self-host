@@ -143,9 +143,10 @@ type Deployment struct {
 }
 
 type WorkspaceRef struct {
-	ID   string
-	Slug string
-	Name string
+	ID       string
+	Slug     string
+	Name     string
+	HasOwner bool
 }
 
 type ResolvedZone struct {

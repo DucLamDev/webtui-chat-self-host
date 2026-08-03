@@ -31,7 +31,7 @@ theo `INSTANCE_DOMAIN` và `INSTANCE_NAME`.
 - Docker Engine và Docker Compose v2.
 - Domain/subdomain riêng, ví dụ `chat.company.com`.
 - DNS `A` của domain trỏ vào IPv4 public của VPS trước khi cài.
-- Firewall mở TCP `80`, `443`, `3478`; UDP `443`, `3478`, `49160-49200`.
+- Firewall mở TCP `80`, `443`, `3478`, `8443`; UDP `443`, `3478`, `10000`, `49160-49200`.
 - Không có Nginx/Apache/Caddy khác chiếm cổng `80` hoặc `443` nếu dùng compose mặc định.
 
 ## Luồng triển khai cho customer
@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/DucLamDev/webtui-chat-self-host/mas
 Khi có release ổn định, nên thay `master` trong URL raw bằng tag release để
 bootstrap luôn dùng đúng phiên bản đã kiểm thử.
 Bootstrap sẽ mở các port cần thiết: `22`, `80`, `443`, `3478/tcp`,
-`3478/udp`, `443/udp` và `49160-49200/udp`.
+`8443/tcp`, `3478/udp`, `443/udp`, `10000/udp` và `49160-49200/udp`.
 
 Ví dụ trên VPS:
 
@@ -265,10 +265,12 @@ secret, cập nhật cùng lúc API/coturn và restart hai service; client tự 
 credential mới, không cần build lại ứng dụng.
 
 Phòng nhóm, guest link, webinar và breakout room dùng Jitsi self-host làm SFU.
-Jitsi không được nhúng vào compose mặc định để instance chat nhỏ không phải gánh
-thêm media stack. Tính năng nhóm mặc định bị tắt và không tự chuyển media qua
-một Jitsi public. Cài một Jitsi riêng (ví dụ `https://meet.chat.company.com`) và
-đặt trong `.env`:
+Stack mặc định đã gồm Jitsi Web, Prosody, Jicofo và Jitsi Videobridge. Installer
+tự tạo mật khẩu nội bộ và phục vụ cuộc họp tại cùng domain qua cổng
+`https://chat.company.com:8443`; không cần thêm DNS hay tự điền URL. Firewall VPS
+cần cho phép TCP `8443` và UDP `10000` để media nhiều người đi qua Videobridge.
+
+Nếu tổ chức chủ động dùng một cụm Jitsi khác, có thể ghi đè trong `.env`:
 
 ```dotenv
 JITSI_BASE_URL=https://meet.chat.company.com
@@ -280,10 +282,9 @@ client dùng room key ngẫu nhiên, grid view, giơ tay, screen share, blur/đ�
 và toolbar theo vai trò. Public link chỉ trả room key sau khi qua password và
 lobby; xoay/thu hồi link cũng xoay room key.
 
-Cho production, Jitsi phải bật secure domain hoặc JWT để Jicofo/Jitsi Videobridge
-thực sự cưỡng chế host và quyền media. Việc ẩn nút mic/camera/chat ở client là
-lớp UX, không thay thế policy phía media server. Ghi hình/livestream cần thêm
-Jibri và chính sách consent/retention riêng.
+Room key ngẫu nhiên của ứng dụng không được trả cho khách trước khi qua mật khẩu
+và phòng chờ. Ghi hình/livestream vẫn cần thêm Jibri và chính sách
+consent/retention riêng.
 
 ## Vận hành hằng ngày
 

@@ -244,6 +244,11 @@ func (h *Handler) handleCommand(client *platformws.Client, command clientCommand
 		return
 	}
 	switch strings.TrimSpace(command.Type) {
+	case "ping":
+		h.manager.Send(client.ID, platformws.Event{
+			Type: "pong",
+			Room: room,
+		})
 	case "join":
 		if !h.roomBelongsToZone(client.ZoneID, room) {
 			return
