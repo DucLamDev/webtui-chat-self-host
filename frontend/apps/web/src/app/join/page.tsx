@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Badge, Button, ErrorState } from "@webtui/ui";
 import {
@@ -14,6 +14,7 @@ import {
   VideoOff
 } from "@webtui/icons";
 import { api } from "@/lib/api";
+import { JitsiMeeting, type JitsiMeetingHandle } from "@/features/chat/components/jitsi-meeting";
 
 type StoredGuestSession = {
   accessToken: string;
@@ -228,18 +229,13 @@ function PublicMeetingRoom({
   roomKey: string;
   videoEnabled: boolean;
 }) {
+  const meetingRef = useRef<JitsiMeetingHandle>(null);
+  const [hasLeft, setHasLeft] = useState(false);
   const baseUrl = meetingBaseUrl?.trim()
     || process.env.NEXT_PUBLIC_JITSI_BASE_URL?.trim()
     || defaultMeetingBaseUrl();
-  const source = useMemo(() => {
-    if (!baseUrl) return "";
-    const url = new URL(encodeURIComponent(roomKey), `${baseUrl.replace(/\/+$/, "")}/`);
-    url.searchParams.set("userInfo.displayName", displayName);
-    url.hash = new URLSearchParams({
-      "config.prejoinConfig.enabled": "false",
-      "config.startWithAudioMuted": String(!microphoneEnabled),
-      "config.startWithVideoMuted": String(!videoEnabled),
-      "config.toolbarButtons": JSON.stringify([
+  const toolbarButtons = useMemo(
+    () => [
         ...(roomMode === "webinar" ? [] : ["microphone", "camera", "select-background"]),
         ...(!chatLocked ? ["chat"] : []),
         "raisehand",
@@ -247,13 +243,11 @@ function PublicMeetingRoom({
         "fullscreen",
         "settings",
         "hangup"
-      ]),
-      "interfaceConfig.TILE_VIEW_MAX_COLUMNS": "5"
-    }).toString();
-    return url.toString();
-  }, [baseUrl, chatLocked, displayName, microphoneEnabled, roomKey, roomMode, videoEnabled]);
+      ],
+    [chatLocked, roomMode]
+  );
 
-  if (!source) {
+  if (!baseUrl) {
     return (
       <main className="guest-join-page">
         <ErrorState
@@ -264,14 +258,28 @@ function PublicMeetingRoom({
     );
   }
 
+  if (hasLeft) {
+    return (
+      <main className="guest-join-page">
+        <ErrorState
+          description="Cửa sổ cuộc họp đã được đóng an toàn. Bạn có thể đóng trang này hoặc quay lại đường dẫn mời để tham gia lại."
+          title="Bạn đã rời cuộc họp"
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="public-meeting-room">
-      <iframe
-        allow="camera; microphone; display-capture; fullscreen; clipboard-write; autoplay"
-        allowFullScreen
-        referrerPolicy="no-referrer"
-        src={source}
-        title="Phòng họp khách"
+      <JitsiMeeting
+        baseUrl={baseUrl}
+        displayName={displayName}
+        microphoneEnabled={microphoneEnabled}
+        onClose={() => setHasLeft(true)}
+        ref={meetingRef}
+        roomKey={roomKey}
+        toolbarButtons={toolbarButtons}
+        videoEnabled={videoEnabled}
       />
     </main>
   );

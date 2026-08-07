@@ -43,6 +43,7 @@ import {
   X
 } from "@webtui/icons";
 import { api } from "@/lib/api";
+import { JitsiMeeting, type JitsiMeetingHandle } from "./jitsi-meeting";
 
 type HubChannel = {
   canManage?: boolean;
@@ -1590,30 +1591,33 @@ function JitsiMeetingOverlay({
 }) {
   const baseUrl = meetingBaseUrl?.trim() || jitsiBaseUrl();
   const canPresent = participantRole !== "listener";
-  const source = useMemo(() => {
-    if (!baseUrl || !roomKey) return "";
-    const url = new URL(encodeURIComponent(roomKey), `${baseUrl.replace(/\/+$/, "")}/`);
-    url.searchParams.set("userInfo.displayName", displayName);
-    const hash = new URLSearchParams({
-      "config.prejoinConfig.enabled": "false",
-      "config.startWithAudioMuted": String(!microphoneEnabled),
-      "config.startWithVideoMuted": String(!videoEnabled),
-      "config.toolbarButtons": JSON.stringify(jitsiToolbarButtons(canPresent, !chatLocked)),
-      "interfaceConfig.TILE_VIEW_MAX_COLUMNS": "5"
-    });
-    url.hash = hash.toString();
-    return url.toString();
-  }, [baseUrl, canPresent, chatLocked, displayName, microphoneEnabled, roomKey, videoEnabled]);
+  const meetingRef = useRef<JitsiMeetingHandle>(null);
+  const toolbarButtons = useMemo(
+    () => jitsiToolbarButtons(canPresent, !chatLocked),
+    [canPresent, chatLocked]
+  );
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
   return (
     <div className="talk-meeting-overlay" role="dialog" aria-label="Phòng họp video">
-      <header><span><Video size={18} /><strong>Phòng họp bảo mật</strong></span><button onClick={onClose} type="button"><X size={18} /></button></header>
-      {source ? (
-        <iframe
-          allow="camera; microphone; display-capture; fullscreen; clipboard-write; autoplay"
-          allowFullScreen
-          referrerPolicy="no-referrer"
-          src={source}
-          title="Jitsi meeting"
+      <header><span><Video size={18} /><strong>Phòng họp bảo mật</strong></span><button aria-label="Rời phòng họp" onClick={() => meetingRef.current ? meetingRef.current.leave() : onClose()} type="button"><X size={18} /></button></header>
+      {baseUrl ? (
+        <JitsiMeeting
+          baseUrl={baseUrl}
+          displayName={displayName}
+          microphoneEnabled={microphoneEnabled}
+          onClose={onClose}
+          ref={meetingRef}
+          roomKey={roomKey}
+          toolbarButtons={toolbarButtons}
+          videoEnabled={videoEnabled}
         />
       ) : (
         <div className="talk-meeting-missing">

@@ -15162,10 +15162,10 @@ button.message-reply-preview:hover {
   box-shadow: 0 28px 80px rgb(24 54 90 / 24%);
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
-  inset: 24px;
+  inset: 16px 16px 16px 80px;
   overflow: hidden;
   position: fixed;
-  z-index: 120;
+  z-index: 320;
 }
 
 .talk-meeting-overlay > header {
@@ -15197,11 +15197,48 @@ button.message-reply-preview:hover {
   width: 32px;
 }
 
-.talk-meeting-overlay iframe {
+.jitsi-meeting-stage,
+.jitsi-meeting-stage__frame,
+.jitsi-meeting-stage__frame > div,
+.jitsi-meeting-stage iframe {
+  min-height: 0;
+}
+
+.jitsi-meeting-stage {
+  background: #f7f9fc;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.jitsi-meeting-stage__frame,
+.jitsi-meeting-stage__frame > div,
+.jitsi-meeting-stage iframe {
   border: 0;
   height: 100%;
   width: 100%;
 }
+
+.jitsi-meeting-stage__status {
+  align-content: center;
+  background: #f7f9fc;
+  color: #334a66;
+  display: grid;
+  gap: 7px;
+  inset: 0;
+  justify-items: center;
+  padding: 24px;
+  position: absolute;
+  text-align: center;
+}
+
+.jitsi-meeting-stage__status span {
+  color: #71839a;
+  font-size: 12px;
+}
+
+.jitsi-meeting-stage__status.is-error strong { color: #a83a42; }
 
 .talk-meeting-missing {
   align-content: center;

@@ -336,6 +336,18 @@ Lệnh update chỉ tự tạo backup trước khi cập nhật nếu
 `OFFSITE_BACKUP_ENABLED=true` trong `offsite-backup.env`. Cài đặt mặc định chưa
 bật backup off-site vẫn cập nhật bình thường.
 
+Tài khoản Admin Panel không dùng mật khẩu mặc định. Tài khoản chủ sở hữu đầu
+tiên có thể đăng nhập Admin Panel bằng cùng username/mật khẩu của trang chat.
+Operator có thể xem, tạo hoặc cấp lại mật khẩu quản trị bằng các lệnh sau:
+
+```sh
+sh deploy/self-hosted/admin-account.sh list
+sh deploy/self-hosted/admin-account.sh create admin
+sh deploy/self-hosted/admin-account.sh reset admin
+```
+
+Mật khẩu ngẫu nhiên chỉ được in một lần sau lệnh `create` hoặc `reset`.
+
 Restore từ một snapshot ID cụ thể:
 
 ```sh

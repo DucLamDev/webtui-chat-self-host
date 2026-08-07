@@ -31,6 +31,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
   CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/webtui-vapid-keygen ./cmd/vapid-keygen
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/webtui-admin-account ./cmd/admin-account
 
 FROM alpine:3.22 AS runtime
 
@@ -45,6 +48,7 @@ COPY --from=build /out/webtui-worker /usr/local/bin/webtui-worker
 COPY --from=build /out/webtui-migrate /usr/local/bin/webtui-migrate
 COPY --from=build /out/webtui-push-relay /usr/local/bin/webtui-push-relay
 COPY --from=build /out/webtui-vapid-keygen /usr/local/bin/webtui-vapid-keygen
+COPY --from=build /out/webtui-admin-account /usr/local/bin/webtui-admin-account
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY db/migrations ./db/migrations
 
