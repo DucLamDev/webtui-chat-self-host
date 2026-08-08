@@ -3,6 +3,9 @@ import type {
   AuthSession,
   AuthUser,
   GoogleLoginInput,
+  CurrentLegalAcceptance,
+  LegalDocumentVersion,
+  LegalAcceptanceInput,
   LoginInput,
   LogoutInput,
   OIDCCompleteInput,
@@ -37,11 +40,25 @@ export function createAuthClient(http: HttpClient) {
     register(input: RegisterInput) {
       return http.post<AuthResult>("/api/v1/auth/register", input, { auth: false });
     },
+    async legalDocuments() {
+      const data = await http.get<unknown>("/api/v1/auth/legal-documents", { auth: false });
+      return collectionFrom<LegalDocumentVersion>(data, "documents");
+    },
     refresh(input: RefreshInput) {
       return http.post<AuthResult>("/api/v1/auth/refresh", input, { auth: false });
     },
     logout(input: LogoutInput) {
       return http.post<{ status?: string }>("/api/v1/auth/logout", input);
+    },
+    async legalAcceptance(workspaceId: string) {
+      const data = await http.get<unknown>("/api/v1/auth/legal-acceptance", {
+        query: { workspace_id: workspaceId }
+      });
+      return requiredItem<CurrentLegalAcceptance>(data, "legal_acceptance");
+    },
+    async acceptLegalDocuments(input: LegalAcceptanceInput) {
+      const data = await http.post<unknown>("/api/v1/auth/legal-acceptance", input);
+      return requiredItem<CurrentLegalAcceptance>(data, "legal_acceptance");
     },
     async me() {
       const data = await http.get<unknown>("/api/v1/auth/me");
@@ -58,4 +75,12 @@ export function createAuthClient(http: HttpClient) {
       return http.delete<void>("/api/v1/auth/sessions");
     }
   };
+}
+
+function requiredItem<TItem>(value: unknown, key: string): TItem {
+  const item = itemFrom<TItem>(value, key);
+  if (!item) {
+    throw new Error(`API response is missing ${key}.`);
+  }
+  return item;
 }

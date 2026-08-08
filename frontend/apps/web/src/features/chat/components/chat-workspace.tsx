@@ -150,7 +150,7 @@ import type {
   ZoneStorageProvider,
   WorkspaceMember
 } from "@webtui/types";
-import { parseChatRoute } from "@/lib/chat-route";
+import { isAccountDeletionRoute, parseChatRoute } from "@/lib/chat-route";
 
 const AutomationPage = dynamic(
   () => import("./automation-page").then((module) => module.AutomationPage),
@@ -552,6 +552,19 @@ export function ChatWorkspace() {
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
   const [detailTab, setDetailTab] = useState<DetailTab>("workspace");
   const [isMeetingOpenRequested, setIsMeetingOpenRequested] = useState(false);
+
+  const accountDeletionRequested = isAccountDeletionRoute(searchParams);
+  useEffect(() => {
+    if (activeRailItem !== "settings" || !accountDeletionRequested) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const heading = document.getElementById("delete-account-title");
+      heading?.scrollIntoView({ block: "start" });
+      heading?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [accountDeletionRequested, activeRailItem]);
   const [searchQuery, setSearchQuery] = useState("");
   const [friendSearchQuery, setFriendSearchQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -6044,7 +6057,7 @@ function SettingsPage({
         <section className="settings-card settings-card--danger" aria-labelledby="delete-account-title">
           <div className="settings-card__heading">
             <div>
-              <h2 id="delete-account-title">Xóa tài khoản</h2>
+              <h2 id="delete-account-title" tabIndex={-1}>Xóa tài khoản</h2>
               <p>
                 Xóa vĩnh viễn hồ sơ, phiên đăng nhập, thiết bị và tùy chọn cá nhân của bạn trên
                 instance này. Tin nhắn thuộc hồ sơ của tổ chức có thể được giữ lại nhưng không còn
@@ -10917,6 +10930,9 @@ function slugify(value: string): string {
 }
 
 function railItemFromRoute(pathname: string, searchParams?: { get: (name: string) => string | null }): RailItemId {
+  if (isAccountDeletionRoute(searchParams)) {
+    return "settings";
+  }
   const section = parseChatRoute(pathname, searchParams)?.sectionRef;
   return railItems.some((item) => item.id === section) ? section as RailItemId : "messages";
 }

@@ -27,7 +27,7 @@ func (unavailableProductivityRepository) CancelScheduledMessage(context.Context,
 	return productivityCapabilityUnavailable()
 }
 
-func (unavailableProductivityRepository) ProcessDueScheduledMessages(context.Context, int) (int, error) {
+func (unavailableProductivityRepository) ProcessDueScheduledMessages(context.Context, int, ScheduledMessageDeliveryAuthorizer) (int, error) {
 	return 0, productivityCapabilityUnavailable()
 }
 

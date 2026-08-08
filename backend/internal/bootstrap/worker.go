@@ -11,6 +11,7 @@ import (
 	"github.com/duclamdev/application-chat/backend/internal/config"
 	aptokensapp "github.com/duclamdev/application-chat/backend/internal/modules/api_tokens/application"
 	aptokenspostgres "github.com/duclamdev/application-chat/backend/internal/modules/api_tokens/infrastructure/postgres"
+	authpostgres "github.com/duclamdev/application-chat/backend/internal/modules/auth/infrastructure/postgres"
 	backupsapp "github.com/duclamdev/application-chat/backend/internal/modules/backups/application"
 	backupspostgres "github.com/duclamdev/application-chat/backend/internal/modules/backups/infrastructure/postgres"
 	callsapp "github.com/duclamdev/application-chat/backend/internal/modules/calls/application"
@@ -20,6 +21,7 @@ import (
 	cronjobspostgres "github.com/duclamdev/application-chat/backend/internal/modules/cronjobs/infrastructure/postgres"
 	messagesapp "github.com/duclamdev/application-chat/backend/internal/modules/messages/application"
 	messagespostgres "github.com/duclamdev/application-chat/backend/internal/modules/messages/infrastructure/postgres"
+	moderationpostgres "github.com/duclamdev/application-chat/backend/internal/modules/moderation/infrastructure/postgres"
 	notificationsapp "github.com/duclamdev/application-chat/backend/internal/modules/notifications/application"
 	notificationsapns "github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/apns"
 	notificationsfcm "github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/fcm"
@@ -31,6 +33,8 @@ import (
 	outboxrabbitmq "github.com/duclamdev/application-chat/backend/internal/modules/outbox/infrastructure/rabbitmq"
 	presenceapp "github.com/duclamdev/application-chat/backend/internal/modules/presence/application"
 	presencepostgres "github.com/duclamdev/application-chat/backend/internal/modules/presence/infrastructure/postgres"
+	rbacapp "github.com/duclamdev/application-chat/backend/internal/modules/rbac/application"
+	rbacpostgres "github.com/duclamdev/application-chat/backend/internal/modules/rbac/infrastructure/postgres"
 	webhooksapp "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/application"
 	webhooksender "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/infrastructure/httpclient"
 	webhookspostgres "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/infrastructure/postgres"
@@ -196,8 +200,22 @@ func (w *Worker) tasks() ([]workerTask, error) {
 		notificationsRepo.SetWebPushSender(webPushSender)
 	}
 	notificationsService := notificationsapp.NewService(notificationsRepo)
+	rbacRepo := rbacpostgres.NewRepository(pool)
+	rbacService := rbacapp.NewService(rbacRepo)
+	authRepo := authpostgres.NewRepository(pool, w.cfg.Registration.DefaultWorkspaceID)
+	moderationRepo := moderationpostgres.NewRepository(pool)
 	messagesRepo := messagespostgres.NewRepository(pool)
-	messagesService := messagesapp.NewService(messagesRepo, nil)
+	messagesRepo.SetScheduledDeliveryLegalVersions(
+		w.cfg.Legal.TermsVersion,
+		w.cfg.Legal.PrivacyPolicyVersion,
+	)
+	messagesService := messagesapp.NewService(messagesRepo, rbacService)
+	messagesService.SetBlockChecker(moderationRepo)
+	messagesService.SetCurrentLegalAcceptanceChecker(scheduledMessageLegalAcceptanceChecker{
+		reader:         authRepo,
+		termsVersion:   w.cfg.Legal.TermsVersion,
+		privacyVersion: w.cfg.Legal.PrivacyPolicyVersion,
+	})
 	callsRepo := callspostgres.NewRepository(pool)
 	callsService := callsapp.NewService(callsRepo, nil, nil, notificationsService)
 	callsService.SetRingTimeout(w.cfg.Calls.RingTimeout)
@@ -212,6 +230,7 @@ func (w *Worker) tasks() ([]workerTask, error) {
 		webhooksender.NewSender(w.cfg.Security.WebhookSigningSecret),
 		w.cfg.Security.WebhookSigningSecret,
 	)
+	webhooksService.SetLegalDocumentVersions(w.cfg.Legal.TermsVersion, w.cfg.Legal.PrivacyPolicyVersion)
 	outboxRepo := outboxpostgres.NewRepository(pool)
 	outboxPublisher := outboxrabbitmq.NewPublisher(w.resources.RabbitMQ)
 	outboxService := outboxapp.NewService(outboxRepo, outboxPublisher, notificationsService, webhooksService)
@@ -227,6 +246,10 @@ func (w *Worker) tasks() ([]workerTask, error) {
 		StorageProvider: w.cfg.Storage.Provider,
 	})
 	limit := w.cfg.Worker.Concurrency * 10
+	moderationPurgeLimit := limit * 25
+	if moderationPurgeLimit < 100 {
+		moderationPurgeLimit = 100
+	}
 	nodeID := w.cfg.App.ServiceName
 	if nodeID == "" {
 		nodeID = "worker"
@@ -333,6 +356,39 @@ WHERE signal.id = expired.id
 `, limit)
 				if command.RowsAffected() > 0 {
 					slog.Debug("Purged expired WebRTC signaling records", "count", command.RowsAffected())
+				}
+				return err
+			},
+		},
+		{
+			name:     "moderation_evidence_retention",
+			interval: time.Minute,
+			run: func(ctx context.Context) error {
+				// Report status/reason/timestamps remain available for aggregate
+				// accountability, while user-supplied details and immutable content
+				// snapshots are redacted at the published evidence retention limit.
+				command, err := pool.Exec(ctx, `
+WITH expired AS (
+    SELECT report.id
+    FROM moderation_reports report
+    WHERE report.created_at < now() - ($1::bigint * interval '1 day')
+      AND (report.target_snapshot <> '{}'::jsonb OR report.details IS NOT NULL)
+    ORDER BY report.created_at, report.id
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE moderation_reports report
+SET target_snapshot = '{}'::jsonb,
+    details = NULL,
+    updated_at = now()
+FROM expired
+WHERE report.id = expired.id
+`, w.cfg.Moderation.EvidenceRetentionDays, moderationPurgeLimit)
+				if command.RowsAffected() > 0 {
+					slog.Info("Purged expired moderation evidence",
+						"count", command.RowsAffected(),
+						"retention_days", w.cfg.Moderation.EvidenceRetentionDays,
+					)
 				}
 				return err
 			},

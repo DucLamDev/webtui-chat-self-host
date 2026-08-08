@@ -43,33 +43,38 @@ func NewHandler(service *messagesapp.Service) *Handler {
 	return &Handler{service: service}
 }
 
-func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc, legalMiddleware ...gin.HandlerFunc) {
 	private := router.Group("/workspaces/:workspace_id")
 	private.Use(authMiddleware)
+	ugc := router.Group("/workspaces/:workspace_id")
+	ugc.Use(authMiddleware)
+	if len(legalMiddleware) > 0 && legalMiddleware[0] != nil {
+		ugc.Use(legalMiddleware[0])
+	}
 
 	private.GET("/messages/search", h.Search)
 	private.GET("/messages/scheduled", h.ListScheduledMessages)
-	private.POST("/messages/scheduled", h.ScheduleMessage)
+	ugc.POST("/messages/scheduled", h.ScheduleMessage)
 	private.DELETE("/messages/scheduled/:scheduled_message_id", h.CancelScheduledMessage)
 	private.GET("/messages/reminders", h.ListReminders)
 	private.DELETE("/messages/reminders/:reminder_id", h.CancelReminder)
 	private.GET("/threads", h.ListThreadDetails)
 	private.GET("/channels/:channel_id/messages", h.List)
-	private.POST("/channels/:channel_id/messages", h.Send)
+	ugc.POST("/channels/:channel_id/messages", h.Send)
 	private.GET("/channels/:channel_id/pins", h.ListPins)
 	private.GET("/channels/:channel_id/messages/:message_id", h.Get)
-	private.PATCH("/channels/:channel_id/messages/:message_id", h.Update)
+	ugc.PATCH("/channels/:channel_id/messages/:message_id", h.Update)
 	private.DELETE("/channels/:channel_id/messages/:message_id", h.Delete)
-	private.POST("/channels/:channel_id/messages/:message_id/forward", h.Forward)
-	private.POST("/channels/:channel_id/messages/:message_id/pin", h.Pin)
+	ugc.POST("/channels/:channel_id/messages/:message_id/forward", h.Forward)
+	ugc.POST("/channels/:channel_id/messages/:message_id/pin", h.Pin)
 	private.DELETE("/channels/:channel_id/messages/:message_id/pin", h.Unpin)
 	private.GET("/channels/:channel_id/messages/:message_id/thread", h.ListThread)
 	private.GET("/channels/:channel_id/messages/:message_id/thread/details", h.GetThreadDetails)
-	private.PUT("/channels/:channel_id/messages/:message_id/thread/details", h.UpsertThreadDetails)
+	ugc.PUT("/channels/:channel_id/messages/:message_id/thread/details", h.UpsertThreadDetails)
 	private.PUT("/channels/:channel_id/messages/:message_id/thread/subscription", h.SetThreadSubscription)
 	private.PUT("/channels/:channel_id/messages/:message_id/thread/read", h.MarkThreadRead)
 	private.POST("/channels/:channel_id/messages/:message_id/reminders", h.CreateReminder)
-	private.POST("/channels/:channel_id/messages/:message_id/reactions", h.AddReaction)
+	ugc.POST("/channels/:channel_id/messages/:message_id/reactions", h.AddReaction)
 	private.DELETE("/channels/:channel_id/messages/:message_id/reactions/:emoji", h.RemoveReaction)
 }
 

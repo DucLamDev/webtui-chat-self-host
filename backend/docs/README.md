@@ -8,6 +8,7 @@ Thư mục này chứa các quy ước kỹ thuật bắt buộc cho backend Web
 - [Auth, user và RBAC](auth-rbac.md)
 - [Workspace, phòng ban, kênh và direct message](workspace-channel.md)
 - [Tin nhắn, thread, mention và reaction](messages.md)
+- [UGC moderation, user blocking, and legal acceptance](moderation-user-safety.md)
 - [File, version và attachment](files.md)
 - [Notification, outbox, worker và presence](notifications-worker-presence.md)
 - [Bot, API token và webhook](integrations-phase-8.md)

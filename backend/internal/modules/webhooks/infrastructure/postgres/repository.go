@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	webhooksapp "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/application"
@@ -297,12 +299,20 @@ func (r *Repository) SendIncomingMessage(ctx context.Context, params webhooksapp
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
+	termsVersion, privacyVersion, err := integrationLegalVersions(params.TermsVersion, params.PrivacyVersion)
+	if err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
 
 	var webhookID string
 	var workspaceID string
 	var channelID string
+	var ownerUserID string
 	row := tx.QueryRow(ctx, `
-SELECT iw.id::text, iw.workspace_id::text, COALESCE(NULLIF($3, '')::uuid, iw.channel_id)::text
+SELECT iw.id::text,
+       iw.workspace_id::text,
+       COALESCE(NULLIF($3, '')::uuid, iw.channel_id)::text,
+       COALESCE(iw.created_by::text, '')
 FROM incoming_webhooks iw
 JOIN workspaces workspace
   ON workspace.id = iw.workspace_id
@@ -322,15 +332,37 @@ WHERE iw.id = $1::uuid
   AND iw.secret_hash = $2
   AND iw.status = 'active'
 `, params.WebhookID, params.SecretHash, params.ChannelID, params.ExpectedZoneID)
-	if err := row.Scan(&webhookID, &workspaceID, &channelID); err != nil {
+	if err := row.Scan(&webhookID, &workspaceID, &channelID, &ownerUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return webhooksdomain.IntegrationMessage{}, webhooksdomain.ErrIncomingWebhookNotFound
 		}
 		return webhooksdomain.IntegrationMessage{}, err
 	}
-
-	if _, err := tx.Exec(ctx, `UPDATE incoming_webhooks SET last_used_at = now() WHERE id = $1::uuid`, webhookID); err != nil {
+	if err := ensureIntegrationProducerEligibility(
+		ctx,
+		tx,
+		params.ExpectedZoneID,
+		workspaceID,
+		ownerUserID,
+	); err != nil {
 		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if err := ensureIntegrationChannel(ctx, tx, workspaceID, channelID); err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if err := ensureIncomingWebhookCredentialCurrent(ctx, tx, params, webhookID, workspaceID, channelID, ownerUserID); err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if err := ensureIntegrationLegalAcceptance(ctx, tx, workspaceID, ownerUserID, termsVersion, privacyVersion); err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+
+	command, err := tx.Exec(ctx, `UPDATE incoming_webhooks SET last_used_at = now() WHERE id = $1::uuid AND status = 'active'`, webhookID)
+	if err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return webhooksdomain.IntegrationMessage{}, webhooksdomain.ErrIncomingWebhookNotFound
 	}
 	metadata, err := mergeMetadata(params.Metadata, map[string]any{
 		"source":              "incoming_webhook",
@@ -363,6 +395,22 @@ func (r *Repository) SendIntegrationMessage(ctx context.Context, params webhooks
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
+	termsVersion, privacyVersion, err := integrationLegalVersions(params.TermsVersion, params.PrivacyVersion)
+	if err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if err := ensureIntegrationProducerEligibility(ctx, tx, params.ExpectedZoneID, params.WorkspaceID, params.OwnerUserID); err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if err := ensureIntegrationChannel(ctx, tx, params.WorkspaceID, params.ChannelID); err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if err := ensureAPITokenCredentialCurrent(ctx, tx, params); err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
+	if err := ensureIntegrationLegalAcceptance(ctx, tx, params.WorkspaceID, params.OwnerUserID, termsVersion, privacyVersion); err != nil {
+		return webhooksdomain.IntegrationMessage{}, err
+	}
 
 	metadata, err := mergeMetadata(params.Metadata, map[string]any{"source": "api_token"})
 	if err != nil {
@@ -550,6 +598,199 @@ SET attempt_count = attempt_count + 1,
 WHERE id = $1::uuid
 `, deliveryID, responseStatus, trimResponseBody(responseBody), int(retryAfter.Seconds()), maxRetries)
 	return err
+}
+
+func integrationLegalVersions(termsVersion string, privacyVersion string) (string, string, error) {
+	termsVersion = strings.TrimSpace(termsVersion)
+	privacyVersion = strings.TrimSpace(privacyVersion)
+	if termsVersion == "" || privacyVersion == "" {
+		return "", "", webhooksdomain.ErrIntegrationLegalUnavailable
+	}
+	return termsVersion, privacyVersion, nil
+}
+
+func ensureIntegrationProducerEligibility(
+	ctx context.Context,
+	tx pgx.Tx,
+	expectedZoneID string,
+	workspaceID string,
+	ownerUserID string,
+) error {
+	expectedZoneID = strings.TrimSpace(expectedZoneID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if expectedZoneID == "" || workspaceID == "" || ownerUserID == "" {
+		return webhooksdomain.ErrIntegrationCredentialStale
+	}
+
+	var activeMember bool
+	err := tx.QueryRow(ctx, `
+SELECT true
+FROM users producer
+JOIN workspace_members member
+  ON member.user_id = producer.id
+ AND member.workspace_id = $2::uuid
+ AND member.status = 'active'
+JOIN workspaces workspace
+  ON workspace.id = member.workspace_id
+ AND workspace.status = 'active'
+ AND workspace.deleted_at IS NULL
+JOIN zones zone
+  ON zone.id = workspace.zone_id
+ AND zone.status = 'active'
+ AND zone.deleted_at IS NULL
+WHERE producer.id = $1::uuid
+  AND producer.status = 'active'
+  AND producer.deleted_at IS NULL
+  AND workspace.zone_id = $3::uuid
+FOR SHARE OF producer, member, workspace, zone
+`, ownerUserID, workspaceID, expectedZoneID).Scan(&activeMember)
+	return integrationPolicyRowResult(activeMember, err, webhooksdomain.ErrIntegrationCredentialStale, "lock integration owner eligibility")
+}
+
+func ensureIntegrationChannel(ctx context.Context, tx pgx.Tx, workspaceID string, channelID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	channelID = strings.TrimSpace(channelID)
+	if workspaceID == "" || channelID == "" {
+		return webhooksdomain.ErrIntegrationChannelNotFound
+	}
+	var available bool
+	err := tx.QueryRow(ctx, `
+SELECT true
+FROM channels channel
+WHERE channel.workspace_id = $1::uuid
+  AND channel.id = $2::uuid
+  AND channel.status = 'active'
+  AND channel.deleted_at IS NULL
+FOR SHARE OF channel
+`, workspaceID, channelID).Scan(&available)
+	return integrationPolicyRowResult(available, err, webhooksdomain.ErrIntegrationChannelNotFound, "lock integration channel")
+}
+
+func ensureIncomingWebhookCredentialCurrent(
+	ctx context.Context,
+	tx pgx.Tx,
+	params webhooksapp.IncomingMessageParams,
+	webhookID string,
+	workspaceID string,
+	channelID string,
+	ownerUserID string,
+) error {
+	if strings.TrimSpace(webhookID) == "" || strings.TrimSpace(ownerUserID) == "" {
+		return webhooksdomain.ErrIntegrationCredentialStale
+	}
+	var current bool
+	err := tx.QueryRow(ctx, `
+SELECT true
+FROM incoming_webhooks webhook
+WHERE webhook.id = $1::uuid
+  AND webhook.workspace_id = $2::uuid
+  AND webhook.created_by = $3::uuid
+  AND webhook.secret_hash = $4
+  AND webhook.status = 'active'
+  AND (NULLIF($5, '') IS NOT NULL OR webhook.channel_id = $6::uuid)
+FOR UPDATE OF webhook
+`, webhookID, workspaceID, ownerUserID, params.SecretHash, params.ChannelID, channelID).Scan(&current)
+	return integrationPolicyRowResult(current, err, webhooksdomain.ErrIncomingWebhookNotFound, "lock incoming webhook credential")
+}
+
+func ensureAPITokenCredentialCurrent(ctx context.Context, tx pgx.Tx, params webhooksapp.IntegrationMessageParams) error {
+	tokenID := strings.TrimSpace(params.TokenID)
+	ownerUserID := strings.TrimSpace(params.OwnerUserID)
+	workspaceID := strings.TrimSpace(params.WorkspaceID)
+	expectedZoneID := strings.TrimSpace(params.ExpectedZoneID)
+	if tokenID == "" || ownerUserID == "" || workspaceID == "" || expectedZoneID == "" {
+		return webhooksdomain.ErrIntegrationCredentialStale
+	}
+
+	var current bool
+	err := tx.QueryRow(ctx, `
+SELECT true
+FROM api_tokens token
+JOIN workspaces workspace
+  ON workspace.id = token.workspace_id
+ AND workspace.status = 'active'
+ AND workspace.deleted_at IS NULL
+JOIN zones zone
+  ON zone.id = workspace.zone_id
+ AND zone.status = 'active'
+ AND zone.deleted_at IS NULL
+JOIN api_token_scopes token_scope
+  ON token_scope.api_token_id = token.id
+JOIN api_scopes scope
+  ON scope.id = token_scope.api_scope_id
+ AND scope.code = 'message.write'
+WHERE token.id = $1::uuid
+  AND token.workspace_id = $2::uuid
+  AND token.owner_id = $3::uuid
+  AND workspace.zone_id = $4::uuid
+  AND token.status = 'active'
+  AND (token.expires_at IS NULL OR token.expires_at > now())
+LIMIT 1
+FOR SHARE OF token, workspace, zone, token_scope, scope
+`, tokenID, workspaceID, ownerUserID, expectedZoneID).Scan(&current)
+	return integrationPolicyRowResult(current, err, webhooksdomain.ErrIntegrationCredentialStale, "lock API token integration credential")
+}
+
+func integrationPolicyRowResult(allowed bool, err error, rejected error, operation string) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rejected
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	if !allowed {
+		return rejected
+	}
+	return nil
+}
+
+func ensureIntegrationLegalAcceptance(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID string,
+	ownerUserID string,
+	termsVersion string,
+	privacyVersion string,
+) error {
+	rows, err := tx.Query(ctx, `
+SELECT acceptance.document_type, acceptance.document_version
+FROM user_legal_acceptances acceptance
+WHERE acceptance.user_id = $1::uuid
+  AND acceptance.workspace_id = $2::uuid
+  AND (
+      (acceptance.document_type = 'terms' AND acceptance.document_version = $3)
+      OR
+      (acceptance.document_type = 'privacy' AND acceptance.document_version = $4)
+  )
+FOR SHARE OF acceptance
+`, ownerUserID, workspaceID, termsVersion, privacyVersion)
+	if err != nil {
+		return fmt.Errorf("lock integration owner legal acceptance: %w", err)
+	}
+	defer rows.Close()
+
+	termsAccepted := false
+	privacyAccepted := false
+	for rows.Next() {
+		var documentType, documentVersion string
+		if err := rows.Scan(&documentType, &documentVersion); err != nil {
+			return fmt.Errorf("scan integration owner legal acceptance: %w", err)
+		}
+		switch {
+		case documentType == "terms" && documentVersion == termsVersion:
+			termsAccepted = true
+		case documentType == "privacy" && documentVersion == privacyVersion:
+			privacyAccepted = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read integration owner legal acceptance: %w", err)
+	}
+	if !termsAccepted || !privacyAccepted {
+		return webhooksdomain.ErrIntegrationLegalRequired
+	}
+	return nil
 }
 
 type commandExecutor interface {

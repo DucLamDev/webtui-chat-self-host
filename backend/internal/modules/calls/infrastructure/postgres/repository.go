@@ -106,7 +106,7 @@ RETURNING id::text, workspace_id::text, channel_id::text, initiator_user_id::tex
           client_call_id, mode, status, metadata::text, started_at, ended_at, created_at, updated_at
 `, params.WorkspaceID, params.CallID, params.Status, params.ActorUserID, params.ExpectedStatus)
 	call, err := scanCall(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, callsdomain.ErrCallNotFound) {
 		return callsdomain.Call{}, callsdomain.ErrCallInvalidTransition
 	}
 	return call, err
@@ -125,7 +125,7 @@ RETURNING id::text, workspace_id::text, channel_id::text, initiator_user_id::tex
           client_call_id, mode, status, metadata::text, started_at, ended_at, created_at, updated_at
 `, workspaceID, callID, before)
 	call, err := scanCall(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, callsdomain.ErrCallNotFound) {
 		return callsdomain.Call{}, callsdomain.ErrCallInvalidTransition
 	}
 	return call, err

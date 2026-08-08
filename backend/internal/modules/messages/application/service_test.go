@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -25,6 +26,186 @@ type testPermissionChecker struct {
 
 func (c testPermissionChecker) HasWorkspacePermission(context.Context, string, string, string) (bool, error) {
 	return c.allowed, nil
+}
+
+type staticMessageBlockChecker struct {
+	blocked         bool
+	blockedChannels map[string]bool
+}
+
+func (c staticMessageBlockChecker) IsDirectChannelBlocked(_ context.Context, _ string, channelID string, _ string) (bool, error) {
+	if c.blockedChannels != nil {
+		return c.blockedChannels[channelID], nil
+	}
+	return c.blocked, nil
+}
+
+type testLegalAcceptanceChecker struct {
+	accepted bool
+	err      error
+	calls    int
+}
+
+func (c *testLegalAcceptanceChecker) HasCurrentLegalAcceptances(context.Context, string, string) (bool, error) {
+	c.calls++
+	return c.accepted, c.err
+}
+
+func TestAuthorizeScheduledMessageDeliveryRechecksMutablePolicy(t *testing.T) {
+	delivery := ScheduledMessageDelivery{
+		WorkspaceID: "workspace-1",
+		ChannelID:   "channel-1",
+		SenderID:    "user-1",
+	}
+
+	tests := []struct {
+		name       string
+		permission bool
+		accepted   bool
+		blocked    bool
+		wantErr    error
+	}{
+		{name: "current policy permits delivery", permission: true, accepted: true},
+		{name: "revoked permission cancels delivery", accepted: true, wantErr: messagesdomain.ErrScheduledDeliveryPermissionRevoked},
+		{name: "stale legal acceptance cancels delivery", permission: true, wantErr: messagesdomain.ErrScheduledDeliveryLegalAcceptanceStale},
+		{name: "direct block cancels delivery", permission: true, accepted: true, blocked: true, wantErr: messagesdomain.ErrInteractionBlocked},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			legalChecker := &testLegalAcceptanceChecker{accepted: test.accepted}
+			service := NewService(nil, testPermissionChecker{allowed: test.permission})
+			service.SetCurrentLegalAcceptanceChecker(legalChecker)
+			service.SetBlockChecker(staticMessageBlockChecker{blocked: test.blocked})
+
+			err := service.AuthorizeScheduledMessageDelivery(context.Background(), delivery)
+			if test.wantErr == nil && err != nil {
+				t.Fatalf("AuthorizeScheduledMessageDelivery() error = %v, want nil", err)
+			}
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("AuthorizeScheduledMessageDelivery() error = %v, want %v", err, test.wantErr)
+			}
+			if !test.permission && legalChecker.calls != 0 {
+				t.Fatalf("legal checker calls = %d, want 0 after permission revocation", legalChecker.calls)
+			}
+		})
+	}
+}
+
+func TestAuthorizeScheduledMessageDeliveryFailsClosedWithoutPolicyCheckers(t *testing.T) {
+	delivery := ScheduledMessageDelivery{WorkspaceID: "workspace-1", ChannelID: "channel-1", SenderID: "user-1"}
+
+	if err := NewService(nil, nil).AuthorizeScheduledMessageDelivery(context.Background(), delivery); err == nil {
+		t.Fatal("AuthorizeScheduledMessageDelivery() error = nil without permission checker")
+	}
+	service := NewService(nil, testPermissionChecker{allowed: true})
+	if err := service.AuthorizeScheduledMessageDelivery(context.Background(), delivery); err == nil {
+		t.Fatal("AuthorizeScheduledMessageDelivery() error = nil without legal acceptance checker")
+	}
+}
+
+func TestSendRejectsBlockedDirectInteraction(t *testing.T) {
+	service := NewService(nil, testPermissionChecker{allowed: true})
+	service.SetBlockChecker(staticMessageBlockChecker{blocked: true})
+
+	_, err := service.Send(context.Background(), SendInput{
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", ChannelID: "channel-1", Body: "hello",
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" {
+		t.Fatalf("Send() error = %#v, want INTERACTION_BLOCKED", err)
+	}
+}
+
+func TestBlockedDirectConversationRejectsAllInteractiveMutations(t *testing.T) {
+	service := NewService(emptyMessageRepo{}, testPermissionChecker{allowed: true})
+	service.SetBlockChecker(staticMessageBlockChecker{blocked: true})
+	base := struct {
+		actor     string
+		workspace string
+		channel   string
+		message   string
+	}{"user-a", "workspace-1", "channel-1", "message-1"}
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "edit", run: func() error {
+			_, err := service.Update(context.Background(), UpdateInput{
+				ActorUserID: base.actor, WorkspaceID: base.workspace, ChannelID: base.channel, MessageID: base.message, Body: "edited",
+			})
+			return err
+		}},
+		{name: "pin", run: func() error {
+			_, err := service.Pin(context.Background(), PinInput{
+				ActorUserID: base.actor, WorkspaceID: base.workspace, ChannelID: base.channel, MessageID: base.message,
+			})
+			return err
+		}},
+		{name: "add reaction", run: func() error {
+			_, err := service.AddReaction(context.Background(), ReactionInput{
+				ActorUserID: base.actor, WorkspaceID: base.workspace, ChannelID: base.channel, MessageID: base.message, Emoji: "👍",
+			})
+			return err
+		}},
+		{name: "schedule", run: func() error {
+			_, err := service.ScheduleMessage(context.Background(), ScheduleMessageInput{
+				ActorUserID: base.actor, WorkspaceID: base.workspace, ChannelID: base.channel, Body: "later",
+			})
+			return err
+		}},
+		{name: "thread metadata", run: func() error {
+			_, err := service.UpsertThreadDetails(
+				context.Background(), base.actor, base.workspace, base.channel, base.message, "blocked", "", "open",
+			)
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var appErr *apperrors.AppError
+			if err := test.run(); !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" {
+				t.Fatalf("mutation error = %#v, want INTERACTION_BLOCKED", err)
+			}
+		})
+	}
+}
+
+func TestBlockedDirectConversationStillAllowsCleanupMutations(t *testing.T) {
+	repository := &cleanupMessageRepo{}
+	service := NewService(repository, testPermissionChecker{allowed: true})
+	service.SetBlockChecker(staticMessageBlockChecker{blocked: true})
+
+	if err := service.Unpin(context.Background(), PinInput{
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", ChannelID: "direct-1", MessageID: "message-1",
+	}); err != nil {
+		t.Fatalf("Unpin() error = %v", err)
+	}
+	if _, err := service.RemoveReaction(context.Background(), ReactionInput{
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", ChannelID: "direct-1", MessageID: "message-1", Emoji: "👍",
+	}); err != nil {
+		t.Fatalf("RemoveReaction() error = %v", err)
+	}
+	if repository.unpinCalls != 1 || repository.removeReactionCalls != 1 {
+		t.Fatalf("cleanup calls = unpin:%d reaction:%d, want 1 each", repository.unpinCalls, repository.removeReactionCalls)
+	}
+}
+
+func TestGroupChannelThreadMetadataIsUnaffectedByDirectBlockPolicy(t *testing.T) {
+	repository := &threadDetailsRepository{}
+	service := NewService(repository, testPermissionChecker{allowed: true})
+	service.SetBlockChecker(staticMessageBlockChecker{blockedChannels: map[string]bool{"direct-1": true}})
+
+	details, err := service.UpsertThreadDetails(
+		context.Background(), "user-a", "workspace-1", "group-1", "message-1", "Group thread", "Allowed", "open",
+	)
+	if err != nil {
+		t.Fatalf("UpsertThreadDetails() error = %v", err)
+	}
+	if repository.upsertCalls != 1 || details.ChannelID != "group-1" {
+		t.Fatalf("group upsert calls = %d, details = %#v", repository.upsertCalls, details)
+	}
 }
 
 type emptyMessageRepo struct{}
@@ -79,6 +260,49 @@ func (r emptyMessageRepo) AddReaction(context.Context, ReactionParams) (messages
 
 func (r emptyMessageRepo) RemoveReaction(context.Context, ReactionParams) (messagesdomain.Message, error) {
 	panic("không được gọi")
+}
+
+type cleanupMessageRepo struct {
+	emptyMessageRepo
+	unpinCalls          int
+	removeReactionCalls int
+}
+
+func (r *cleanupMessageRepo) Unpin(context.Context, PinParams) error {
+	r.unpinCalls++
+	return nil
+}
+
+func (r *cleanupMessageRepo) RemoveReaction(_ context.Context, params ReactionParams) (messagesdomain.Message, error) {
+	r.removeReactionCalls++
+	senderID := params.ActorUserID
+	now := time.Now().UTC()
+	return messagesdomain.Message{
+		ID:          params.MessageID,
+		WorkspaceID: params.WorkspaceID,
+		ChannelID:   params.ChannelID,
+		SenderID:    &senderID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, nil
+}
+
+type threadDetailsRepository struct {
+	emptyMessageRepo
+	ProductivityRepository
+	upsertCalls int
+}
+
+func (r *threadDetailsRepository) UpsertThreadDetails(_ context.Context, params UpsertThreadDetailsParams) (ThreadDetailsDTO, error) {
+	r.upsertCalls++
+	return ThreadDetailsDTO{
+		WorkspaceID:   params.WorkspaceID,
+		ChannelID:     params.ChannelID,
+		RootMessageID: params.RootID,
+		Title:         params.Title,
+		Description:   params.Description,
+		Status:        params.Status,
+	}, nil
 }
 
 type otherUserMessageRepo struct {

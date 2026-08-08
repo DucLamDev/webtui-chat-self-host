@@ -231,6 +231,56 @@ WHERE backup_job_id IS NULL
 		// metrics query after a migration or database incident.
 		gauges[0].Value = 0
 	}
+
+	var pendingReports, reviewingReports, urgentOpenReports int64
+	var urgentTriageOverdue, normalTriageOverdue, closureOverdue int64
+	var oldestOpenReportAge float64
+	if err := resources.Database.Pool().QueryRow(ctx, `
+SELECT
+    count(*) FILTER (WHERE status = 'pending'),
+    count(*) FILTER (WHERE status = 'reviewing'),
+    count(*) FILTER (
+        WHERE status IN ('pending', 'reviewing')
+          AND reason IN ('violence', 'illegal_content', 'sexual_content')
+    ),
+    count(*) FILTER (
+        WHERE status = 'pending'
+          AND reason IN ('violence', 'illegal_content', 'sexual_content')
+          AND created_at < now() - interval '4 hours'
+    ),
+    count(*) FILTER (
+        WHERE status = 'pending'
+          AND created_at < now() - interval '24 hours'
+    ),
+    count(*) FILTER (
+        WHERE status IN ('pending', 'reviewing')
+          AND created_at < now() - interval '72 hours'
+    ),
+    COALESCE(extract(epoch FROM (now() - min(created_at) FILTER (
+        WHERE status IN ('pending', 'reviewing')
+    ))), 0)
+FROM moderation_reports
+`).Scan(
+		&pendingReports,
+		&reviewingReports,
+		&urgentOpenReports,
+		&urgentTriageOverdue,
+		&normalTriageOverdue,
+		&closureOverdue,
+		&oldestOpenReportAge,
+	); err == nil {
+		gauges = append(gauges,
+			middleware.Gauge{Name: "webtui_moderation_reports", Help: "Current moderation reports by open status.", Labels: map[string]string{"status": "pending"}, Value: float64(pendingReports)},
+			middleware.Gauge{Name: "webtui_moderation_reports", Help: "Current moderation reports by open status.", Labels: map[string]string{"status": "reviewing"}, Value: float64(reviewingReports)},
+			middleware.Gauge{Name: "webtui_moderation_urgent_open_reports", Help: "Open reports in urgent safety reason categories.", Value: float64(urgentOpenReports)},
+			middleware.Gauge{Name: "webtui_moderation_urgent_triage_overdue", Help: "Urgent pending reports older than the four-hour triage SLO.", Value: float64(urgentTriageOverdue)},
+			middleware.Gauge{Name: "webtui_moderation_normal_triage_overdue", Help: "Pending reports older than the 24-hour triage SLO.", Value: float64(normalTriageOverdue)},
+			middleware.Gauge{Name: "webtui_moderation_closure_overdue", Help: "Open reports older than the 72-hour closure SLO.", Value: float64(closureOverdue)},
+			middleware.Gauge{Name: "webtui_moderation_oldest_open_age_seconds", Help: "Age of the oldest pending or reviewing moderation report.", Value: oldestOpenReportAge},
+		)
+	} else {
+		gauges[0].Value = 0
+	}
 	return gauges
 }
 

@@ -35,7 +35,9 @@ export { AuthScreen } from "./patterns/auth-screen";
 export type {
   AuthMode,
   AuthScreenProps,
+  LegalConsentValues,
   LoginFormValues,
+  RegistrationLegalNotice,
   RegisterFormValues
 } from "./patterns/auth-screen";
 export { cn } from "./lib/cn";

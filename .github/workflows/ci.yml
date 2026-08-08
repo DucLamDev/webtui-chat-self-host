@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Check required architecture files
         run: |
@@ -60,6 +60,7 @@ jobs:
           sh -n deploy/self-hosted/backup.sh
           sh -n deploy/self-hosted/restore.sh
           sh -n deploy/self-hosted/install.sh
+          sh -n deploy/self-hosted/check.sh
 
       - name: Validate self-host Compose profiles
         working-directory: deploy/self-hosted
@@ -112,6 +113,27 @@ jobs:
                   )
           PY
 
+      - name: Validate Caddy app-association routing
+        working-directory: deploy/self-hosted
+        run: |
+          docker run --rm \
+            -e INSTANCE_DOMAIN=chat.example.com \
+            -e LETSENCRYPT_EMAIL=admin@example.com \
+            -e PORTAL_DOMAIN=download.vpsttt.com \
+            -e WEBTUI_APP_LINK_HOST=chat.example.com \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Validate Prometheus alert rules
+        working-directory: deploy/self-hosted
+        run: |
+          docker run --rm \
+            -v "$PWD/observability/rules:/etc/prometheus/rules:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.13.0 \
+            check rules /etc/prometheus/rules/webtui-alerts.yml
+
   backend:
     name: Backend Go
     runs-on: ubuntu-latest
@@ -120,7 +142,7 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Check go.mod
         id: gomod
@@ -133,7 +155,7 @@ jobs:
 
       - name: Setup Go
         if: steps.gomod.outputs.exists == 'true'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -157,9 +179,14 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_PRIVACY_URL: https://download.vpsttt.com/privacy
+      NEXT_PUBLIC_PRIVACY_VERSION: "2026-08-07"
+      NEXT_PUBLIC_TERMS_URL: https://download.vpsttt.com/terms
+      NEXT_PUBLIC_TERMS_VERSION: "2026-08-07"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Check package.json
         id: package
@@ -172,7 +199,7 @@ jobs:
 
       - name: Setup Node
         if: steps.package.outputs.exists == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm

@@ -26,6 +26,14 @@ type PermissionChecker interface {
 	HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error)
 }
 
+type BlockChecker interface {
+	IsDirectChannelBlocked(ctx context.Context, workspaceID string, channelID string, actorUserID string) (bool, error)
+}
+
+type CurrentLegalAcceptanceChecker interface {
+	HasCurrentLegalAcceptances(ctx context.Context, userID string, workspaceID string) (bool, error)
+}
+
 type Repository interface {
 	Send(ctx context.Context, params SendParams) (messagesdomain.Message, error)
 	Get(ctx context.Context, params MessageRef) (messagesdomain.Message, error)
@@ -47,10 +55,12 @@ type ChannelMemberLister interface {
 }
 
 type Service struct {
-	repo           Repository
-	checker        PermissionChecker
-	realtime       RealtimePublisher
-	autoResponders []botauto.Responder
+	repo                   Repository
+	checker                PermissionChecker
+	realtime               RealtimePublisher
+	autoResponders         []botauto.Responder
+	blockChecker           BlockChecker
+	legalAcceptanceChecker CurrentLegalAcceptanceChecker
 }
 
 type SendInput struct {
@@ -76,6 +86,12 @@ type SendParams struct {
 	Body             string
 	Metadata         []byte
 	MentionedUserIDs []string
+	// Scheduled deliveries recheck mutable authorization inside the same
+	// database transaction that publishes the message. HTTP sends are already
+	// guarded by the application and legal middleware.
+	EnforceScheduledDeliveryPolicy bool
+	ScheduledTermsVersion          string
+	ScheduledPrivacyVersion        string
 }
 
 type MessageRef struct {
@@ -274,6 +290,65 @@ func NewService(repo Repository, checker PermissionChecker, realtime ...Realtime
 	return service
 }
 
+func (s *Service) SetBlockChecker(checker BlockChecker) {
+	s.blockChecker = checker
+}
+
+func (s *Service) SetCurrentLegalAcceptanceChecker(checker CurrentLegalAcceptanceChecker) {
+	s.legalAcceptanceChecker = checker
+}
+
+// AuthorizeScheduledMessageDelivery re-evaluates mutable policy at delivery
+// time. Scheduling a message is not a durable grant: a later role revocation,
+// legal-document rollover, or direct-user block must prevent publication.
+func (s *Service) AuthorizeScheduledMessageDelivery(ctx context.Context, delivery ScheduledMessageDelivery) error {
+	if s.checker == nil {
+		return errors.New("scheduled message permission checker is unavailable")
+	}
+	allowed, err := s.checker.HasWorkspacePermission(
+		ctx,
+		strings.TrimSpace(delivery.SenderID),
+		strings.TrimSpace(delivery.WorkspaceID),
+		"message.send",
+	)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return messagesdomain.ErrScheduledDeliveryPermissionRevoked
+	}
+	if s.legalAcceptanceChecker == nil {
+		return errors.New("scheduled message legal acceptance checker is unavailable")
+	}
+	accepted, err := s.legalAcceptanceChecker.HasCurrentLegalAcceptances(
+		ctx,
+		strings.TrimSpace(delivery.SenderID),
+		strings.TrimSpace(delivery.WorkspaceID),
+	)
+	if err != nil {
+		return err
+	}
+	if !accepted {
+		return messagesdomain.ErrScheduledDeliveryLegalAcceptanceStale
+	}
+	if s.blockChecker == nil {
+		return nil
+	}
+	blocked, err := s.blockChecker.IsDirectChannelBlocked(
+		ctx,
+		strings.TrimSpace(delivery.WorkspaceID),
+		strings.TrimSpace(delivery.ChannelID),
+		strings.TrimSpace(delivery.SenderID),
+	)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return messagesdomain.ErrInteractionBlocked
+	}
+	return nil
+}
+
 func (s *Service) SetAutoResponders(responders ...botauto.Responder) {
 	s.autoResponders = responders
 	activeCount := 0
@@ -290,6 +365,9 @@ func (s *Service) SetAutoResponders(responders ...botauto.Responder) {
 
 func (s *Service) Send(ctx context.Context, input SendInput) (MessageDTO, error) {
 	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "message.send"); err != nil {
+		return MessageDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 		return MessageDTO{}, err
 	}
 
@@ -495,6 +573,9 @@ func (s *Service) Forward(ctx context.Context, input ForwardInput) (MessageDTO, 
 	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "message.send"); err != nil {
 		return MessageDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.TargetChannelID, input.ActorUserID); err != nil {
+		return MessageDTO{}, err
+	}
 	params := ForwardParams{
 		WorkspaceID:     strings.TrimSpace(input.WorkspaceID),
 		SourceChannelID: strings.TrimSpace(input.ChannelID),
@@ -537,6 +618,9 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (MessageDTO, er
 		MessageID:   input.MessageID,
 		ActorUserID: input.ActorUserID,
 	})
+	if err := s.ensureDirectInteractionAllowed(ctx, ref.WorkspaceID, ref.ChannelID, ref.ActorUserID); err != nil {
+		return MessageDTO{}, err
+	}
 	message, err := s.repo.Get(ctx, ref)
 	if err != nil {
 		return MessageDTO{}, mapMessageError(err)
@@ -621,6 +705,9 @@ func (s *Service) Pin(ctx context.Context, input PinInput) (MessageDTO, error) {
 	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "message.send"); err != nil {
 		return MessageDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+		return MessageDTO{}, err
+	}
 	params := PinParams{
 		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
 		ChannelID:   strings.TrimSpace(input.ChannelID),
@@ -660,6 +747,9 @@ func (s *Service) Unpin(ctx context.Context, input PinInput) error {
 func (s *Service) AddReaction(ctx context.Context, input ReactionInput) (MessageDTO, error) {
 	params, err := s.validateReaction(ctx, input)
 	if err != nil {
+		return MessageDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 		return MessageDTO{}, err
 	}
 	message, err := s.repo.AddReaction(ctx, params)
@@ -709,6 +799,29 @@ func (s *Service) ensurePermission(ctx context.Context, userID string, workspace
 	}
 	if !allowed {
 		return apperrors.Forbidden("Bạn không có quyền thực hiện thao tác này.")
+	}
+	return nil
+}
+
+func (s *Service) ensureDirectInteractionAllowed(ctx context.Context, workspaceID string, channelID string, actorUserID string) error {
+	if s.blockChecker == nil {
+		return nil
+	}
+	blocked, err := s.blockChecker.IsDirectChannelBlocked(
+		ctx,
+		strings.TrimSpace(workspaceID),
+		strings.TrimSpace(channelID),
+		strings.TrimSpace(actorUserID),
+	)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return apperrors.New(
+			"INTERACTION_BLOCKED",
+			"This action cannot be completed because a block is active in the direct conversation.",
+			403,
+		)
 	}
 	return nil
 }
@@ -975,6 +1088,9 @@ func mapMessageError(err error) error {
 	}
 	if errors.Is(err, messagesdomain.ErrReactionNotFound) {
 		return apperrors.NotFound("REACTION_NOT_FOUND", "Không tìm thấy reaction.")
+	}
+	if errors.Is(err, messagesdomain.ErrInteractionBlocked) {
+		return apperrors.New("INTERACTION_BLOCKED", "This message action cannot be completed because a block is active in the direct conversation.", 403)
 	}
 	return err
 }

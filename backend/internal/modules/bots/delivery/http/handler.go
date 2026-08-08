@@ -57,9 +57,14 @@ func NewHandler(service *botsapp.Service) *Handler {
 	return &Handler{service: service}
 }
 
-func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc, legalMiddleware ...gin.HandlerFunc) {
 	private := router.Group("/workspaces/:workspace_id")
 	private.Use(authMiddleware)
+	ugc := router.Group("/workspaces/:workspace_id")
+	ugc.Use(authMiddleware)
+	if len(legalMiddleware) > 0 && legalMiddleware[0] != nil {
+		ugc.Use(legalMiddleware[0])
+	}
 	private.GET("/bots", h.ListBots)
 	private.POST("/bots", h.CreateBot)
 	private.GET("/bots/:bot_id/ai-config", h.GetAIConfig)
@@ -71,7 +76,7 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.POST("/bots/:bot_id/flows/:flow_id/test", h.TestFlow)
 	private.GET("/bots/:bot_id/installations", h.ListInstallations)
 	private.POST("/bots/:bot_id/installations", h.InstallBot)
-	private.POST("/bots/:bot_id/messages", h.SendMessage)
+	ugc.POST("/bots/:bot_id/messages", h.SendMessage)
 }
 
 func (h *Handler) CreateBot(c *gin.Context) {

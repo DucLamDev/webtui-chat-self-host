@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
+	"github.com/duclamdev/application-chat/backend/internal/shared/requestcontext"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,6 +19,7 @@ func RequestID() gin.HandlerFunc {
 		}
 
 		c.Set(requestIDKey, requestID)
+		c.Request = c.Request.WithContext(requestcontext.WithRequestID(c.Request.Context(), requestID))
 		c.Header(requestIDHeader, requestID)
 		c.Next()
 	}

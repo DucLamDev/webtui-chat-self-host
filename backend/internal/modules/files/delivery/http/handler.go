@@ -41,23 +41,28 @@ func NewHandler(service *filesapp.Service) *Handler {
 	return &Handler{service: service}
 }
 
-func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc, legalMiddleware ...gin.HandlerFunc) {
 	private := router.Group("/workspaces/:workspace_id")
 	private.Use(authMiddleware)
+	ugc := router.Group("/workspaces/:workspace_id")
+	ugc.Use(authMiddleware)
+	if len(legalMiddleware) > 0 && legalMiddleware[0] != nil {
+		ugc.Use(legalMiddleware[0])
+	}
 
 	private.GET("/files", h.List)
-	private.POST("/files", h.Upload)
-	private.POST("/files/uploads", h.CreateUploadSession)
+	ugc.POST("/files", h.Upload)
+	ugc.POST("/files/uploads", h.CreateUploadSession)
 	private.GET("/files/uploads/:upload_id", h.GetUploadSession)
-	private.PUT("/files/uploads/:upload_id/parts/:part_number", h.UploadPart)
-	private.POST("/files/uploads/:upload_id/complete", h.CompleteUpload)
+	ugc.PUT("/files/uploads/:upload_id/parts/:part_number", h.UploadPart)
+	ugc.POST("/files/uploads/:upload_id/complete", h.CompleteUpload)
 	private.DELETE("/files/uploads/:upload_id", h.CancelUpload)
 	private.GET("/files/:file_id", h.Get)
 	private.GET("/files/:file_id/download", h.Download)
 	private.GET("/files/:file_id/versions", h.ListVersions)
-	private.POST("/files/:file_id/versions", h.CreateVersion)
+	ugc.POST("/files/:file_id/versions", h.CreateVersion)
 	private.GET("/channels/:channel_id/messages/:message_id/attachments", h.ListAttachments)
-	private.POST("/channels/:channel_id/messages/:message_id/attachments", h.AttachFile)
+	ugc.POST("/channels/:channel_id/messages/:message_id/attachments", h.AttachFile)
 	private.GET("/channels/:channel_id/media", h.ListChannelMedia)
 }
 

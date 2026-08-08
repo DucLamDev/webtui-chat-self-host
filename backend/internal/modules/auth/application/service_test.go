@@ -3,22 +3,38 @@ package application
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	authdomain "github.com/duclamdev/application-chat/backend/internal/modules/auth/domain"
 	sharedauth "github.com/duclamdev/application-chat/backend/internal/shared/auth"
+	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
 type workspaceProvisioningRepo struct {
-	user              authdomain.User
-	provisionedUserID string
-	provisioningErr   error
-	createdSessions   int
-	target            ZoneAccess
+	user                   authdomain.User
+	provisionedUserID      string
+	provisioningErr        error
+	createdSessions        int
+	createdUsers           int
+	createdUserParams      CreateUserParams
+	findUserErr            error
+	target                 ZoneAccess
+	legalRecord            LegalAcceptanceRecord
+	legalParams            LegalAcceptanceParams
+	legalRecordCount       int
+	legalAccessAllowed     bool
+	legalAccessErr         error
+	legalAccessUserID      string
+	legalAccessWorkspaceID string
+	legalAccessZoneID      string
+	legalReadWorkspaceID   string
 }
 
-func (r *workspaceProvisioningRepo) CreateUser(context.Context, CreateUserParams) (authdomain.User, error) {
+func (r *workspaceProvisioningRepo) CreateUser(_ context.Context, params CreateUserParams) (authdomain.User, error) {
+	r.createdUsers++
+	r.createdUserParams = params
 	return r.user, nil
 }
 
@@ -53,6 +69,9 @@ func (r *workspaceProvisioningRepo) FindUserByID(context.Context, string) (authd
 }
 
 func (r *workspaceProvisioningRepo) FindUserByIdentifier(context.Context, string) (authdomain.User, error) {
+	if r.findUserErr != nil {
+		return authdomain.User{}, r.findUserErr
+	}
 	return r.user, nil
 }
 
@@ -98,6 +117,134 @@ func (r *workspaceProvisioningRepo) ListSessions(context.Context, string, string
 
 func (r *workspaceProvisioningRepo) RecordAudit(context.Context, AuditEvent) error {
 	return nil
+}
+
+func (r *workspaceProvisioningRepo) ReadCurrentLegalAcceptances(
+	_ context.Context,
+	_ string,
+	workspaceID string,
+	_ string,
+	_ string,
+) (LegalAcceptanceRecord, error) {
+	r.legalReadWorkspaceID = workspaceID
+	return r.legalRecord, nil
+}
+
+func (r *workspaceProvisioningRepo) CanAccessLegalAcceptance(_ context.Context, userID string, workspaceID string, zoneID string) (bool, error) {
+	r.legalAccessUserID = userID
+	r.legalAccessWorkspaceID = workspaceID
+	r.legalAccessZoneID = zoneID
+	return r.legalAccessAllowed, r.legalAccessErr
+}
+
+func (r *workspaceProvisioningRepo) RecordLegalAcceptances(_ context.Context, params LegalAcceptanceParams) error {
+	r.legalParams = params
+	r.legalRecordCount++
+	now := time.Now().UTC()
+	if params.TermsAccepted {
+		r.legalRecord.TermsAcceptedAt = &now
+	}
+	if params.PrivacyAccepted {
+		r.legalRecord.PrivacyAcceptedAt = &now
+	}
+	return nil
+}
+
+func TestExistingUserLegalAcceptanceStatusAndRecording(t *testing.T) {
+	repo := &workspaceProvisioningRepo{legalAccessAllowed: true}
+	service := NewService(repo, nil)
+	service.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+
+	status, err := service.GetCurrentLegalAcceptance(context.Background(), "user-1", "workspace-2", "zone-1")
+	if err != nil {
+		t.Fatalf("GetCurrentLegalAcceptance() error = %v", err)
+	}
+	if status.Complete || status.Terms.Accepted || status.Privacy.Accepted {
+		t.Fatalf("initial status = %#v, want incomplete", status)
+	}
+	if repo.legalRecordCount != 0 {
+		t.Fatal("status lookup must never backfill consent")
+	}
+
+	status, err = service.AcceptCurrentLegalDocuments(context.Background(), AcceptLegalDocumentsInput{
+		UserID: "user-1", WorkspaceID: "workspace-2", ZoneID: "zone-1",
+		TermsAccepted: true, TermsVersion: "terms-v2",
+		PrivacyAccepted: true, PrivacyVersion: "privacy-v3",
+		IPAddress: "127.0.0.1", UserAgent: "mobile-test",
+	})
+	if err != nil {
+		t.Fatalf("AcceptCurrentLegalDocuments() error = %v", err)
+	}
+	if !status.Complete || !status.Terms.Accepted || !status.Privacy.Accepted {
+		t.Fatalf("accepted status = %#v, want complete", status)
+	}
+	if repo.legalRecordCount != 1 || repo.legalParams.Source != "authenticated_acceptance" {
+		t.Fatalf("recorded legal params = %#v, count=%d", repo.legalParams, repo.legalRecordCount)
+	}
+	if status.WorkspaceID != "workspace-2" || repo.legalReadWorkspaceID != "workspace-2" ||
+		repo.legalParams.WorkspaceID != "workspace-2" || repo.legalParams.ZoneID != "zone-1" ||
+		repo.legalAccessUserID != "user-1" || repo.legalAccessWorkspaceID != "workspace-2" ||
+		repo.legalAccessZoneID != "zone-1" {
+		t.Fatalf("cross-workspace acceptance scope was not preserved: status=%#v params=%#v", status, repo.legalParams)
+	}
+}
+
+func TestExistingUserLegalAcceptanceRejectsMissingAndStaleConsent(t *testing.T) {
+	repo := &workspaceProvisioningRepo{legalAccessAllowed: true}
+	service := NewService(repo, nil)
+	service.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+
+	tests := []struct {
+		name  string
+		input AcceptLegalDocumentsInput
+		code  string
+	}{
+		{
+			name:  "missing acceptance",
+			input: AcceptLegalDocumentsInput{UserID: "user-1", WorkspaceID: "workspace-1", ZoneID: "zone-1"},
+			code:  "LEGAL_ACCEPTANCE_REQUIRED",
+		},
+		{
+			name:  "stale terms",
+			input: AcceptLegalDocumentsInput{UserID: "user-1", WorkspaceID: "workspace-1", ZoneID: "zone-1", TermsAccepted: true, TermsVersion: "terms-v1", PrivacyAccepted: true, PrivacyVersion: "privacy-v3"},
+			code:  "TERMS_VERSION_INVALID",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := service.AcceptCurrentLegalDocuments(context.Background(), test.input)
+			var appErr *apperrors.AppError
+			if !errors.As(err, &appErr) || appErr.Code != test.code {
+				t.Fatalf("error = %#v, want %s", err, test.code)
+			}
+		})
+	}
+	if repo.legalRecordCount != 0 {
+		t.Fatalf("invalid consent wrote %d records", repo.legalRecordCount)
+	}
+}
+
+func TestExistingUserLegalAcceptanceRejectsUnauthorizedWorkspace(t *testing.T) {
+	repo := &workspaceProvisioningRepo{legalAccessAllowed: false}
+	service := NewService(repo, nil)
+	service.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+
+	_, err := service.GetCurrentLegalAcceptance(context.Background(), "user-1", "workspace-other", "zone-1")
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Status != http.StatusForbidden || appErr.Code != "LEGAL_ACCEPTANCE_WORKSPACE_FORBIDDEN" {
+		t.Fatalf("GetCurrentLegalAcceptance() error = %#v, want workspace forbidden", err)
+	}
+	_, err = service.AcceptCurrentLegalDocuments(context.Background(), AcceptLegalDocumentsInput{
+		UserID: "user-1", WorkspaceID: "workspace-other", ZoneID: "zone-1",
+		TermsAccepted: true, TermsVersion: "terms-v2",
+		PrivacyAccepted: true, PrivacyVersion: "privacy-v3",
+	})
+	if !errors.As(err, &appErr) || appErr.Code != "LEGAL_ACCEPTANCE_WORKSPACE_FORBIDDEN" {
+		t.Fatalf("AcceptCurrentLegalDocuments() error = %#v, want workspace forbidden", err)
+	}
+	if repo.legalRecordCount != 0 {
+		t.Fatalf("unauthorized acceptance wrote %d records", repo.legalRecordCount)
+	}
 }
 
 func TestDetectDeviceName(t *testing.T) {
@@ -206,6 +353,143 @@ func TestNormalizeRegisterAllowsOptionalUsernameSeparators(t *testing.T) {
 	}
 }
 
+func TestValidateLegalAcceptancesRequiresCurrentVersionsForNewAccounts(t *testing.T) {
+	service := NewService(nil, nil)
+	service.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+
+	for _, test := range []struct {
+		name            string
+		termsAccepted   bool
+		termsVersion    string
+		privacyAccepted bool
+		privacyVersion  string
+		wantCode        string
+		wantStatus      int
+	}{
+		{name: "missing both", wantCode: "LEGAL_ACCEPTANCE_REQUIRED", wantStatus: http.StatusConflict},
+		{name: "terms false", privacyAccepted: true, privacyVersion: "privacy-v3", wantCode: "LEGAL_ACCEPTANCE_REQUIRED", wantStatus: http.StatusConflict},
+		{name: "privacy false", termsAccepted: true, termsVersion: "terms-v2", wantCode: "LEGAL_ACCEPTANCE_REQUIRED", wantStatus: http.StatusConflict},
+		{name: "stale terms", termsAccepted: true, termsVersion: "terms-v1", privacyAccepted: true, privacyVersion: "privacy-v3", wantCode: "TERMS_VERSION_INVALID", wantStatus: http.StatusBadRequest},
+		{name: "stale privacy", termsAccepted: true, termsVersion: "terms-v2", privacyAccepted: true, privacyVersion: "privacy-v2", wantCode: "PRIVACY_VERSION_INVALID", wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := service.validateLegalAcceptances(
+				test.termsAccepted,
+				test.termsVersion,
+				test.privacyAccepted,
+				test.privacyVersion,
+				true,
+			)
+			var appErr *apperrors.AppError
+			if !errors.As(err, &appErr) || appErr.Code != test.wantCode || appErr.Status != test.wantStatus {
+				t.Fatalf("error = %#v, want %s/%d", err, test.wantCode, test.wantStatus)
+			}
+		})
+	}
+
+	if err := service.validateLegalAcceptances(true, "terms-v2", true, "privacy-v3", true); err != nil {
+		t.Fatalf("current legal versions rejected: %v", err)
+	}
+	if err := service.validateLegalAcceptances(false, "", false, "", false); err != nil {
+		t.Fatalf("existing login without acceptance rejected: %v", err)
+	}
+}
+
+func TestGoogleLoginRequiresConsentOnlyWhenCreatingAccount(t *testing.T) {
+	user := authdomain.User{
+		ID:          "6c8dd8dd-e7c3-4fa9-9f95-1cdf312587ba",
+		Email:       "member@example.com",
+		Username:    "member",
+		DisplayName: "Member",
+		Status:      "active",
+	}
+	newUserRepo := &workspaceProvisioningRepo{user: user, findUserErr: authdomain.ErrUserNotFound}
+	newUserService := NewService(newUserRepo, sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour))
+	newUserService.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+	input := GoogleLoginInput{
+		Subject:       "google-subject-123",
+		Email:         user.Email,
+		EmailVerified: true,
+		DisplayName:   user.DisplayName,
+		Domain:        "chat.vpsttt.com",
+	}
+
+	_, err := newUserService.LoginWithGoogle(context.Background(), input)
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "LEGAL_ACCEPTANCE_REQUIRED" || appErr.Status != http.StatusConflict {
+		t.Fatalf("new Google account error = %#v, want LEGAL_ACCEPTANCE_REQUIRED/409", err)
+	}
+	if newUserRepo.createdUsers != 0 || newUserRepo.createdSessions != 0 {
+		t.Fatalf("missing consent created account/session: users=%d sessions=%d", newUserRepo.createdUsers, newUserRepo.createdSessions)
+	}
+
+	input.TermsAccepted = true
+	input.TermsVersion = "terms-v2"
+	input.PrivacyAccepted = true
+	input.PrivacyVersion = "privacy-v3"
+	if _, err := newUserService.LoginWithGoogle(context.Background(), input); err != nil {
+		t.Fatalf("Google signup retry with consent error = %v", err)
+	}
+	if newUserRepo.createdUsers != 1 || newUserRepo.createdSessions != 1 {
+		t.Fatalf("consented signup users=%d sessions=%d, want 1/1", newUserRepo.createdUsers, newUserRepo.createdSessions)
+	}
+	if !newUserRepo.createdUserParams.TermsAccepted || !newUserRepo.createdUserParams.PrivacyAccepted {
+		t.Fatalf("legal acceptance not passed transactionally: %+v", newUserRepo.createdUserParams)
+	}
+
+	existingRepo := &workspaceProvisioningRepo{user: user}
+	existingService := NewService(existingRepo, sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour))
+	existingService.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+	if _, err := existingService.LoginWithGoogle(context.Background(), GoogleLoginInput{
+		Subject:       input.Subject,
+		Email:         input.Email,
+		EmailVerified: true,
+		Domain:        input.Domain,
+	}); err != nil {
+		t.Fatalf("existing Google login without consent error = %v", err)
+	}
+	if existingRepo.createdUsers != 0 || existingRepo.createdSessions != 1 {
+		t.Fatalf("existing login users=%d sessions=%d, want 0/1", existingRepo.createdUsers, existingRepo.createdSessions)
+	}
+}
+
+func TestRegisterRejectsMissingOrStaleConsentBeforePersistence(t *testing.T) {
+	user := authdomain.User{
+		ID:          "6c8dd8dd-e7c3-4fa9-9f95-1cdf312587ba",
+		Email:       "new@example.com",
+		Username:    "new-user",
+		DisplayName: "New User",
+		Status:      "active",
+	}
+	repo := &workspaceProvisioningRepo{user: user}
+	service := NewService(repo, sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour))
+	service.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+	input := RegisterInput{
+		Email:       user.Email,
+		Username:    user.Username,
+		DisplayName: user.DisplayName,
+		Password:    "password-123",
+		Domain:      "chat.vpsttt.com",
+	}
+
+	_, err := service.Register(context.Background(), input)
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "LEGAL_ACCEPTANCE_REQUIRED" {
+		t.Fatalf("missing consent error = %#v", err)
+	}
+	input.TermsAccepted = true
+	input.TermsVersion = "terms-v1"
+	input.PrivacyAccepted = true
+	input.PrivacyVersion = "privacy-v3"
+	_, err = service.Register(context.Background(), input)
+	if !errors.As(err, &appErr) || appErr.Code != "TERMS_VERSION_INVALID" {
+		t.Fatalf("stale consent error = %#v", err)
+	}
+	if repo.createdUsers != 0 || repo.createdSessions != 0 {
+		t.Fatalf("invalid consent reached persistence: users=%d sessions=%d", repo.createdUsers, repo.createdSessions)
+	}
+}
+
 func TestGoogleUsernameIsStableAndValid(t *testing.T) {
 	username := googleUsername("Ho.Duc.Lam@example.com", "google-subject-123")
 	if !usernamePattern.MatchString(username) {
@@ -290,11 +574,15 @@ func TestSuspendedZoneAllowsExistingLoginOnlyForRecovery(t *testing.T) {
 	}
 
 	if _, err := service.Register(context.Background(), RegisterInput{
-		Email:       "new@example.com",
-		Username:    "new-user",
-		DisplayName: "New User",
-		Password:    "password-123",
-		Domain:      "chat.vpsttt.com",
+		Email:           "new@example.com",
+		Username:        "new-user",
+		DisplayName:     "New User",
+		Password:        "password-123",
+		Domain:          "chat.vpsttt.com",
+		TermsAccepted:   true,
+		TermsVersion:    defaultLegalDocumentVersion,
+		PrivacyAccepted: true,
+		PrivacyVersion:  defaultLegalDocumentVersion,
 	}); err == nil {
 		t.Fatal("Register() expected suspended zone error")
 	}

@@ -170,3 +170,32 @@ groups:
         annotations:
           summary: Database-backed operational metrics cannot be collected
           description: The API metrics endpoint could not query its operational counters.
+
+  - name: webtui-moderation
+    rules:
+      - alert: WebTuiModerationUrgentTriageOverdue
+        expr: webtui_moderation_urgent_triage_overdue > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: An urgent safety report has missed the four-hour triage SLO
+          description: Open the permissioned moderation queue immediately and assign every urgent pending report.
+
+      - alert: WebTuiModerationNormalTriageOverdue
+        expr: webtui_moderation_normal_triage_overdue > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A moderation report has missed the 24-hour triage SLO
+          description: An owner or admin with moderation.manage must review and assign the pending queue.
+
+      - alert: WebTuiModerationClosureOverdue
+        expr: webtui_moderation_closure_overdue > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A moderation report has remained open for more than 72 hours
+          description: Resolve or dismiss the report with a resolution note, or document the exceptional legal handling outside the report evidence field.

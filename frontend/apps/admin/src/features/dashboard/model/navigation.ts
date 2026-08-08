@@ -19,6 +19,11 @@ export const adminPageMeta = {
     label: "Kênh",
     title: "Quản trị kênh"
   },
+  moderation: {
+    description: "Tiếp nhận, xem xét và lưu kết quả xử lý báo cáo nội dung do người dùng tạo.",
+    label: "Kiểm duyệt",
+    title: "Hàng đợi kiểm duyệt"
+  },
   users: {
     description: "Quản lý tài khoản, lời mời và trạng thái truy cập workspace.",
     label: "Người dùng",
@@ -69,10 +74,22 @@ export const adminNavigationGroups: ReadonlyArray<{
   items: readonly AdminNavId[];
 }> = [
   { id: "monitoring", label: "Giám sát", items: ["overview", "push"] },
-  { id: "workspace", label: "Workspace", items: ["messages", "channels", "users", "roles"] },
+  { id: "workspace", label: "Workspace", items: ["moderation", "messages", "channels", "users", "roles"] },
   { id: "extensions", label: "Mở rộng", items: ["integrations", "automations", "bots"] },
   { id: "operations", label: "Vận hành", items: ["cronjobs", "backups", "settings"] }
 ];
+
+export const adminSectionRequiredPermissions: Partial<Record<AdminNavId, string>> = {
+  moderation: "moderation.manage"
+};
+
+export function canAccessAdminSection(
+  section: AdminNavId,
+  hasPermission: (permission: string) => boolean
+): boolean {
+  const permission = adminSectionRequiredPermissions[section];
+  return !permission || hasPermission(permission);
+}
 
 export function resolveAdminSection(value: string | null | undefined): AdminNavId {
   return value && Object.hasOwn(adminPageMeta, value) ? (value as AdminNavId) : "overview";

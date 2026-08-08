@@ -34,6 +34,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 var oidcSecretAliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var instanceDomainPattern = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 var pushRelayInstancePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+var policyVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 type Config struct {
 	App             AppConfig
@@ -57,6 +58,8 @@ type Config struct {
 	WebPush         WebPushConfig
 	Deployment      DeploymentConfig
 	Registration    RegistrationConfig
+	Legal           LegalConfig
+	Moderation      ModerationConfig
 	Order           OrderConfig
 }
 
@@ -238,6 +241,15 @@ type RegistrationConfig struct {
 	CustomDomainDNSTarget string
 }
 
+type LegalConfig struct {
+	TermsVersion         string
+	PrivacyPolicyVersion string
+}
+
+type ModerationConfig struct {
+	EvidenceRetentionDays int
+}
+
 type OrderConfig struct {
 	BaseURL        string
 	InternalAPIKey string
@@ -246,7 +258,7 @@ type OrderConfig struct {
 }
 
 func Load() (*Config, error) {
-	appEnv := getEnv("APP_ENV", "dev")
+	appEnv := strings.ToLower(strings.TrimSpace(getEnv("APP_ENV", "dev")))
 	serviceName := getEnv("SERVICE_NAME", "api")
 	deploymentMode := strings.ToLower(getEnv("DEPLOYMENT_MODE", "self_hosted"))
 	instanceDomainFallback := ""
@@ -262,6 +274,10 @@ func Load() (*Config, error) {
 	}
 	if deploymentMode == "saas" {
 		orderAPIBaseURLFallback = "https://order.vpsttt.com/api"
+	}
+	policyVersionFallback := "2026-08-07"
+	if appEnv == "production" {
+		policyVersionFallback = ""
 	}
 	corsAllowedOrigins := getEnvCSV("CORS_ALLOWED_ORIGINS", []string{})
 	if appEnv != "production" {
@@ -420,6 +436,13 @@ func Load() (*Config, error) {
 			CustomDomainDNSType:   strings.ToUpper(getEnv("CUSTOM_DOMAIN_DNS_TYPE", "")),
 			CustomDomainDNSTarget: getEnv("CUSTOM_DOMAIN_DNS_TARGET", ""),
 		},
+		Legal: LegalConfig{
+			TermsVersion:         strings.TrimSpace(getEnv("TERMS_VERSION", policyVersionFallback)),
+			PrivacyPolicyVersion: strings.TrimSpace(getEnv("PRIVACY_POLICY_VERSION", policyVersionFallback)),
+		},
+		Moderation: ModerationConfig{
+			EvidenceRetentionDays: getEnvInt("MODERATION_EVIDENCE_RETENTION_DAYS", 365),
+		},
 		Order: OrderConfig{
 			BaseURL:        getEnv("ORDER_API_BASE_URL", orderAPIBaseURLFallback),
 			InternalAPIKey: getEnv("ORDER_INTERNAL_API_KEY", ""),
@@ -444,6 +467,19 @@ func (c *Config) Validate() error {
 
 func (c *Config) validateApplicationService() error {
 	var problems []string
+	production := strings.EqualFold(strings.TrimSpace(c.App.Env), "production")
+	for name, version := range map[string]string{
+		"TERMS_VERSION":          c.Legal.TermsVersion,
+		"PRIVACY_POLICY_VERSION": c.Legal.PrivacyPolicyVersion,
+	} {
+		normalized := strings.ToLower(strings.TrimSpace(version))
+		invalid := !policyVersionPattern.MatchString(strings.TrimSpace(version))
+		placeholder := normalized == "change_me" || normalized == "changeme" || normalized == "todo" ||
+			normalized == "latest" || normalized == "dev" || normalized == "development" || normalized == "unknown"
+		if (production && (invalid || placeholder)) || (version != "" && invalid) {
+			problems = append(problems, name+" must be a non-placeholder policy version of 1-64 safe characters")
+		}
+	}
 
 	if c.App.Name == "" {
 		problems = append(problems, "APP_NAME không được để trống")
@@ -628,6 +664,9 @@ func (c *Config) validateApplicationService() error {
 	}
 	if c.Worker.Concurrency <= 0 {
 		problems = append(problems, "WORKER_CONCURRENCY phải lớn hơn 0")
+	}
+	if c.Moderation.EvidenceRetentionDays <= 0 || c.Moderation.EvidenceRetentionDays > 3650 {
+		problems = append(problems, "MODERATION_EVIDENCE_RETENTION_DAYS must be between 1 and 3650")
 	}
 	if strings.TrimSpace(c.Backup.PGDumpPath) == "" {
 		problems = append(problems, "BACKUP_PG_DUMP_PATH không được để trống")

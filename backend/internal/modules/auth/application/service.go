@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -16,11 +17,14 @@ import (
 	tenancyapp "github.com/duclamdev/application-chat/backend/internal/modules/tenancy/application"
 	sharedauth "github.com/duclamdev/application-chat/backend/internal/shared/auth"
 	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
+	"github.com/duclamdev/application-chat/backend/internal/shared/requestcontext"
 )
 
 // A username never needs a symbol. Dots, underscores and dashes are optional
 // separators for people who want them; plain letters and numbers are valid.
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{2,39}$`)
+
+const defaultLegalDocumentVersion = "2026-08-07"
 
 type Repository interface {
 	CreateUser(ctx context.Context, params CreateUserParams) (authdomain.User, error)
@@ -39,22 +43,53 @@ type Repository interface {
 	RecordAudit(ctx context.Context, event AuditEvent) error
 }
 
+type LegalAcceptanceRecorder interface {
+	RecordLegalAcceptances(ctx context.Context, params LegalAcceptanceParams) error
+}
+
+type LegalAcceptanceStatusReader interface {
+	ReadCurrentLegalAcceptances(
+		ctx context.Context,
+		userID string,
+		workspaceID string,
+		termsVersion string,
+		privacyVersion string,
+	) (LegalAcceptanceRecord, error)
+}
+
+type LegalAcceptanceAccessChecker interface {
+	CanAccessLegalAcceptance(ctx context.Context, userID string, workspaceID string, zoneID string) (bool, error)
+}
+
+var ErrLegalAcceptanceWorkspaceForbidden = errors.New("legal acceptance workspace is not accessible")
+
 type Service struct {
-	repo   Repository
-	tokens *sharedauth.Manager
-	now    func() time.Time
+	repo                 Repository
+	tokens               *sharedauth.Manager
+	now                  func() time.Time
+	termsVersion         string
+	privacyPolicyVersion string
+}
+
+type LegalDocumentVersions struct {
+	Terms         string `json:"terms"`
+	PrivacyPolicy string `json:"privacy_policy"`
 }
 
 type RegisterInput struct {
-	Email       string
-	Username    string
-	DisplayName string
-	Domain      string
-	InviteToken string
-	Password    string
-	DeviceName  string
-	IPAddress   string
-	UserAgent   string
+	Email           string
+	Username        string
+	DisplayName     string
+	Domain          string
+	InviteToken     string
+	Password        string
+	DeviceName      string
+	IPAddress       string
+	UserAgent       string
+	TermsAccepted   bool
+	TermsVersion    string
+	PrivacyAccepted bool
+	PrivacyVersion  string
 }
 
 type LoginInput struct {
@@ -67,15 +102,19 @@ type LoginInput struct {
 }
 
 type GoogleLoginInput struct {
-	Subject       string
-	Email         string
-	EmailVerified bool
-	DisplayName   string
-	AvatarURL     string
-	Domain        string
-	DeviceName    string
-	IPAddress     string
-	UserAgent     string
+	Subject         string
+	Email           string
+	EmailVerified   bool
+	DisplayName     string
+	AvatarURL       string
+	Domain          string
+	DeviceName      string
+	IPAddress       string
+	UserAgent       string
+	TermsAccepted   bool
+	TermsVersion    string
+	PrivacyAccepted bool
+	PrivacyVersion  string
 }
 
 type RefreshInput struct {
@@ -88,17 +127,21 @@ type LogoutInput struct {
 }
 
 type CreateUserParams struct {
-	Email         string
-	Username      string
-	DisplayName   string
-	PasswordHash  string
-	DeviceName    string
-	IPAddress     string
-	UserAgent     string
-	AvatarURL     string
-	EmailVerified bool
-	Zone          ZoneAccess
-	InviteToken   string
+	Email           string
+	Username        string
+	DisplayName     string
+	PasswordHash    string
+	DeviceName      string
+	IPAddress       string
+	UserAgent       string
+	AvatarURL       string
+	EmailVerified   bool
+	Zone            ZoneAccess
+	InviteToken     string
+	TermsAccepted   bool
+	TermsVersion    string
+	PrivacyAccepted bool
+	PrivacyVersion  string
 }
 
 type ZoneAccess struct {
@@ -150,6 +193,49 @@ type AuditEvent struct {
 	IPAddress   string
 	UserAgent   string
 	Metadata    map[string]any
+}
+
+type LegalAcceptanceParams struct {
+	UserID          string
+	WorkspaceID     string
+	ZoneID          string
+	TermsAccepted   bool
+	TermsVersion    string
+	PrivacyAccepted bool
+	PrivacyVersion  string
+	IPAddress       string
+	UserAgent       string
+	Source          string
+}
+
+type AcceptLegalDocumentsInput struct {
+	UserID          string
+	WorkspaceID     string
+	ZoneID          string
+	TermsAccepted   bool
+	TermsVersion    string
+	PrivacyAccepted bool
+	PrivacyVersion  string
+	IPAddress       string
+	UserAgent       string
+}
+
+type LegalAcceptanceRecord struct {
+	TermsAcceptedAt   *time.Time
+	PrivacyAcceptedAt *time.Time
+}
+
+type LegalDocumentAcceptanceDTO struct {
+	Version    string  `json:"version"`
+	Accepted   bool    `json:"accepted"`
+	AcceptedAt *string `json:"accepted_at,omitempty"`
+}
+
+type CurrentLegalAcceptanceDTO struct {
+	WorkspaceID string                     `json:"workspace_id"`
+	Complete    bool                       `json:"complete"`
+	Terms       LegalDocumentAcceptanceDTO `json:"terms"`
+	Privacy     LegalDocumentAcceptanceDTO `json:"privacy"`
 }
 
 type AuthResult struct {
@@ -218,15 +304,195 @@ type SessionDTO struct {
 
 func NewService(repo Repository, tokens *sharedauth.Manager) *Service {
 	return &Service{
-		repo:   repo,
-		tokens: tokens,
-		now:    time.Now,
+		repo:                 repo,
+		tokens:               tokens,
+		now:                  time.Now,
+		termsVersion:         defaultLegalDocumentVersion,
+		privacyPolicyVersion: defaultLegalDocumentVersion,
 	}
+}
+
+func (s *Service) SetLegalDocumentVersions(termsVersion string, privacyPolicyVersion string) {
+	if normalized := strings.TrimSpace(termsVersion); normalized != "" {
+		s.termsVersion = normalized
+	}
+	if normalized := strings.TrimSpace(privacyPolicyVersion); normalized != "" {
+		s.privacyPolicyVersion = normalized
+	}
+}
+
+func (s *Service) LegalDocumentVersions() LegalDocumentVersions {
+	return LegalDocumentVersions{
+		Terms:         s.termsVersion,
+		PrivacyPolicy: s.privacyPolicyVersion,
+	}
+}
+
+func (s *Service) GetCurrentLegalAcceptance(
+	ctx context.Context,
+	userID string,
+	workspaceID string,
+	zoneID string,
+) (CurrentLegalAcceptanceDTO, error) {
+	userID = strings.TrimSpace(userID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	zoneID = strings.TrimSpace(zoneID)
+	if userID == "" || workspaceID == "" {
+		return CurrentLegalAcceptanceDTO{}, apperrors.Unauthorized("A workspace-scoped session is required.")
+	}
+	if zoneID == "" {
+		return CurrentLegalAcceptanceDTO{}, apperrors.New("TOKEN_ZONE_REQUIRED", "Sign in again with a zone-scoped session.", 401)
+	}
+	if err := s.ensureLegalAcceptanceWorkspaceAccess(ctx, userID, workspaceID, zoneID); err != nil {
+		return CurrentLegalAcceptanceDTO{}, err
+	}
+	reader, ok := s.repo.(LegalAcceptanceStatusReader)
+	if !ok {
+		return CurrentLegalAcceptanceDTO{}, apperrors.ServiceUnavailable(
+			"LEGAL_ACCEPTANCE_UNAVAILABLE",
+			"Legal acceptance status is temporarily unavailable.",
+		)
+	}
+	record, err := reader.ReadCurrentLegalAcceptances(
+		ctx,
+		userID,
+		workspaceID,
+		s.termsVersion,
+		s.privacyPolicyVersion,
+	)
+	if err != nil {
+		return CurrentLegalAcceptanceDTO{}, err
+	}
+	status := CurrentLegalAcceptanceDTO{
+		WorkspaceID: workspaceID,
+		Terms: LegalDocumentAcceptanceDTO{
+			Version:    s.termsVersion,
+			Accepted:   record.TermsAcceptedAt != nil,
+			AcceptedAt: formatOptionalTime(record.TermsAcceptedAt),
+		},
+		Privacy: LegalDocumentAcceptanceDTO{
+			Version:    s.privacyPolicyVersion,
+			Accepted:   record.PrivacyAcceptedAt != nil,
+			AcceptedAt: formatOptionalTime(record.PrivacyAcceptedAt),
+		},
+	}
+	status.Complete = status.Terms.Accepted && status.Privacy.Accepted
+	return status, nil
+}
+
+func (s *Service) HasCurrentLegalAcceptances(ctx context.Context, userID string, workspaceID string, zoneID string) (bool, error) {
+	status, err := s.GetCurrentLegalAcceptance(ctx, userID, workspaceID, zoneID)
+	return status.Complete, err
+}
+
+func (s *Service) AcceptCurrentLegalDocuments(
+	ctx context.Context,
+	input AcceptLegalDocumentsInput,
+) (CurrentLegalAcceptanceDTO, error) {
+	input.UserID = strings.TrimSpace(input.UserID)
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.ZoneID = strings.TrimSpace(input.ZoneID)
+	input.TermsVersion = strings.TrimSpace(input.TermsVersion)
+	input.PrivacyVersion = strings.TrimSpace(input.PrivacyVersion)
+	input.IPAddress, input.UserAgent = strings.TrimSpace(input.IPAddress), strings.TrimSpace(input.UserAgent)
+	if input.UserID == "" || input.WorkspaceID == "" {
+		return CurrentLegalAcceptanceDTO{}, apperrors.Unauthorized("A workspace-scoped session is required.")
+	}
+	if input.ZoneID == "" {
+		return CurrentLegalAcceptanceDTO{}, apperrors.New("TOKEN_ZONE_REQUIRED", "Sign in again with a zone-scoped session.", 401)
+	}
+	if err := s.ensureLegalAcceptanceWorkspaceAccess(ctx, input.UserID, input.WorkspaceID, input.ZoneID); err != nil {
+		return CurrentLegalAcceptanceDTO{}, err
+	}
+	if err := s.validateLegalAcceptances(
+		input.TermsAccepted,
+		input.TermsVersion,
+		input.PrivacyAccepted,
+		input.PrivacyVersion,
+		true,
+	); err != nil {
+		return CurrentLegalAcceptanceDTO{}, err
+	}
+	recorder, ok := s.repo.(LegalAcceptanceRecorder)
+	if !ok {
+		return CurrentLegalAcceptanceDTO{}, apperrors.ServiceUnavailable(
+			"LEGAL_ACCEPTANCE_UNAVAILABLE",
+			"Legal acceptance recording is temporarily unavailable.",
+		)
+	}
+	if err := recorder.RecordLegalAcceptances(ctx, LegalAcceptanceParams{
+		UserID: input.UserID, WorkspaceID: input.WorkspaceID, ZoneID: input.ZoneID,
+		TermsAccepted: input.TermsAccepted, TermsVersion: input.TermsVersion,
+		PrivacyAccepted: input.PrivacyAccepted, PrivacyVersion: input.PrivacyVersion,
+		IPAddress: input.IPAddress, UserAgent: input.UserAgent, Source: "authenticated_acceptance",
+	}); err != nil {
+		if errors.Is(err, ErrLegalAcceptanceWorkspaceForbidden) {
+			return CurrentLegalAcceptanceDTO{}, legalAcceptanceWorkspaceForbidden()
+		}
+		return CurrentLegalAcceptanceDTO{}, err
+	}
+	auditEvent := AuditEvent{
+		ActorUserID: input.UserID, WorkspaceID: input.WorkspaceID, ZoneID: input.ZoneID,
+		Action: "auth.legal_acceptance", EntityType: "user", EntityID: input.UserID,
+		IPAddress: input.IPAddress, UserAgent: input.UserAgent,
+		Metadata: map[string]any{
+			"terms_version": input.TermsVersion, "privacy_version": input.PrivacyVersion,
+		},
+	}
+	if err := s.repo.RecordAudit(ctx, auditEvent); err != nil {
+		// Acceptance rows are the source of truth and have already committed.
+		// Do not make the client retry and risk confusing an idempotent consent
+		// flow, but keep supplementary audit degradation operator-visible.
+		slog.ErrorContext(ctx, "legal acceptance audit write failed after acceptance committed",
+			"error", err,
+			"action", auditEvent.Action,
+			"zone_id", input.ZoneID,
+			"workspace_id", input.WorkspaceID,
+			"actor_user_id", input.UserID,
+			"request_id", requestcontext.RequestID(ctx),
+		)
+	}
+	return s.GetCurrentLegalAcceptance(ctx, input.UserID, input.WorkspaceID, input.ZoneID)
+}
+
+func (s *Service) ensureLegalAcceptanceWorkspaceAccess(ctx context.Context, userID string, workspaceID string, zoneID string) error {
+	checker, ok := s.repo.(LegalAcceptanceAccessChecker)
+	if !ok {
+		return apperrors.ServiceUnavailable(
+			"LEGAL_ACCEPTANCE_UNAVAILABLE",
+			"Legal acceptance authorization is temporarily unavailable.",
+		)
+	}
+	allowed, err := checker.CanAccessLegalAcceptance(ctx, userID, workspaceID, zoneID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return legalAcceptanceWorkspaceForbidden()
+	}
+	return nil
+}
+
+func legalAcceptanceWorkspaceForbidden() error {
+	return apperrors.New(
+		"LEGAL_ACCEPTANCE_WORKSPACE_FORBIDDEN",
+		"You must be an active member of the requested workspace in the current zone.",
+		403,
+	)
 }
 
 func (s *Service) Register(ctx context.Context, input RegisterInput) (AuthResult, error) {
 	normalized, err := normalizeRegister(input)
 	if err != nil {
+		return AuthResult{}, err
+	}
+	if err := s.validateLegalAcceptances(
+		normalized.TermsAccepted,
+		normalized.TermsVersion,
+		normalized.PrivacyAccepted,
+		normalized.PrivacyVersion,
+		true,
+	); err != nil {
 		return AuthResult{}, err
 	}
 	target, err := s.resolveZoneAccess(ctx, normalized.Domain)
@@ -243,15 +509,19 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (AuthResult
 	}
 
 	user, err := s.repo.CreateUser(ctx, CreateUserParams{
-		Email:        normalized.Email,
-		Username:     normalized.Username,
-		DisplayName:  normalized.DisplayName,
-		PasswordHash: passwordHash,
-		DeviceName:   normalized.DeviceName,
-		IPAddress:    normalized.IPAddress,
-		UserAgent:    normalized.UserAgent,
-		Zone:         target,
-		InviteToken:  normalized.InviteToken,
+		Email:           normalized.Email,
+		Username:        normalized.Username,
+		DisplayName:     normalized.DisplayName,
+		PasswordHash:    passwordHash,
+		DeviceName:      normalized.DeviceName,
+		IPAddress:       normalized.IPAddress,
+		UserAgent:       normalized.UserAgent,
+		Zone:            target,
+		InviteToken:     normalized.InviteToken,
+		TermsAccepted:   normalized.TermsAccepted,
+		TermsVersion:    normalized.TermsVersion,
+		PrivacyAccepted: normalized.PrivacyAccepted,
+		PrivacyVersion:  normalized.PrivacyVersion,
 	})
 	if err != nil {
 		if errors.Is(err, authdomain.ErrUserAlreadyExists) {
@@ -373,6 +643,8 @@ func (s *Service) LoginWithGoogle(ctx context.Context, input GoogleLoginInput) (
 	input.Subject = strings.TrimSpace(input.Subject)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.AvatarURL = strings.TrimSpace(input.AvatarURL)
+	input.TermsVersion = strings.TrimSpace(input.TermsVersion)
+	input.PrivacyVersion = strings.TrimSpace(input.PrivacyVersion)
 	input.DeviceName, input.IPAddress, input.UserAgent = normalizeClientInfo(input.DeviceName, input.IPAddress, input.UserAgent)
 	if input.Subject == "" || !input.EmailVerified {
 		return AuthResult{}, apperrors.Unauthorized("Tài khoản Google chưa xác minh email.")
@@ -387,7 +659,17 @@ func (s *Service) LoginWithGoogle(ctx context.Context, input GoogleLoginInput) (
 	}
 
 	user, err := s.repo.FindUserByIdentifier(ctx, input.Email)
+	createdUser := false
 	if errors.Is(err, authdomain.ErrUserNotFound) {
+		if err := s.validateLegalAcceptances(
+			input.TermsAccepted,
+			input.TermsVersion,
+			input.PrivacyAccepted,
+			input.PrivacyVersion,
+			true,
+		); err != nil {
+			return AuthResult{}, err
+		}
 		if target.ZoneStatus != "active" {
 			return AuthResult{}, apperrors.Forbidden("Máy chủ đang tạm dừng và không nhận tài khoản Google mới.")
 		}
@@ -404,19 +686,37 @@ func (s *Service) LoginWithGoogle(ctx context.Context, input GoogleLoginInput) (
 			displayName = strings.Split(input.Email, "@")[0]
 		}
 		user, err = s.repo.CreateUser(ctx, CreateUserParams{
-			Email:         input.Email,
-			Username:      googleUsername(input.Email, input.Subject),
-			DisplayName:   displayName,
-			PasswordHash:  passwordHash,
-			DeviceName:    input.DeviceName,
-			IPAddress:     input.IPAddress,
-			UserAgent:     input.UserAgent,
-			AvatarURL:     input.AvatarURL,
-			EmailVerified: true,
-			Zone:          target,
+			Email:           input.Email,
+			Username:        googleUsername(input.Email, input.Subject),
+			DisplayName:     displayName,
+			PasswordHash:    passwordHash,
+			DeviceName:      input.DeviceName,
+			IPAddress:       input.IPAddress,
+			UserAgent:       input.UserAgent,
+			AvatarURL:       input.AvatarURL,
+			EmailVerified:   true,
+			Zone:            target,
+			TermsAccepted:   input.TermsAccepted,
+			TermsVersion:    input.TermsVersion,
+			PrivacyAccepted: input.PrivacyAccepted,
+			PrivacyVersion:  input.PrivacyVersion,
 		})
+		createdUser = err == nil
 		if errors.Is(err, authdomain.ErrUserAlreadyExists) {
 			user, err = s.repo.FindUserByIdentifier(ctx, input.Email)
+		}
+	} else if err == nil {
+		// Existing Google users must be able to log in without being forced back
+		// through registration consent. If they do submit a new acceptance, its
+		// version still has to match the server-advertised current document.
+		if err := s.validateLegalAcceptances(
+			input.TermsAccepted,
+			input.TermsVersion,
+			input.PrivacyAccepted,
+			input.PrivacyVersion,
+			false,
+		); err != nil {
+			return AuthResult{}, err
 		}
 	}
 	if err != nil {
@@ -427,6 +727,16 @@ func (s *Service) LoginWithGoogle(ctx context.Context, input GoogleLoginInput) (
 	}
 	if err := s.ensureZoneWorkspaceAccess(ctx, user.ID, target); err != nil {
 		return AuthResult{}, err
+	}
+	if recorder, ok := s.repo.(LegalAcceptanceRecorder); ok && !createdUser && (input.TermsAccepted || input.PrivacyAccepted) {
+		if err := recorder.RecordLegalAcceptances(ctx, LegalAcceptanceParams{
+			UserID: user.ID, WorkspaceID: target.WorkspaceID, ZoneID: target.ZoneID,
+			TermsAccepted: input.TermsAccepted, TermsVersion: input.TermsVersion,
+			PrivacyAccepted: input.PrivacyAccepted, PrivacyVersion: input.PrivacyVersion,
+			IPAddress: input.IPAddress, UserAgent: input.UserAgent, Source: "google_login",
+		}); err != nil {
+			return AuthResult{}, err
+		}
 	}
 
 	result, err := s.issueTokens(ctx, user, target, input.DeviceName, input.IPAddress, input.UserAgent)
@@ -694,6 +1004,8 @@ func normalizeRegister(input RegisterInput) (RegisterInput, error) {
 	input.Domain = strings.TrimSpace(input.Domain)
 	input.InviteToken = strings.TrimSpace(input.InviteToken)
 	input.Password = strings.TrimSpace(input.Password)
+	input.TermsVersion = strings.TrimSpace(input.TermsVersion)
+	input.PrivacyVersion = strings.TrimSpace(input.PrivacyVersion)
 	input.DeviceName, input.IPAddress, input.UserAgent = normalizeClientInfo(input.DeviceName, input.IPAddress, input.UserAgent)
 
 	if _, err := mail.ParseAddress(input.Email); err != nil {
@@ -714,6 +1026,30 @@ func normalizeRegister(input RegisterInput) (RegisterInput, error) {
 		return input, apperrors.BadRequest("VALIDATION_ERROR", "Mật khẩu phải có ít nhất 8 ký tự.")
 	}
 	return input, nil
+}
+
+func (s *Service) validateLegalAcceptances(
+	termsAccepted bool,
+	termsVersion string,
+	privacyAccepted bool,
+	privacyVersion string,
+	required bool,
+) error {
+	termsVersion = strings.TrimSpace(termsVersion)
+	privacyVersion = strings.TrimSpace(privacyVersion)
+	if required && (!termsAccepted || !privacyAccepted) {
+		return apperrors.Conflict(
+			"LEGAL_ACCEPTANCE_REQUIRED",
+			"Accept the current Terms, Acceptable Use Policy, and Privacy Policy before creating an account.",
+		)
+	}
+	if termsAccepted && termsVersion != s.termsVersion {
+		return apperrors.BadRequest("TERMS_VERSION_INVALID", "Accept the current Terms and Acceptable Use Policy version before registering.")
+	}
+	if privacyAccepted && privacyVersion != s.privacyPolicyVersion {
+		return apperrors.BadRequest("PRIVACY_VERSION_INVALID", "Acknowledge the current Privacy Policy version before registering.")
+	}
+	return nil
 }
 
 func normalizeLogin(input LoginInput) LoginInput {

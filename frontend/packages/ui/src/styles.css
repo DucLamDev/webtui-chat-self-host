@@ -922,6 +922,36 @@ a {
   width: 16px;
 }
 
+.auth-legal-consent {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border, #d9dee8);
+  border-radius: 10px;
+}
+
+.auth-legal-consent legend {
+  padding: 0 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.auth-legal-consent p {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.auth-check--legal {
+  align-items: flex-start;
+  line-height: 1.45;
+}
+
+.auth-check--legal a {
+  color: var(--primary, #315efb);
+  font-weight: 700;
+}
+
 .auth-error {
   background: #fff8f7;
   border: 1px solid #fecdca;

@@ -14,6 +14,10 @@ type ChatRouteSearchParams = {
   get: (name: string) => string | null;
 };
 
+export function isAccountDeletionRoute(searchParams?: ChatRouteSearchParams) {
+  return searchParams?.get("account_action") === "delete";
+}
+
 export function parseChatRoute(pathname: string, searchParams?: ChatRouteSearchParams): ParsedChatRoute | null {
   const segments = pathname.split("/").filter(Boolean).map(safeDecode);
   if (segments[0] !== "chat" || !segments[1]) {

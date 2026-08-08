@@ -48,6 +48,7 @@ export type PermissionCode =
   | "channel.delete"
   | "message.send"
   | "message.manage"
+  | "moderation.manage"
   | "file.upload"
   | "api_token.manage"
   | "bot.manage"

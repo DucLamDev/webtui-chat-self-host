@@ -287,8 +287,8 @@ FOR UPDATE
 			}
 		}
 	case errors.Is(err, authdomain.ErrUserNotFound):
-		if !jitProvisioning {
-			return authdomain.User{}, authapp.ErrOIDCJITDisabled
+		if err := oidcNewUserProvisioningPolicy(jitProvisioning); err != nil {
+			return authdomain.User{}, err
 		}
 		user, err = createOIDCUser(ctx, tx, params)
 		if err != nil {
@@ -330,6 +330,19 @@ ON CONFLICT (provider_id, subject) DO NOTHING
 		return authdomain.User{}, err
 	}
 	return user, nil
+}
+
+// OIDC JIT account creation is intentionally fail-closed for this release.
+// The current redirect/result flow cannot persist versioned Terms/AUP and
+// Privacy acceptance transactionally. Existing linked identities and verified
+// emails may still sign in, while a genuinely new identity must first use a
+// registration flow that records consent. This policy function is the single
+// switch to replace when OIDC carries that acceptance end-to-end.
+func oidcNewUserProvisioningPolicy(jitProvisioning bool) error {
+	if !jitProvisioning {
+		return authapp.ErrOIDCJITDisabled
+	}
+	return authapp.ErrOIDCJITLegalBlocked
 }
 
 func findOIDCIdentityUser(

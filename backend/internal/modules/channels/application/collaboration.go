@@ -79,11 +79,16 @@ type SetPublicLinkParams struct {
 }
 
 type CreateGuestRequestParams struct {
-	ChannelID       string
-	DisplayName     string
-	Status          string
-	AccessTokenHash string
-	ExpiresAt       time.Time
+	ChannelID            string
+	DisplayName          string
+	Status               string
+	AccessTokenHash      string
+	TermsVersion         string
+	PrivacyPolicyVersion string
+	LegalAcceptedAt      time.Time
+	LegalIPAddress       string
+	LegalUserAgent       string
+	ExpiresAt            time.Time
 }
 
 type UpdateGuestRequestStatusParams struct {
@@ -275,9 +280,15 @@ type CreatePublicLinkInput struct {
 }
 
 type JoinPublicRoomInput struct {
-	PublicToken string
-	DisplayName string
-	Password    string
+	PublicToken     string
+	DisplayName     string
+	Password        string
+	TermsAccepted   bool
+	TermsVersion    string
+	PrivacyAccepted bool
+	PrivacyVersion  string
+	IPAddress       string
+	UserAgent       string
 }
 
 type UpdateCollaborationDocumentInput struct {
@@ -325,6 +336,11 @@ func (s *Service) UpdateCollaborationSettings(ctx context.Context, input UpdateC
 	if err := s.ensureCanManageCollaboration(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
 		return CollaborationSettingsDTO{}, err
 	}
+	if !isCollaborationSafetyLockdown(input) {
+		if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+			return CollaborationSettingsDTO{}, err
+		}
+	}
 	channel, err := s.repo.FindChannel(ctx, strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ChannelID))
 	if err != nil {
 		return CollaborationSettingsDTO{}, mapChannelError(err)
@@ -362,8 +378,17 @@ func (s *Service) UpdateCollaborationSettings(ctx context.Context, input UpdateC
 	return toCollaborationSettingsDTO(settings, true, s.meetingBaseURL), nil
 }
 
+func isCollaborationSafetyLockdown(input UpdateCollaborationSettingsInput) bool {
+	return normalizeRoomMode(input.RoomMode) == "internal" && input.LobbyEnabled && input.ChatLocked &&
+		!input.GuestMicrophoneEnabled && !input.GuestCameraEnabled &&
+		normalizeCollaborationRole(input.DefaultParticipantRole) == "listener"
+}
+
 func (s *Service) PromoteDirectConversation(ctx context.Context, actorUserID string, workspaceID string, channelID string, name string) (CollaborationSettingsDTO, error) {
 	if err := s.ensureCanManageCollaboration(ctx, actorUserID, workspaceID, channelID); err != nil {
+		return CollaborationSettingsDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
 		return CollaborationSettingsDTO{}, err
 	}
 	channel, err := s.repo.FindChannel(ctx, strings.TrimSpace(workspaceID), strings.TrimSpace(channelID))
@@ -391,6 +416,9 @@ func (s *Service) PromoteDirectConversation(ctx context.Context, actorUserID str
 
 func (s *Service) CreatePublicLink(ctx context.Context, input CreatePublicLinkInput) (PublicLinkDTO, error) {
 	if err := s.ensureCanManageCollaboration(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
+		return PublicLinkDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 		return PublicLinkDTO{}, err
 	}
 	channel, err := s.repo.FindChannel(ctx, strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ChannelID))
@@ -462,6 +490,9 @@ func (s *Service) JoinPublicRoom(ctx context.Context, input JoinPublicRoomInput)
 	if err != nil {
 		return GuestRequestDTO{}, err
 	}
+	if err := s.validateGuestLegalAcceptance(input); err != nil {
+		return GuestRequestDTO{}, err
+	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if len([]rune(displayName)) < 2 || len([]rune(displayName)) > 80 {
 		return GuestRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Tên khách phải có từ 2 đến 80 ký tự.")
@@ -477,12 +508,18 @@ func (s *Service) JoinPublicRoom(ctx context.Context, input JoinPublicRoomInput)
 	if settings.LobbyEnabled {
 		status = "waiting"
 	}
+	now := time.Now().UTC()
 	guest, err := s.collaborationRepository().CreateGuestRequest(ctx, CreateGuestRequestParams{
-		ChannelID:       settings.ChannelID,
-		DisplayName:     displayName,
-		Status:          status,
-		AccessTokenHash: hashOpaqueToken(accessToken),
-		ExpiresAt:       time.Now().UTC().Add(guestAccessLifetime),
+		ChannelID:            settings.ChannelID,
+		DisplayName:          displayName,
+		Status:               status,
+		AccessTokenHash:      hashOpaqueToken(accessToken),
+		TermsVersion:         strings.TrimSpace(input.TermsVersion),
+		PrivacyPolicyVersion: strings.TrimSpace(input.PrivacyVersion),
+		LegalAcceptedAt:      now,
+		LegalIPAddress:       strings.TrimSpace(input.IPAddress),
+		LegalUserAgent:       strings.TrimSpace(input.UserAgent),
+		ExpiresAt:            now.Add(guestAccessLifetime),
 	})
 	if err != nil {
 		return GuestRequestDTO{}, err
@@ -516,12 +553,41 @@ func (s *Service) GetPublicJoinStatus(ctx context.Context, publicToken string, r
 		}
 		return GuestRequestDTO{}, err
 	}
+	if guest.TermsVersion == nil || guest.PrivacyPolicyVersion == nil || guest.LegalAcceptedAt == nil ||
+		*guest.TermsVersion != s.termsVersion || *guest.PrivacyPolicyVersion != s.privacyPolicyVersion {
+		return GuestRequestDTO{}, apperrors.Conflict(
+			"LEGAL_ACCEPTANCE_REQUIRED",
+			"Accept the current Terms, Acceptable Use Policy, and Privacy Policy before joining this public room.",
+		)
+	}
 	dto := toGuestRequestDTO(guest)
 	if guest.Status == "approved" && guest.ExpiresAt.After(time.Now().UTC()) {
 		room := toPublicRoomDTO(settings, true, s.meetingBaseURL)
 		dto.Room = &room
 	}
 	return dto, nil
+}
+
+func (s *Service) validateGuestLegalAcceptance(input JoinPublicRoomInput) error {
+	if s.termsVersion == "" || s.privacyPolicyVersion == "" {
+		return apperrors.ServiceUnavailable(
+			"LEGAL_DOCUMENTS_UNAVAILABLE",
+			"The current Terms and Privacy Policy versions are not configured.",
+		)
+	}
+	if !input.TermsAccepted || !input.PrivacyAccepted {
+		return apperrors.Conflict(
+			"LEGAL_ACCEPTANCE_REQUIRED",
+			"Accept the current Terms, Acceptable Use Policy, and Privacy Policy before joining this public room.",
+		)
+	}
+	if strings.TrimSpace(input.TermsVersion) != s.termsVersion {
+		return apperrors.BadRequest("TERMS_VERSION_INVALID", "Accept the current Terms and Acceptable Use Policy version before joining.")
+	}
+	if strings.TrimSpace(input.PrivacyVersion) != s.privacyPolicyVersion {
+		return apperrors.BadRequest("PRIVACY_VERSION_INVALID", "Acknowledge the current Privacy Policy version before joining.")
+	}
+	return nil
 }
 
 func (s *Service) ListGuestRequests(ctx context.Context, actorUserID string, workspaceID string, channelID string) ([]GuestRequestDTO, error) {
@@ -545,6 +611,11 @@ func (s *Service) ModerateGuestRequest(ctx context.Context, actorUserID string, 
 	}
 	if status != "approved" && status != "rejected" {
 		return GuestRequestDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Trạng thái duyệt khách không hợp lệ.")
+	}
+	if status == "approved" {
+		if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+			return GuestRequestDTO{}, err
+		}
 	}
 	guest, err := s.collaborationRepository().UpdateGuestRequestStatus(ctx, UpdateGuestRequestStatusParams{
 		WorkspaceID: strings.TrimSpace(workspaceID),
@@ -585,6 +656,11 @@ func (s *Service) UpdateCollaborationRole(ctx context.Context, actorUserID strin
 	if role == "" {
 		return CollaborationRoleDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Vai trò cuộc họp không hợp lệ.")
 	}
+	if role != "listener" {
+		if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+			return CollaborationRoleDTO{}, err
+		}
+	}
 	member, err := s.repo.FindMember(ctx, strings.TrimSpace(workspaceID), strings.TrimSpace(channelID), strings.TrimSpace(userID))
 	if err != nil || (member.Status != "active" && member.Status != "muted") {
 		return CollaborationRoleDTO{}, apperrors.NotFound("CHANNEL_MEMBER_NOT_FOUND", "Người dùng chưa phải thành viên hoạt động của phòng.")
@@ -619,6 +695,9 @@ func (s *Service) GetCollaborationDocument(ctx context.Context, actorUserID stri
 
 func (s *Service) UpdateCollaborationDocument(ctx context.Context, input UpdateCollaborationDocumentInput) (CollaborationDocumentDTO, error) {
 	if err := s.ensureCollaborationMember(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
+		return CollaborationDocumentDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 		return CollaborationDocumentDTO{}, err
 	}
 	kind := normalizeDocumentKind(input.Kind)
@@ -664,6 +743,9 @@ func (s *Service) CreateChannelTask(ctx context.Context, input CreateChannelTask
 	if err := s.ensureCollaborationMember(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
 		return ChannelTaskDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+		return ChannelTaskDTO{}, err
+	}
 	title := strings.TrimSpace(input.Title)
 	if title == "" || len([]rune(title)) > 240 {
 		return ChannelTaskDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Tiêu đề công việc phải có từ 1 đến 240 ký tự.")
@@ -693,6 +775,9 @@ func (s *Service) CreateChannelTask(ctx context.Context, input CreateChannelTask
 
 func (s *Service) UpdateChannelTask(ctx context.Context, input UpdateChannelTaskInput) (ChannelTaskDTO, error) {
 	if err := s.ensureCollaborationMember(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
+		return ChannelTaskDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 		return ChannelTaskDTO{}, err
 	}
 	status := strings.TrimSpace(input.Status)
@@ -756,6 +841,9 @@ func (s *Service) ListBreakoutRooms(ctx context.Context, actorUserID string, wor
 
 func (s *Service) CreateBreakoutRoom(ctx context.Context, actorUserID string, workspaceID string, channelID string, name string, assignedUserIDs []string) (BreakoutRoomDTO, error) {
 	if err := s.ensureCanManageCollaboration(ctx, actorUserID, workspaceID, channelID); err != nil {
+		return BreakoutRoomDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
 		return BreakoutRoomDTO{}, err
 	}
 	channel, err := s.repo.FindChannel(ctx, strings.TrimSpace(workspaceID), strings.TrimSpace(channelID))

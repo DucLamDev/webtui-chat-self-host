@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "@webtui/api-client";
 import { createPermissionSet, hasPermission, type PermissionCode } from "@webtui/types";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/features/auth/auth-store";
 import { buildChatRoute, parseChatRoute } from "@/lib/chat-route";
 import {
   isLikelyOfflineError,
@@ -17,6 +18,8 @@ import {
 export type PermissionValue = PermissionCode | string;
 
 export function useWorkspaceContext() {
+  const activeWorkspaceId = useAuthStore((state) => state.workspaceId);
+  const setActiveWorkspaceId = useAuthStore((state) => state.setActiveWorkspaceId);
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -63,6 +66,12 @@ export function useWorkspaceContext() {
     workspaces.find((workspace) => workspace.id === resolvedWorkspaceId) ??
     (cachedShell?.selectedWorkspace?.id === resolvedWorkspaceId ? cachedShell.selectedWorkspace : null);
   const workspaceId = selectedWorkspace?.id ?? resolvedWorkspaceId;
+
+  useEffect(() => {
+    if (workspaceId && workspaceId !== activeWorkspaceId) {
+      setActiveWorkspaceId(workspaceId);
+    }
+  }, [activeWorkspaceId, setActiveWorkspaceId, workspaceId]);
 
   const permissionsQuery = useQuery({
     enabled: Boolean(workspaceId),

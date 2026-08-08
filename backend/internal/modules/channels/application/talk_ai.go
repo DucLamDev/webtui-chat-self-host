@@ -66,6 +66,9 @@ func (s *Service) SummarizeChannel(
 	); err != nil {
 		return TalkSummaryDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+		return TalkSummaryDTO{}, err
+	}
 	integration, err := s.talkGovernanceRepository().GetTalkIntegration(
 		ctx,
 		strings.TrimSpace(workspaceID),

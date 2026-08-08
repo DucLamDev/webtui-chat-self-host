@@ -26,11 +26,40 @@ done
 echo "Meeting containers: running"
 
 INSTANCE_DOMAIN=$(sed -n 's/^INSTANCE_DOMAIN=//p' "$ENV_FILE" | tail -n 1)
+PORTAL_DOMAIN=$(sed -n 's/^PORTAL_DOMAIN=//p' "$ENV_FILE" | tail -n 1)
+PORTAL_ORIGIN=$(sed -n 's/^PORTAL_ORIGIN=//p' "$ENV_FILE" | tail -n 1)
+WEBTUI_APP_LINK_HOST=$(sed -n 's/^WEBTUI_APP_LINK_HOST=//p' "$ENV_FILE" | tail -n 1)
+TERMS_VERSION=$(sed -n 's/^TERMS_VERSION=//p' "$ENV_FILE" | tail -n 1)
+PRIVACY_POLICY_VERSION=$(sed -n 's/^PRIVACY_POLICY_VERSION=//p' "$ENV_FILE" | tail -n 1)
+NEXT_PUBLIC_TERMS_URL=$(sed -n 's/^NEXT_PUBLIC_TERMS_URL=//p' "$ENV_FILE" | tail -n 1)
+NEXT_PUBLIC_PRIVACY_URL=$(sed -n 's/^NEXT_PUBLIC_PRIVACY_URL=//p' "$ENV_FILE" | tail -n 1)
+NEXT_PUBLIC_TERMS_VERSION=$(sed -n 's/^NEXT_PUBLIC_TERMS_VERSION=//p' "$ENV_FILE" | tail -n 1)
+NEXT_PUBLIC_PRIVACY_VERSION=$(sed -n 's/^NEXT_PUBLIC_PRIVACY_VERSION=//p' "$ENV_FILE" | tail -n 1)
+if [ -z "$PORTAL_DOMAIN" ] || [ -z "$PORTAL_ORIGIN" ] || [ -z "$WEBTUI_APP_LINK_HOST" ] || [ -z "$TERMS_VERSION" ] || [ -z "$PRIVACY_POLICY_VERSION" ]; then
+  echo "PORTAL_DOMAIN, PORTAL_ORIGIN, WEBTUI_APP_LINK_HOST, TERMS_VERSION and PRIVACY_POLICY_VERSION are required." >&2
+  exit 1
+fi
+if [ "$NEXT_PUBLIC_TERMS_URL" != "$PORTAL_ORIGIN/terms" ] || [ "$NEXT_PUBLIC_PRIVACY_URL" != "$PORTAL_ORIGIN/privacy" ] || [ "$NEXT_PUBLIC_TERMS_VERSION" != "$TERMS_VERSION" ] || [ "$NEXT_PUBLIC_PRIVACY_VERSION" != "$PRIVACY_POLICY_VERSION" ]; then
+  echo "Frontend legal URLs/versions must match PORTAL_ORIGIN and backend policy versions." >&2
+  exit 1
+fi
 if [ -n "$INSTANCE_DOMAIN" ] && command -v curl >/dev/null 2>&1; then
   curl -fsS --max-time 15 "https://$INSTANCE_DOMAIN/ready" >/dev/null
   echo "Public HTTPS: OK (https://$INSTANCE_DOMAIN/ready)"
   curl -fsS --max-time 15 "https://$INSTANCE_DOMAIN:8443/" >/dev/null
   echo "Group meetings: OK (https://$INSTANCE_DOMAIN:8443/)"
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  for association_path in assetlinks.json apple-app-site-association; do
+    association_url="https://$WEBTUI_APP_LINK_HOST/.well-known/$association_path"
+    association_status=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$association_url")
+    if [ "$association_status" != "200" ]; then
+      echo "Mobile association endpoint returned HTTP $association_status: $association_url" >&2
+      exit 1
+    fi
+    echo "Mobile association: OK ($association_url)"
+  done
 fi
 
 PUSH_RELAY_URL=$(sed -n 's/^PUSH_RELAY_URL=//p' "$ENV_FILE" | tail -n 1)

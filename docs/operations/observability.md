@@ -39,6 +39,10 @@ worker và official push relay gửi bằng OTLP/HTTP tới Collector rồi lưu
 - backup thất bại 24 giờ và thời điểm backup thành công gần nhất;
 - trạng thái scrape của metric truy vấn database.
 
+Moderation operations additionally expose aggregate queue counts,
+oldest-open age, and overdue 4h/24h/72h SLO gauges. They never expose reporter
+IDs, target IDs, reasons, details, or evidence snapshots.
+
 PromQL p95/p99:
 
 ```promql
@@ -58,6 +62,9 @@ provider. Vì relay là profile tùy chọn, target `webtui-push-relay` có th�
 khi profile này không chạy; rule relay không cảnh báo nếu không có series.
 `WebTuiPushRelayDown` chỉ kích hoạt nếu cùng target đã từng scrape thành công
 trong 24 giờ, nên instance chưa từng bật profile relay không nhận false-positive.
+
+The three bundled moderation alerts must route to an actively staffed
+receiver; an alert by itself does not review or remove UGC.
 
 ## Alertmanager
 

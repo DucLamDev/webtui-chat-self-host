@@ -18,6 +18,11 @@ type PermissionChecker interface {
 	HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error)
 }
 
+type BlockChecker interface {
+	IsInteractionBlocked(ctx context.Context, workspaceID string, firstUserID string, secondUserID string) (bool, error)
+	IsDirectChannelBlocked(ctx context.Context, workspaceID string, channelID string, actorUserID string) (bool, error)
+}
+
 type Repository interface {
 	CreateChannel(ctx context.Context, params CreateChannelParams) (channelsdomain.Channel, error)
 	FindChannel(ctx context.Context, workspaceID string, channelID string) (channelsdomain.Channel, error)
@@ -39,11 +44,14 @@ type Repository interface {
 }
 
 type Service struct {
-	repo           Repository
-	checker        PermissionChecker
-	collab         CollaborationRepository
-	meetingBaseURL string
-	talkAI         TalkAIProvider
+	repo                 Repository
+	checker              PermissionChecker
+	collab               CollaborationRepository
+	meetingBaseURL       string
+	talkAI               TalkAIProvider
+	blockChecker         BlockChecker
+	termsVersion         string
+	privacyPolicyVersion string
 }
 
 func (s *Service) SetMeetingBaseURL(value string) {
@@ -52,6 +60,15 @@ func (s *Service) SetMeetingBaseURL(value string) {
 
 func (s *Service) SetTalkAIProvider(provider TalkAIProvider) {
 	s.talkAI = provider
+}
+
+func (s *Service) SetBlockChecker(checker BlockChecker) {
+	s.blockChecker = checker
+}
+
+func (s *Service) SetLegalDocumentVersions(termsVersion string, privacyPolicyVersion string) {
+	s.termsVersion = strings.TrimSpace(termsVersion)
+	s.privacyPolicyVersion = strings.TrimSpace(privacyPolicyVersion)
 }
 
 type CreateChannelInput struct {
@@ -350,6 +367,9 @@ func (s *Service) Update(ctx context.Context, input UpdateChannelInput) (Channel
 	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "channel.manage"); err != nil {
 		return ChannelDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+		return ChannelDTO{}, err
+	}
 	channel, err := s.repo.UpdateChannel(ctx, UpdateChannelParams{
 		WorkspaceID:  strings.TrimSpace(input.WorkspaceID),
 		ChannelID:    strings.TrimSpace(input.ChannelID),
@@ -515,6 +535,29 @@ func (s *Service) CreateDirect(ctx context.Context, input CreateDirectInput) (Di
 		return DirectConversationDTO{}, err
 	}
 	participantIDs := normalizeParticipants(input.ActorUserID, input.ParticipantIDs)
+	if s.blockChecker != nil {
+		for _, participantID := range participantIDs {
+			if participantID == strings.TrimSpace(input.ActorUserID) {
+				continue
+			}
+			blocked, err := s.blockChecker.IsInteractionBlocked(
+				ctx,
+				strings.TrimSpace(input.WorkspaceID),
+				strings.TrimSpace(input.ActorUserID),
+				participantID,
+			)
+			if err != nil {
+				return DirectConversationDTO{}, err
+			}
+			if blocked {
+				return DirectConversationDTO{}, apperrors.New(
+					"INTERACTION_BLOCKED",
+					"A direct conversation cannot be created because a block is active.",
+					403,
+				)
+			}
+		}
+	}
 	if len(participantIDs) < 2 {
 		return DirectConversationDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Direct message cần ít nhất 2 thành viên.")
 	}
@@ -660,6 +703,33 @@ func (s *Service) ensurePermission(ctx context.Context, userID string, workspace
 	}
 	if !allowed {
 		return apperrors.Forbidden("Bạn không có quyền thực hiện thao tác này.")
+	}
+	return nil
+}
+
+// ensureDirectInteractionAllowed applies the user-block policy only to direct
+// conversations. The moderation implementation deliberately returns false for
+// group channels, so callers can use this guard consistently without changing
+// collaboration semantics outside one-to-one conversations.
+func (s *Service) ensureDirectInteractionAllowed(ctx context.Context, workspaceID string, channelID string, actorUserID string) error {
+	if s.blockChecker == nil {
+		return nil
+	}
+	blocked, err := s.blockChecker.IsDirectChannelBlocked(
+		ctx,
+		strings.TrimSpace(workspaceID),
+		strings.TrimSpace(channelID),
+		strings.TrimSpace(actorUserID),
+	)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return apperrors.New(
+			"INTERACTION_BLOCKED",
+			"This action cannot be completed because a block is active in the direct conversation.",
+			403,
+		)
 	}
 	return nil
 }

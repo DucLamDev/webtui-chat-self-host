@@ -91,6 +91,17 @@ sh deploy/self-hosted/install.sh \
 
 Installer mặc định cho phép origin `https://download.vpsttt.com` của portal gọi
 discovery từ browser. Người dùng mở portal tại `https://download.vpsttt.com`.
+Installer cũng ghi `PORTAL_DOMAIN` và `WEBTUI_APP_LINK_HOST`. Caddy trả trực tiếp hai
+đường dẫn `/.well-known/assetlinks.json` và
+`/.well-known/apple-app-site-association` trên domain chat bằng cách proxy HTTPS
+tới portal, giữ nguyên path và không redirect. Portal phải có chứng chỉ TLS hợp lệ;
+Caddy đặt cả HTTP Host và TLS SNI theo `PORTAL_DOMAIN`.
+
+Installer cũng ghim `TERMS_VERSION=2026-08-07` và
+`PRIVACY_POLICY_VERSION=2026-08-07`, đúng với bộ policy đang công bố trên
+publisher portal. API production sẽ từ chối khởi động nếu thiếu hoặc dùng giá
+trị placeholder. Không đổi hai version độc lập với portal; nếu policy được cập
+nhật, phát hành nội dung portal và cấu hình backend cùng một release.
 Nếu vận hành portal riêng, truyền origin HTTPS không có path:
 
 ```sh

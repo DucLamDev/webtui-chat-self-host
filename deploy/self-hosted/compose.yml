@@ -466,6 +466,10 @@ services:
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS}
         NEXT_PUBLIC_JITSI_BASE_URL: ${NEXT_PUBLIC_JITSI_BASE_URL:-}
+        NEXT_PUBLIC_TERMS_URL: ${NEXT_PUBLIC_TERMS_URL:?NEXT_PUBLIC_TERMS_URL is required}
+        NEXT_PUBLIC_PRIVACY_URL: ${NEXT_PUBLIC_PRIVACY_URL:?NEXT_PUBLIC_PRIVACY_URL is required}
+        NEXT_PUBLIC_TERMS_VERSION: ${NEXT_PUBLIC_TERMS_VERSION:?NEXT_PUBLIC_TERMS_VERSION is required}
+        NEXT_PUBLIC_PRIVACY_VERSION: ${NEXT_PUBLIC_PRIVACY_VERSION:?NEXT_PUBLIC_PRIVACY_VERSION is required}
         NEXT_PUBLIC_WS_BASE_URL: wss://${INSTANCE_DOMAIN}/ws
     image: vpsttt-chat-web:${APP_VERSION:-self-hosted}
     restart: unless-stopped
@@ -482,6 +486,10 @@ services:
         NEXT_PUBLIC_APP_NAME: ${INSTANCE_NAME}
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS}
+        NEXT_PUBLIC_TERMS_URL: ${NEXT_PUBLIC_TERMS_URL:?NEXT_PUBLIC_TERMS_URL is required}
+        NEXT_PUBLIC_PRIVACY_URL: ${NEXT_PUBLIC_PRIVACY_URL:?NEXT_PUBLIC_PRIVACY_URL is required}
+        NEXT_PUBLIC_TERMS_VERSION: ${NEXT_PUBLIC_TERMS_VERSION:?NEXT_PUBLIC_TERMS_VERSION is required}
+        NEXT_PUBLIC_PRIVACY_VERSION: ${NEXT_PUBLIC_PRIVACY_VERSION:?NEXT_PUBLIC_PRIVACY_VERSION is required}
         NEXT_PUBLIC_WS_BASE_URL: wss://${INSTANCE_DOMAIN}/ws
     image: vpsttt-chat-admin:${APP_VERSION:-self-hosted}
     restart: unless-stopped
@@ -571,11 +579,13 @@ services:
         condition: service_started
 
   caddy:
-    image: caddy:2.10-alpine
+    image: caddy:2.10.2-alpine
     restart: unless-stopped
     environment:
       INSTANCE_DOMAIN: ${INSTANCE_DOMAIN}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:?PORTAL_DOMAIN is required for the HTTPS association upstream}
+      WEBTUI_APP_LINK_HOST: ${WEBTUI_APP_LINK_HOST:?WEBTUI_APP_LINK_HOST is required for mobile app associations}
     ports:
       - "80:80"
       - "443:443"

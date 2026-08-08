@@ -6,6 +6,11 @@ import {
 import { getPlatformServices } from "@webtui/chat-core";
 import { useAuthStore } from "@/features/auth/auth-store";
 import { clearMediaObjectUrlCache } from "@/features/chat/model/media-cache";
+import {
+  createLegalAcceptanceScope,
+  legalAcceptanceGate,
+  workspaceIdFromApiPath
+} from "@/features/auth/legal-acceptance-gate";
 
 // Keep the API client and the health indicator on the same runtime target.
 // Calling createRuntimeEnvironment() without this source silently falls back to
@@ -27,14 +32,33 @@ export const api = createWebTuiApiClient({
   baseUrl: () =>
     useAuthStore.getState().zoneRuntime?.api_base_url ??
     runtimeEnvironment.apiBaseUrl,
+  beforeRequest: (request) => legalAcceptanceGate.assertRequest(request, currentLegalAcceptanceScope(request.path)),
   fetcher: getPlatformServices().fetcher,
   getAccessToken: () => useAuthStore.getState().accessToken,
   onUnauthorized: () => {
     clearMediaObjectUrlCache();
     useAuthStore.getState().clearSession();
   },
+  onRequestError: (error, request) => legalAcceptanceGate.handleApiError(error, currentLegalAcceptanceScope(request?.path)),
   refreshAccessToken: refreshApiSession
 });
+
+// Public invitation routes must stay bound to the origin that served the
+// page. A stale authenticated workspace in local storage must never redirect
+// a guest token or its legal acceptance to another self-hosted server.
+export const publicApi = createWebTuiApiClient({
+  baseUrl: () => runtimeEnvironment.apiBaseUrl,
+  fetcher: getPlatformServices().fetcher
+});
+
+function currentLegalAcceptanceScope(requestPath?: string): string | null {
+  const state = useAuthStore.getState();
+  return createLegalAcceptanceScope(
+    state.zoneRuntime?.api_base_url ?? state.zoneDomain,
+    state.user?.id,
+    workspaceIdFromApiPath(requestPath) ?? state.workspaceId
+  );
+}
 
 /**
  * Refreshes the short-lived access token without turning a temporary network

@@ -2,10 +2,15 @@ export const queryKeys = {
   admin: {
     auditLogs: (workspaceId: string, filter = "") => ["admin", "audit-logs", workspaceId, filter] as const,
     health: (workspaceId: string) => ["admin", "health", workspaceId] as const,
+    moderationReports: (workspaceId: string, status = "", targetType = "") =>
+      ["admin", "moderation-reports", workspaceId, status, targetType] as const,
+    moderationReportsRoot: (workspaceId: string) => ["admin", "moderation-reports", workspaceId] as const,
     pushQueue: (workspaceId: string) => ["admin", "push-queue", workspaceId] as const,
     stats: (workspaceId: string) => ["admin", "stats", workspaceId] as const
   },
   auth: {
+    legalAcceptance: (scope: string) => ["auth", "legal-acceptance", scope] as const,
+    legalDocuments: (server: string) => ["auth", "legal-documents", server] as const,
     me: ["auth", "me"] as const,
     sessions: ["auth", "sessions"] as const
   },

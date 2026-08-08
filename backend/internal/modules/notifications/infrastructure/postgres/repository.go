@@ -33,6 +33,13 @@ type WebPushSender interface {
 	Send(ctx context.Context, endpoint string, p256dh string, auth string, payload map[string]any) error
 }
 
+type nativeDestination struct {
+	id       string
+	deviceID string
+	provider string
+	token    string
+}
+
 func NewRepository(pool *pgxpool.Pool, pushSenders ...PushSender) *Repository {
 	repository := &Repository{pool: pool, pushSenders: make(map[string]PushSender)}
 	for _, sender := range pushSenders {
@@ -807,7 +814,7 @@ func (r *Repository) deliverJob(ctx context.Context, jobID string, workspaceID s
 
 func (r *Repository) deliverNativeJob(ctx context.Context, jobID string, workspaceID string, userID string, payload map[string]any) []error {
 	rows, err := r.pool.Query(ctx, `
-SELECT device.id::text, device.push_provider, device.push_token
+SELECT device.id::text, device.device_id, device.push_provider, device.push_token
 FROM push_devices device
 JOIN workspaces workspace
   ON workspace.id = $2::uuid
@@ -836,15 +843,10 @@ WHERE device.user_id = $1::uuid
 	}
 	defer rows.Close()
 
-	type destination struct {
-		id       string
-		provider string
-		token    string
-	}
-	destinations := make([]destination, 0)
+	destinations := make([]nativeDestination, 0)
 	for rows.Next() {
-		var item destination
-		if err := rows.Scan(&item.id, &item.provider, &item.token); err != nil {
+		var item nativeDestination
+		if err := rows.Scan(&item.id, &item.deviceID, &item.provider, &item.token); err != nil {
 			return []error{err}
 		}
 		destinations = append(destinations, item)
@@ -852,19 +854,19 @@ WHERE device.user_id = $1::uuid
 	if err := rows.Err(); err != nil {
 		return []error{err}
 	}
+	eventType, _ := payload["event_type"].(string)
+	apnsSender := r.pushSenders["apns"]
+	destinations = selectNativeDestinations(
+		destinations,
+		eventType,
+		apnsSender != nil && apnsSender.Enabled(),
+	)
 	var deliveryErrors []error
 	for _, destination := range destinations {
 		sender := r.pushSenders[strings.ToLower(strings.TrimSpace(destination.provider))]
 		if sender == nil || !sender.Enabled() {
 			// Providers are opt-in for self-hosters. A token for an intentionally
 			// disabled provider is not a failed delivery destination.
-			continue
-		}
-		eventType, _ := payload["event_type"].(string)
-		if strings.EqualFold(destination.provider, "apns") &&
-			!strings.EqualFold(strings.TrimSpace(eventType), "call_invite") {
-			// Native iOS registrations in this project are PushKit VoIP tokens and
-			// may only be used to initiate an incoming call.
 			continue
 		}
 		if err := sender.Send(ctx, destination.token, payload); err != nil {
@@ -893,6 +895,36 @@ WHERE id = $1::uuid
 		}
 	}
 	return deliveryErrors
+}
+
+func selectNativeDestinations(destinations []nativeDestination, eventType string, apnsEnabled bool) []nativeDestination {
+	callInvite := strings.EqualFold(strings.TrimSpace(eventType), "call_invite")
+	voipDeviceIDs := make(map[string]struct{})
+	if callInvite && apnsEnabled {
+		for _, destination := range destinations {
+			if strings.EqualFold(strings.TrimSpace(destination.provider), "apns") && strings.HasSuffix(destination.deviceID, ":voip") {
+				voipDeviceIDs[strings.TrimSuffix(destination.deviceID, ":voip")] = struct{}{}
+			}
+		}
+	}
+
+	selected := make([]nativeDestination, 0, len(destinations))
+	for _, destination := range destinations {
+		provider := strings.ToLower(strings.TrimSpace(destination.provider))
+		if provider == "apns" && (!callInvite || !apnsEnabled) {
+			// APNs registrations are PushKit VoIP tokens and are never valid for
+			// ordinary notifications. If APNs is unavailable, preserve paired FCM
+			// as the call fallback.
+			continue
+		}
+		if callInvite && provider == "fcm" {
+			if _, pairedVoIP := voipDeviceIDs[destination.deviceID]; pairedVoIP {
+				continue
+			}
+		}
+		selected = append(selected, destination)
+	}
+	return selected
 }
 
 func (r *Repository) deliverWebPushJob(ctx context.Context, jobID string, workspaceID string, userID string, payload map[string]any) []error {

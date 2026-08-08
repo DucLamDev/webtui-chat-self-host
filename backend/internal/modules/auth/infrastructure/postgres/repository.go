@@ -108,10 +108,174 @@ RETURNING id::text, email::text, username::text, display_name, password_hash, av
 	if err := r.provisionRegistrationAccess(ctx, tx, user.ID, params.Email, params.InviteToken, params.Zone); err != nil {
 		return authdomain.User{}, err
 	}
+	if err := recordRegistrationLegalAcceptances(ctx, tx, user.ID, params); err != nil {
+		return authdomain.User{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return authdomain.User{}, err
 	}
 	return user, nil
+}
+
+func recordRegistrationLegalAcceptances(ctx context.Context, tx pgx.Tx, userID string, params authapp.CreateUserParams) error {
+	type acceptance struct {
+		accepted     bool
+		documentType string
+		version      string
+	}
+	for _, item := range []acceptance{
+		{accepted: params.TermsAccepted, documentType: "terms", version: params.TermsVersion},
+		{accepted: params.PrivacyAccepted, documentType: "privacy", version: params.PrivacyVersion},
+	} {
+		if !item.accepted {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO user_legal_acceptances (
+    user_id, workspace_id, document_type, document_version,
+    ip_address, user_agent, metadata
+)
+VALUES (
+    $1::uuid, $2::uuid, $3, $4,
+    NULLIF($5, '')::inet, NULLIF($6, ''), '{"source":"registration"}'::jsonb
+)
+ON CONFLICT (user_id, workspace_id, document_type, document_version) DO NOTHING
+`, userID, params.Zone.WorkspaceID, item.documentType, strings.TrimSpace(item.version),
+			params.IPAddress, params.UserAgent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) RecordLegalAcceptances(ctx context.Context, params authapp.LegalAcceptanceParams) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+	allowed, err := canAccessLegalAcceptance(ctx, tx, params.UserID, params.WorkspaceID, params.ZoneID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return authapp.ErrLegalAcceptanceWorkspaceForbidden
+	}
+	type acceptance struct {
+		accepted     bool
+		documentType string
+		version      string
+	}
+	metadata, err := json.Marshal(map[string]any{"source": strings.TrimSpace(params.Source)})
+	if err != nil {
+		return err
+	}
+	for _, item := range []acceptance{
+		{accepted: params.TermsAccepted, documentType: "terms", version: params.TermsVersion},
+		{accepted: params.PrivacyAccepted, documentType: "privacy", version: params.PrivacyVersion},
+	} {
+		if !item.accepted {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO user_legal_acceptances (
+    user_id, workspace_id, document_type, document_version,
+    ip_address, user_agent, metadata
+)
+VALUES (
+    $1::uuid, $2::uuid, $3, $4,
+    NULLIF($5, '')::inet, NULLIF($6, ''), $7::jsonb
+)
+ON CONFLICT (user_id, workspace_id, document_type, document_version) DO NOTHING
+`, params.UserID, params.WorkspaceID, item.documentType, strings.TrimSpace(item.version),
+			params.IPAddress, params.UserAgent, string(metadata)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Repository) CanAccessLegalAcceptance(
+	ctx context.Context,
+	userID string,
+	workspaceID string,
+	zoneID string,
+) (bool, error) {
+	return canAccessLegalAcceptance(ctx, r.pool, userID, workspaceID, zoneID)
+}
+
+type legalAcceptanceQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func canAccessLegalAcceptance(
+	ctx context.Context,
+	query legalAcceptanceQuerier,
+	userID string,
+	workspaceID string,
+	zoneID string,
+) (bool, error) {
+	var allowed bool
+	err := query.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM workspace_members member
+    JOIN users user_account
+      ON user_account.id = member.user_id
+     AND user_account.status = 'active'
+     AND user_account.deleted_at IS NULL
+    JOIN workspaces workspace
+      ON workspace.id = member.workspace_id
+     AND workspace.status = 'active'
+     AND workspace.deleted_at IS NULL
+    JOIN zones zone
+      ON zone.id = workspace.zone_id
+     AND zone.status = 'active'
+     AND zone.deleted_at IS NULL
+    WHERE member.user_id = $1::uuid
+      AND member.workspace_id = $2::uuid
+      AND member.status = 'active'
+      AND workspace.zone_id = $3::uuid
+)
+`, userID, workspaceID, zoneID).Scan(&allowed)
+	return allowed, err
+}
+
+func (r *Repository) ReadCurrentLegalAcceptances(
+	ctx context.Context,
+	userID string,
+	workspaceID string,
+	termsVersion string,
+	privacyVersion string,
+) (authapp.LegalAcceptanceRecord, error) {
+	var termsAcceptedAt, privacyAcceptedAt sql.NullTime
+	err := r.pool.QueryRow(ctx, `
+SELECT
+    max(accepted_at) FILTER (
+        WHERE document_type = 'terms' AND document_version = $3
+    ),
+    max(accepted_at) FILTER (
+        WHERE document_type = 'privacy' AND document_version = $4
+    )
+FROM user_legal_acceptances
+WHERE user_id = $1::uuid
+  AND workspace_id = $2::uuid
+`, userID, workspaceID, termsVersion, privacyVersion).Scan(&termsAcceptedAt, &privacyAcceptedAt)
+	if err != nil {
+		return authapp.LegalAcceptanceRecord{}, err
+	}
+	result := authapp.LegalAcceptanceRecord{}
+	if termsAcceptedAt.Valid {
+		value := termsAcceptedAt.Time
+		result.TermsAcceptedAt = &value
+	}
+	if privacyAcceptedAt.Valid {
+		value := privacyAcceptedAt.Time
+		result.PrivacyAcceptedAt = &value
+	}
+	return result, nil
 }
 
 func (r *Repository) ResolveZoneAccess(ctx context.Context, domain string) (authapp.ZoneAccess, error) {

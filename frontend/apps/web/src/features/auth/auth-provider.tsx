@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AuthScreen, Button, Input, Skeleton } from "@webtui/ui";
 import type {
   AuthUser,
+  CurrentLegalDocuments,
   GoogleLoginInput,
   LoginInput,
   RegisterInput,
@@ -14,8 +15,10 @@ import {
   ApiClientError,
   createWebTuiApiClient,
   isLocalHostname,
+  legalDocumentsCompatibilityError,
   localizeZoneRuntime,
   queryKeys,
+  resolveCurrentLegalDocuments,
   serverDiscoveryBaseUrl,
   zoneWebNavigationTarget
 } from "@webtui/api-client";
@@ -24,6 +27,8 @@ import { api, refreshApiSession, runtimeEnvironment } from "@/lib/api";
 import { useAuthStore } from "./auth-store";
 import type { AuthAccount } from "./auth-store";
 import { DesktopAppLockProvider } from "./desktop-app-lock";
+import { LegalAcceptanceProvider } from "./legal-acceptance-provider";
+import { legalPolicyConfig } from "./legal-policy-config";
 import { clearMediaObjectUrlCache } from "@/features/chat/model/media-cache";
 import {
   accountKey as offlineAccountKey,
@@ -57,12 +62,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setZoneRuntime = useAuthStore((state) => state.setZoneRuntime);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingGoogleInput, setPendingGoogleInput] = useState<GoogleLoginInput | null>(null);
   const [initialInviteToken, setInitialInviteToken] = useState("");
   const [isCompletingOIDC, setIsCompletingOIDC] = useState(false);
   const oidcCompletionStarted = useRef(false);
   const offlineAccountRef = useRef<OfflineAccount | null>(null);
   const supportsBrowserOIDC = true;
   const isDesktop = getPlatformServices().lifecycle.isDesktop;
+  const legalDocumentsServer = zoneRuntime?.api_base_url ?? runtimeEnvironment.apiBaseUrl;
+  const legalDocumentsQuery = useQuery({
+    enabled: hydrated && !accessToken,
+    queryFn: () => api.auth.legalDocuments(),
+    queryKey: queryKeys.auth.legalDocuments(legalDocumentsServer),
+    retry: false
+  });
+  const legalDocumentsResolution = useMemo(
+    () => resolveCurrentLegalDocuments(legalDocumentsQuery.data),
+    [legalDocumentsQuery.data]
+  );
+  const currentLegalDocuments: CurrentLegalDocuments | null = legalDocumentsResolution.documents;
+  const registrationLegalError = legalPolicyConfig.configurationError
+    ?? (legalDocumentsQuery.isError
+      ? legalDocumentsQuery.error instanceof Error
+        ? legalDocumentsQuery.error.message
+        : "Không tải được tài liệu pháp lý từ máy chủ."
+      : legalDocumentsQuery.isLoading ? null : legalDocumentsResolution.error)
+    ?? (currentLegalDocuments
+      ? legalDocumentsCompatibilityError(currentLegalDocuments, legalPolicyConfig)
+      : null);
 
   useEffect(() => {
     let mounted = true;
@@ -409,7 +436,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await selectZone(requestedDomain ?? browserDomain(), setZoneRuntime, true);
       return api.auth.google(credential);
     },
-    onError: (error) => {
+    onError: (error, input) => {
+      if (error instanceof ApiClientError && error.code === "LEGAL_ACCEPTANCE_REQUIRED") {
+        setPendingGoogleInput(input);
+        setMode("register");
+        setFormError("Tài khoản Google này chưa tồn tại. Hãy đọc và chấp nhận tài liệu pháp lý để tiếp tục đăng ký.");
+        return;
+      }
       if (!isZoneNavigationStarted(error)) {
         setFormError(error instanceof Error ? error.message : "Đăng nhập Google không thành công.");
       }
@@ -419,6 +452,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRememberLogin(true);
     },
     onSuccess: (result) => {
+      setPendingGoogleInput(null);
       setSession(result);
       void queryClient.invalidateQueries({ queryKey: queryKeys.auth.me });
     }
@@ -496,17 +530,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         brandLogoSrc={organizationLogo}
         error={formError}
         googleClientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID}
+        hasPendingGoogleRegistration={Boolean(pendingGoogleInput)}
         initialDomain={zoneDomain ?? browserDomain()}
         initialInviteToken={initialInviteToken}
         isPending={loginMutation.isPending || registerMutation.isPending || googleMutation.isPending || isCompletingOIDC}
         mode={mode}
-        onGoogleCredential={(credential, domain) =>
+        onGoogleCredential={(credential, domain, consent) => {
+          if (mode === "register" && (
+            !currentLegalDocuments
+            || registrationLegalError
+            || !consent?.privacyAccepted
+            || !consent.termsAccepted
+          )) {
+            setFormError("Chưa thể đăng ký vì tài liệu pháp lý chưa sẵn sàng hoặc chưa được chấp nhận đầy đủ.");
+            return;
+          }
           googleMutation.mutate({
             credential,
             device_name: browserDeviceName(),
-            domain
-          })
-        }
+            domain,
+            ...(mode === "register" && currentLegalDocuments ? {
+              privacy_accepted: true,
+              privacy_version: currentLegalDocuments.privacy.version,
+              terms_accepted: true,
+              terms_version: currentLegalDocuments.terms.version
+            } : {})
+          });
+        }}
+        onGoogleRegistrationContinue={(consent) => {
+          if (
+            !pendingGoogleInput
+            || !currentLegalDocuments
+            || registrationLegalError
+            || !consent.privacyAccepted
+            || !consent.termsAccepted
+          ) {
+            setFormError("Chưa thể tiếp tục đăng ký Google vì tài liệu pháp lý chưa sẵn sàng.");
+            return;
+          }
+          googleMutation.mutate({
+            ...pendingGoogleInput,
+            privacy_accepted: true,
+            privacy_version: currentLegalDocuments.privacy.version,
+            terms_accepted: true,
+            terms_version: currentLegalDocuments.terms.version
+          });
+        }}
         onLogin={(values) =>
           {
             setRememberLogin(values.remember);
@@ -522,7 +591,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setFormError(null);
           clearZoneRuntime();
         } : undefined}
-        onModeChange={setMode}
+        onModeChange={(nextMode) => {
+          setMode(nextMode);
+          if (nextMode === "login") setPendingGoogleInput(null);
+        }}
+        onOpenLegalDocument={isDesktop
+          ? (url) => getPlatformServices().links.openExternal(url)
+          : undefined}
         onOIDCDiscover={supportsBrowserOIDC ? async (domain) => {
           const selectedDomain = await selectZone(domain, setZoneRuntime);
           if (useAuthStore.getState().zoneRuntime?.capabilities?.sso === false) {
@@ -547,7 +622,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             window.location.assign(result.authorization_url);
           }
         } : undefined}
-        onRegister={(values) =>
+        onRegister={(values) => {
+          if (
+            !currentLegalDocuments
+            || registrationLegalError
+            || !values.privacyAccepted
+            || !values.termsAccepted
+          ) {
+            setFormError("Chưa thể đăng ký vì tài liệu pháp lý chưa sẵn sàng hoặc chưa được chấp nhận đầy đủ.");
+            return;
+          }
           registerMutation.mutate({
             device_name: browserDeviceName(),
             display_name: values.displayName,
@@ -555,11 +639,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             email: values.email,
             invite_token: values.inviteToken,
             password: values.password,
+            privacy_accepted: true,
+            privacy_version: currentLegalDocuments.privacy.version,
+            terms_accepted: true,
+            terms_version: currentLegalDocuments.terms.version,
             username: values.username
-          })
-        }
+          });
+        }}
         panelLogoAlt={organizationName}
         panelLogoSrc={organizationLogo}
+        registrationLegal={{
+          error: registrationLegalError,
+          isLoading: legalDocumentsQuery.isLoading || legalDocumentsQuery.isFetching,
+          onRetry: () => void legalDocumentsQuery.refetch(),
+          privacyUrl: legalPolicyConfig.privacyUrl,
+          privacyVersion: currentLegalDocuments?.privacy.version,
+          termsUrl: legalPolicyConfig.termsUrl,
+          termsVersion: currentLegalDocuments?.terms.version
+        }}
         showServerField={false}
         title={organizationName}
       />
@@ -576,7 +673,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         active={Boolean(accessToken)}
         onLogout={() => logoutMutation.mutate()}
       >
-        {children}
+        <LegalAcceptanceProvider>{children}</LegalAcceptanceProvider>
       </DesktopAppLockProvider>
     </AuthContext.Provider>
   );

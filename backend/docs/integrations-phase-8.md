@@ -47,7 +47,12 @@ Body:
 }
 ```
 
-Token cần scope `message.write`.
+Token cần scope `message.write`. Mỗi lần tạo message, backend kiểm tra lại trong
+cùng transaction rằng token còn active/chưa hết hạn, scope vẫn còn, chủ sở hữu
+token vẫn là user và workspace member active, đồng thời đã chấp nhận đúng phiên
+bản Terms/AUP và Privacy Policy hiện hành. Token legacy mất owner hoặc owner đã
+bị xóa/rời workspace sẽ không còn tạo nội dung; hệ thống không tự suy diễn hay
+backfill legal acceptance.
 
 ## Bot
 
@@ -87,6 +92,13 @@ Secret có thể gửi qua header:
 ```text
 X-WebTui-Webhook-Secret: {secret}
 ```
+
+Webhook dispatch cũng revalidate người tạo webhook theo cùng chính sách active
+member và exact legal acceptance ngay trước khi ghi message. Webhook mất
+`created_by`, người tạo bị vô hiệu hóa/rời workspace, webhook bị disable hoặc
+legal acceptance đã cũ đều fail closed. Message tích hợp vẫn giữ `sender_id =
+NULL`, được gắn nguồn integration và có thể bị người dùng báo cáo qua moderation;
+backend không giả mạo người tạo webhook thành người gửi message.
 
 Hoặc gửi trong body:
 

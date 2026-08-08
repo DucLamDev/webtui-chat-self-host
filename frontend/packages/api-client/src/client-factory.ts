@@ -18,6 +18,7 @@ import { createFilesClient } from "./files-client";
 import { createHealthClient } from "./health-client";
 import { HttpClient, type HttpClientOptions } from "./http-client";
 import { createMessagesClient } from "./messages-client";
+import { createModerationClient } from "./moderation-client";
 import { createRbacClient } from "./rbac-client";
 import { createTicketsClient } from "./tickets-client";
 import { createSyncClient } from "./sync-client";
@@ -43,6 +44,7 @@ export function createWebTuiApiClient(options: HttpClientOptions) {
     health: createHealthClient(http),
     http,
     messages: createMessagesClient(http),
+    moderation: createModerationClient(http),
     notifications: createNotificationsClient(http),
     orderBot: createOrderBotClient(http),
     presence: createPresenceClient(http),

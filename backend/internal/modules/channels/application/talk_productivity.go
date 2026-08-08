@@ -259,6 +259,9 @@ func (s *Service) CreateMeeting(ctx context.Context, input CreateMeetingInput) (
 	if err := s.ensureCanManageCollaboration(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
 		return MeetingDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+		return MeetingDTO{}, err
+	}
 	title := strings.TrimSpace(input.Title)
 	if title == "" || len([]rune(title)) > maxMeetingTitle {
 		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Meeting title must contain 1 to 160 characters.")
@@ -326,6 +329,11 @@ func (s *Service) TransitionMeeting(ctx context.Context, actorUserID string, wor
 	if action != "start" && action != "end" && action != "cancel" {
 		return MeetingDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Meeting action must be start, end or cancel.")
 	}
+	if action == "start" {
+		if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+			return MeetingDTO{}, err
+		}
+	}
 	meeting, err := s.talkProductivityRepository().TransitionMeeting(ctx, TransitionMeetingParams{
 		WorkspaceID: strings.TrimSpace(workspaceID), ChannelID: strings.TrimSpace(channelID),
 		MeetingID: strings.TrimSpace(meetingID), Action: action, ActorUserID: strings.TrimSpace(actorUserID),
@@ -349,6 +357,9 @@ func (s *Service) GetVoiceRoom(ctx context.Context, actorUserID string, workspac
 
 func (s *Service) StartVoiceRoom(ctx context.Context, actorUserID string, workspaceID string, channelID string) (VoiceRoomDTO, error) {
 	if err := s.ensureCollaborationMember(ctx, actorUserID, workspaceID, channelID); err != nil {
+		return VoiceRoomDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
 		return VoiceRoomDTO{}, err
 	}
 	room, err := s.talkProductivityRepository().SetVoiceRoom(ctx, SetVoiceRoomParams{
@@ -386,6 +397,9 @@ func (s *Service) StopVoiceRoom(ctx context.Context, actorUserID string, workspa
 
 func (s *Service) SetupBreakoutRooms(ctx context.Context, input SetupBreakoutsInput) ([]BreakoutRoomDTO, error) {
 	if err := s.ensureCanManageCollaboration(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 		return nil, err
 	}
 	if err := s.ensureInternalBreakouts(ctx, input.WorkspaceID, input.ChannelID); err != nil {
@@ -467,6 +481,9 @@ func (s *Service) StartBreakoutRooms(ctx context.Context, actorUserID string, wo
 	if err := s.ensureCanManageCollaboration(ctx, actorUserID, workspaceID, channelID); err != nil {
 		return nil, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+		return nil, err
+	}
 	if err := s.ensureInternalBreakouts(ctx, workspaceID, channelID); err != nil {
 		return nil, err
 	}
@@ -479,6 +496,9 @@ func (s *Service) StartBreakoutRooms(ctx context.Context, actorUserID string, wo
 
 func (s *Service) JoinBreakoutRoom(ctx context.Context, actorUserID string, workspaceID string, channelID string, roomID string) ([]BreakoutRoomDTO, error) {
 	if err := s.ensureCollaborationMember(ctx, actorUserID, workspaceID, channelID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
 		return nil, err
 	}
 	rooms, err := s.talkProductivityRepository().JoinBreakoutRoom(ctx, JoinBreakoutRoomParams{
@@ -496,6 +516,11 @@ func (s *Service) UpdateBreakoutAssignments(ctx context.Context, actorUserID str
 		return nil, err
 	}
 	userIDs = normalizeStringIDs(userIDs)
+	if len(userIDs) > 0 {
+		if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+			return nil, err
+		}
+	}
 	for _, userID := range userIDs {
 		member, err := s.repo.FindMember(ctx, strings.TrimSpace(workspaceID), strings.TrimSpace(channelID), userID)
 		if err != nil || (member.Status != "active" && member.Status != "muted") {
@@ -514,6 +539,9 @@ func (s *Service) UpdateBreakoutAssignments(ctx context.Context, actorUserID str
 
 func (s *Service) BroadcastToBreakouts(ctx context.Context, actorUserID string, workspaceID string, channelID string, body string) (BreakoutBroadcastDTO, error) {
 	if err := s.ensureCanManageCollaboration(ctx, actorUserID, workspaceID, channelID); err != nil {
+		return BreakoutBroadcastDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
 		return BreakoutBroadcastDTO{}, err
 	}
 	body = strings.TrimSpace(body)

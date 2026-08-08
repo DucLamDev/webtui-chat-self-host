@@ -165,7 +165,14 @@ export function createChannelsClient(http: HttpClient) {
       );
       return itemFrom<PublicConversationRoom>(data, "room") ?? (data as PublicConversationRoom);
     },
-    async joinPublicRoom(publicToken: string, input: { display_name: string; password?: string }) {
+    async joinPublicRoom(publicToken: string, input: {
+      display_name: string;
+      password?: string;
+      privacy_accepted: true;
+      privacy_version: string;
+      terms_accepted: true;
+      terms_version: string;
+    }) {
       const data = await http.post<unknown>(
         `/api/v1/public/conversations/${encodeURIComponent(publicToken)}/join`,
         input,

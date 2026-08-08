@@ -68,11 +68,13 @@ import type {
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiStatus } from "../../platform/hooks/use-api-status";
 import { AdminSidebar } from "./admin-sidebar";
+import { ModerationSection } from "./moderation-section";
 import { useAdminDashboardData } from "../hooks/use-admin-dashboard-data";
 import type { AdminUser, AdminUserFilter, ChannelRank, DashboardMetric } from "../model/types";
 import {
   adminPageMeta,
   adminSectionGroup,
+  canAccessAdminSection,
   type AdminNavId,
   resolveAdminSection
 } from "../model/navigation";
@@ -235,7 +237,12 @@ export function AdminDashboard() {
     );
   }, [data.outgoingWebhooks]);
 
-  const adminDenied = Boolean(data.workspaceId && !data.permissionsQuery.isLoading && !data.canViewAdmin);
+  const requiredSectionPermission = activeNavItem === "moderation" ? "moderation.manage" : "admin.view";
+  const sectionDenied = Boolean(
+    data.workspaceId
+      && !data.permissionsQuery.isLoading
+      && (activeNavItem === "moderation" ? !data.canManageModeration : !data.canViewAdmin)
+  );
   const showToast = (message: string, tone: ToastTone = "success") => setToastState({ message, tone });
 
   const refreshActiveSection = async () => {
@@ -264,6 +271,7 @@ export function AdminDashboard() {
       <AdminSidebar
         activeId={activeNavItem}
         collapsed={sidebarCollapsed}
+        isItemVisible={(section) => canAccessAdminSection(section, data.can)}
         mobileOpen={mobileNavOpen}
         onCloseMobile={() => setMobileNavOpen(false)}
         onPrefetch={data.prefetchSection}
@@ -385,9 +393,9 @@ export function AdminDashboard() {
           <ErrorState description="Tài khoản hiện tại chưa có workspace để quản trị." title="Chưa có workspace" />
         ) : null}
 
-        {data.workspacesQuery.isError || !data.workspaceId ? null : adminDenied ? (
+        {data.workspacesQuery.isError || !data.workspaceId ? null : sectionDenied ? (
           <ErrorState
-            description="Tài khoản hiện tại chưa có quyền `admin.view` trong workspace này."
+            description={`Tài khoản hiện tại chưa có quyền \`${requiredSectionPermission}\` trong workspace này.`}
             title="Chưa đủ quyền quản trị"
           />
         ) : (
@@ -416,7 +424,7 @@ export function AdminDashboard() {
             userFilter={userFilter}
           />
         )}
-        {showSystemPanel ? (
+        {showSystemPanel && !sectionDenied ? (
           <SettingsPanel
             data={data}
             healthChecks={healthChecks}
@@ -503,6 +511,16 @@ function DashboardSection({
 
   if (activeNavItem === "messages") {
     return <AdminMessagesSection data={data} searchQuery={searchQuery} setSearchQuery={setSearchQuery} />;
+  }
+
+  if (activeNavItem === "moderation") {
+    return (
+      <ModerationSection
+        canManage={data.canManageModeration}
+        showToast={showToast}
+        workspaceId={data.workspaceId}
+      />
+    );
   }
 
   if (activeNavItem === "channels") {

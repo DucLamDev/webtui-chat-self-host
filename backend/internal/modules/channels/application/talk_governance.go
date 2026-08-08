@@ -332,6 +332,11 @@ func (s *Service) UpdateRecordingPolicy(ctx context.Context, input UpdateRecordi
 	if err := s.ensureCanManageCollaboration(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
 		return RecordingPolicyDTO{}, err
 	}
+	if input.Enabled {
+		if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+			return RecordingPolicyDTO{}, err
+		}
+	}
 	if input.RetentionDays == 0 {
 		input.RetentionDays = 30
 	}
@@ -372,6 +377,9 @@ func (s *Service) ListRecordings(ctx context.Context, actorUserID string, worksp
 
 func (s *Service) StartRecording(ctx context.Context, input StartRecordingInput) (RecordingDTO, error) {
 	if err := s.ensureCanManageCollaboration(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
+		return RecordingDTO{}, err
+	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 		return RecordingDTO{}, err
 	}
 	policy, err := s.talkGovernanceRepository().GetRecordingPolicy(ctx, strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ChannelID))
@@ -418,6 +426,11 @@ func (s *Service) StartRecording(ctx context.Context, input StartRecordingInput)
 func (s *Service) SetRecordingConsent(ctx context.Context, actorUserID string, workspaceID string, channelID string, recordingID string, consented bool) (RecordingDTO, error) {
 	if err := s.ensureCollaborationMember(ctx, actorUserID, workspaceID, channelID); err != nil {
 		return RecordingDTO{}, err
+	}
+	if consented {
+		if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+			return RecordingDTO{}, err
+		}
 	}
 	recording, err := s.talkGovernanceRepository().SetRecordingConsent(ctx, SetRecordingConsentParams{
 		WorkspaceID: strings.TrimSpace(workspaceID), ChannelID: strings.TrimSpace(channelID),
@@ -536,6 +549,9 @@ func (s *Service) CreateFederationInvite(ctx context.Context, input CreateFedera
 	if err := s.ensureCanManageCollaboration(ctx, input.ActorUserID, input.WorkspaceID, input.ChannelID); err != nil {
 		return FederationInviteDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+		return FederationInviteDTO{}, err
+	}
 	integration, err := s.talkGovernanceRepository().GetTalkIntegration(ctx, strings.TrimSpace(input.WorkspaceID))
 	if err != nil {
 		return FederationInviteDTO{}, err
@@ -584,6 +600,11 @@ func (s *Service) TransitionFederationInvite(ctx context.Context, actorUserID st
 	status = strings.TrimSpace(status)
 	if status != "accepted" && status != "declined" && status != "revoked" && status != "failed" {
 		return FederationInviteDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Unsupported federation invite status.")
+	}
+	if status == "accepted" {
+		if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+			return FederationInviteDTO{}, err
+		}
 	}
 	invite, err := s.talkGovernanceRepository().TransitionFederationInvite(ctx, TransitionFederationInviteParams{
 		WorkspaceID: strings.TrimSpace(workspaceID), ChannelID: strings.TrimSpace(channelID),

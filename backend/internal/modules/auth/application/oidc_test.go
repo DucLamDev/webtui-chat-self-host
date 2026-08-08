@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -11,7 +13,16 @@ import (
 	authdomain "github.com/duclamdev/application-chat/backend/internal/modules/auth/domain"
 	tenancydomain "github.com/duclamdev/application-chat/backend/internal/modules/tenancy/domain"
 	sharedauth "github.com/duclamdev/application-chat/backend/internal/shared/auth"
+	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
+
+func TestOIDCJITLegalBlockHasStableConflictContract(t *testing.T) {
+	err := mapOIDCError(ErrOIDCJITLegalBlocked)
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Status != http.StatusConflict || appErr.Code != "OIDC_JIT_LEGAL_ACCEPTANCE_REQUIRED" {
+		t.Fatalf("mapOIDCError() = %#v, want OIDC_JIT_LEGAL_ACCEPTANCE_REQUIRED/409", err)
+	}
+}
 
 type oidcMemoryRepository struct {
 	target         ZoneAccess

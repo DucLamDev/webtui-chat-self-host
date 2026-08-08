@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,12 @@ type permissionCheckerFunc func(ctx context.Context, userID string, workspaceID 
 
 func (fn permissionCheckerFunc) HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error) {
 	return fn(ctx, userID, workspaceID, permissionCode)
+}
+
+type blockCheckerFunc func(ctx context.Context, workspaceID string, channelID string, actorUserID string) (bool, error)
+
+func (fn blockCheckerFunc) IsDirectChannelBlocked(ctx context.Context, workspaceID string, channelID string, actorUserID string) (bool, error) {
+	return fn(ctx, workspaceID, channelID, actorUserID)
 }
 
 func TestValidateUploadRejectsDangerousMimeType(t *testing.T) {
@@ -88,6 +95,22 @@ func TestEnsureAnyPermissionRejectsWhenNoPermissionMatches(t *testing.T) {
 	}
 	if appErr.Code != "FORBIDDEN" {
 		t.Fatalf("error code = %q", appErr.Code)
+	}
+}
+
+func TestEnsureDirectInteractionAllowedRejectsBlockedAttachment(t *testing.T) {
+	service := NewService(nil, nil, nil)
+	service.SetBlockChecker(blockCheckerFunc(func(_ context.Context, workspaceID string, channelID string, actorUserID string) (bool, error) {
+		if workspaceID != "workspace-1" || channelID != "channel-1" || actorUserID != "user-1" {
+			t.Fatalf("unexpected block check: %s/%s/%s", workspaceID, channelID, actorUserID)
+		}
+		return true, nil
+	}))
+
+	err := service.ensureDirectInteractionAllowed(context.Background(), "workspace-1", "channel-1", "user-1")
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" || appErr.Status != 403 {
+		t.Fatalf("error = %#v, want 403 INTERACTION_BLOCKED", err)
 	}
 }
 

@@ -372,6 +372,8 @@ paths:
       responses:
         "201":
           description: Ảnh đã lưu; avatar_path dùng để cập nhật hồ sơ
+        "409":
+          description: Chưa chấp nhận phiên bản Terms và Privacy Policy hiện hành
   /api/v1/users/avatars/{zone_id}/{user_id}/{file_name}:
     get:
       summary: Đọc ảnh đại diện công khai từ object storage của host
@@ -704,6 +706,180 @@ paths:
                             format: date-time
         "401":
           description: Chưa xác thực
+  /api/v1/public/conversations/{public_token}:
+    get:
+      security: []
+      tags: [Channels]
+      summary: Read public room metadata without revealing its media room key
+      parameters:
+        - name: public_token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Public room metadata. meeting_room_key is omitted until an accepted guest grant is presented.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PublicConversationRoom"
+        "404":
+          description: Link is unknown, disabled, or expired
+  /api/v1/public/conversations/{public_token}/join:
+    post:
+      security: []
+      tags: [Channels]
+      summary: Request a guest grant after explicit current legal acceptance
+      parameters:
+        - name: public_token
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublicGuestJoinRequest"
+      responses:
+        "201":
+          description: Guest grant created; the private media key is returned only for an immediately approved grant
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/GuestJoinRequest"
+        "409":
+          description: Current Terms/AUP and Privacy acceptance is missing
+  /api/v1/public/conversations/{public_token}/join/{request_id}:
+    get:
+      security: []
+      tags: [Channels]
+      summary: Poll a guest grant using its opaque access token
+      parameters:
+        - name: public_token
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: access_token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current grant status; the media room key is returned only for an unexpired approved grant with current legal evidence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/GuestJoinRequest"
+        "409":
+          description: Legacy or stale guest grant has no current legal evidence and cannot reveal the media room
+  /api/v1/auth/legal-documents:
+    get:
+      security: []
+      tags: [Auth]
+      summary: Current legal document versions accepted by registration clients
+      responses:
+        "200":
+          description: Current Terms/AUP and Privacy Policy versions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [documents]
+                        properties:
+                          documents:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/LegalDocumentVersion"
+  /api/v1/auth/legal-acceptance:
+    get:
+      tags: [Auth]
+      summary: Read the authenticated user's acceptance of the current legal documents
+      parameters:
+        - name: workspace_id
+          in: query
+          required: false
+          description: Workspace to inspect. Defaults to the workspace embedded in the access token for backward compatibility.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current per-workspace legal acceptance status; no consent is inferred or backfilled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [legal_acceptance]
+                        properties:
+                          legal_acceptance:
+                            $ref: "#/components/schemas/CurrentLegalAcceptance"
+        "403":
+          description: The actor is not an active member of the requested workspace, or the workspace is outside the token zone.
+    post:
+      tags: [Auth]
+      summary: Accept the current Terms/AUP and Privacy Policy for an authorized workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegalAcceptanceRequest"
+      responses:
+        "200":
+          description: Both current acceptances were recorded with server timestamp and request metadata
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [legal_acceptance]
+                        properties:
+                          legal_acceptance:
+                            $ref: "#/components/schemas/CurrentLegalAcceptance"
+        "409":
+          description: Both acceptance booleans must be true
+        "403":
+          description: The actor is not an active member of the requested workspace, or the workspace is outside the token zone.
   /api/v1/auth/register:
     post:
       security: []
@@ -721,6 +897,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
+        "409":
+          description: Tài khoản chưa được tạo vì thiếu chấp nhận tài liệu pháp lý hiện hành
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+              example:
+                success: false
+                error:
+                  code: LEGAL_ACCEPTANCE_REQUIRED
+                  message: Accept the current Terms, Acceptable Use Policy, and Privacy Policy before creating an account.
   /api/v1/auth/login:
     post:
       security: []
@@ -755,6 +942,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
+        "409":
+          description: Google identity hợp lệ nhưng sẽ tạo tài khoản mới và cần consent; giữ credential rồi retry với bốn field legal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+              example:
+                success: false
+                error:
+                  code: LEGAL_ACCEPTANCE_REQUIRED
+                  message: Accept the current Terms, Acceptable Use Policy, and Privacy Policy before creating an account.
   /api/v1/auth/oidc/providers:
     get:
       security: []
@@ -845,6 +1043,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
+        "409":
+          description: New-account OIDC JIT is fail-closed until versioned legal acceptance is carried end-to-end; existing/pre-provisioned accounts remain supported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+              example:
+                success: false
+                error:
+                  code: OIDC_JIT_LEGAL_ACCEPTANCE_REQUIRED
+                  message: OIDC cannot create a new account until the user completes the required legal acceptance flow. Pre-provision the account or use standard registration first.
   /api/v1/auth/refresh:
     post:
       security: []
@@ -1016,6 +1225,8 @@ paths:
       responses:
         "200":
           description: Hồ sơ đã cập nhật
+        "409":
+          description: Chưa chấp nhận phiên bản Terms và Privacy Policy hiện hành
     delete:
       summary: Xóa vĩnh viễn tài khoản của user hiện tại
       description: >-
@@ -2041,7 +2252,7 @@ paths:
     post:
       security: []
       summary: Gửi message bằng API token
-      description: "Dùng header `Authorization: Bearer {api_token}`. Token cần scope `message.write`."
+      description: "Dùng header `Authorization: Bearer {api_token}`. Token cần scope `message.write`; chủ sở hữu token phải còn là thành viên active và đã chấp nhận đúng phiên bản tài liệu pháp lý hiện hành."
       requestBody:
         required: true
         content:
@@ -2051,6 +2262,21 @@ paths:
       responses:
         "201":
           description: Message tích hợp đã được gửi
+        "401":
+          description: Token đã bị thu hồi/hết hạn, mất scope, không còn chủ sở hữu hợp lệ hoặc chủ sở hữu không còn active trong workspace
+        "409":
+          description: Chủ sở hữu token chưa chấp nhận đúng phiên bản Terms/AUP và Privacy Policy hiện hành
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+              example:
+                success: false
+                error:
+                  code: LEGAL_ACCEPTANCE_REQUIRED
+                  message: Chủ sở hữu integration phải chấp nhận tài liệu pháp lý hiện hành trước khi integration tạo nội dung.
+        "503":
+          description: Máy chủ không thể xác minh phiên bản hoặc trạng thái chấp nhận tài liệu pháp lý
   /api/v1/workspaces/{workspace_id}/tickets:
     get:
       summary: List workspace tickets
@@ -2125,6 +2351,175 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Ticket"
+  /api/v1/workspaces/{workspace_id}/moderation/reports:
+    post:
+      tags: [Moderation]
+      summary: Report a visible message or active workspace user
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateModerationReportRequest"
+      responses:
+        "201":
+          description: Report accepted for moderation
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ModerationReport"
+        "409":
+          description: The reporter already has an open report for this target
+        "429":
+          description: Per-user report submission limit exceeded
+    get:
+      tags: [Moderation]
+      summary: List reports for workspace moderators
+      description: Requires the moderation.manage workspace permission.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, reviewing, resolved, dismissed]
+        - name: target_type
+          in: query
+          schema:
+            type: string
+            enum: [message, user]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Moderation queue
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [reports]
+                        properties:
+                          reports:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ModerationReport"
+  /api/v1/workspaces/{workspace_id}/moderation/reports/{report_id}:
+    patch:
+      tags: [Moderation]
+      summary: Review or resolve a moderation report
+      description: Requires the moderation.manage workspace permission. Closing a report requires resolution_note.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateModerationReportRequest"
+      responses:
+        "200":
+          description: Updated report
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ModerationReport"
+  /api/v1/workspaces/{workspace_id}/blocks:
+    get:
+      tags: [User Safety]
+      summary: List users blocked by the authenticated member
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      responses:
+        "200":
+          description: Blocked users used by clients to hide user-generated content
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [blocks]
+                        properties:
+                          blocks:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/UserBlock"
+    post:
+      tags: [User Safety]
+      summary: Block a workspace member
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserBlockRequest"
+      responses:
+        "201":
+          description: Block created or refreshed idempotently
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UserBlock"
+  /api/v1/workspaces/{workspace_id}/blocks/{blocked_user_id}:
+    delete:
+      tags: [User Safety]
+      summary: Unblock a workspace member
+      description: Idempotent; blocked_user_id is the user ID, not the block record ID.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceID"
+        - name: blocked_user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Block removed or already absent
   /api/v1/workspaces/{workspace_id}/calls:
     post:
       summary: Tạo phiên gọi thoại hoặc video
@@ -2550,6 +2945,23 @@ paths:
       responses:
         "201":
           description: Incoming webhook đã tạo message
+        "401":
+          description: Người tạo webhook đã bị xóa, vô hiệu hóa hoặc không còn là thành viên active của workspace
+        "404":
+          description: Webhook/secret không hợp lệ, đã bị tắt hoặc kênh đích không còn khả dụng
+        "409":
+          description: Người tạo webhook chưa chấp nhận đúng phiên bản Terms/AUP và Privacy Policy hiện hành
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponse"
+              example:
+                success: false
+                error:
+                  code: LEGAL_ACCEPTANCE_REQUIRED
+                  message: Chủ sở hữu integration phải chấp nhận tài liệu pháp lý hiện hành trước khi integration tạo nội dung.
+        "503":
+          description: Máy chủ không thể xác minh phiên bản hoặc trạng thái chấp nhận tài liệu pháp lý
   /api/v1/workspaces/{workspace_id}/outgoing-webhooks:
     get:
       summary: Danh sách outgoing webhook
@@ -5144,8 +5556,23 @@ components:
           type: integer
     RegisterRequest:
       type: object
-      required: [email, username, display_name, password]
+      required: [email, username, display_name, password, terms_accepted, terms_version, privacy_accepted, privacy_version]
       properties:
+        terms_accepted:
+          type: boolean
+          const: true
+          description: Must be true for every new account.
+        terms_version:
+          type: string
+          example: "2026-08-07"
+          description: Current Terms and Acceptable Use Policy version from /api/v1/auth/legal-documents.
+        privacy_accepted:
+          type: boolean
+          const: true
+          description: Must be true for every new account and records acknowledgement of the current Privacy Policy.
+        privacy_version:
+          type: string
+          example: "2026-08-07"
         email:
           type: string
           format: email
@@ -5187,6 +5614,18 @@ components:
       type: object
       required: [credential]
       properties:
+        terms_accepted:
+          type: boolean
+          description: Required and true only when this Google identity would create a new account; optional for an existing user login.
+        terms_version:
+          type: string
+          example: "2026-08-07"
+        privacy_accepted:
+          type: boolean
+          description: Required and true only when this Google identity would create a new account; optional for an existing user login.
+        privacy_version:
+          type: string
+          example: "2026-08-07"
         credential:
           type: string
           description: Google ID token do Google Identity Services trả về.
@@ -5197,6 +5636,267 @@ components:
         device_name:
           type: string
           description: Tùy chọn. Nếu không gửi, backend tự suy ra từ User-Agent.
+    PublicGuestJoinRequest:
+      type: object
+      required: [display_name, terms_accepted, terms_version, privacy_accepted, privacy_version]
+      properties:
+        display_name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        password:
+          type: string
+          format: password
+        terms_accepted:
+          type: boolean
+          const: true
+          description: Explicit acceptance of the current Terms and Acceptable Use Policy before guest UGC access.
+        terms_version:
+          type: string
+          description: Current terms version returned by /api/v1/auth/legal-documents.
+        privacy_accepted:
+          type: boolean
+          const: true
+          description: Explicit acknowledgement of the current Privacy Policy before guest UGC access.
+        privacy_version:
+          type: string
+          description: Current privacy version returned by /api/v1/auth/legal-documents.
+    PublicConversationRoom:
+      type: object
+      required: [channel_id, channel_name, room_mode, meeting_provider, has_password, lobby_enabled, chat_locked, guest_microphone_enabled, guest_camera_enabled]
+      properties:
+        channel_id:
+          type: string
+          format: uuid
+        channel_name:
+          type: string
+        room_mode:
+          type: string
+          enum: [public, webinar]
+        meeting_provider:
+          type: string
+        meeting_base_url:
+          type: string
+          format: uri
+        meeting_room_key:
+          type: string
+          description: Omitted until a current, unexpired and approved guest grant is presented.
+        has_password:
+          type: boolean
+        lobby_enabled:
+          type: boolean
+        chat_locked:
+          type: boolean
+        guest_microphone_enabled:
+          type: boolean
+        guest_camera_enabled:
+          type: boolean
+    GuestJoinRequest:
+      type: object
+      required: [id, channel_id, display_name, status, expires_at, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        channel_id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+        status:
+          type: string
+          enum: [waiting, approved, rejected, expired]
+        guest_access_token:
+          type: string
+          description: Returned only once when the guest grant is created.
+        room:
+          $ref: "#/components/schemas/PublicConversationRoom"
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LegalDocumentVersion:
+      type: object
+      required: [document_type, version, includes]
+      properties:
+        document_type:
+          type: string
+          enum: [terms, privacy]
+        version:
+          type: string
+          example: "2026-08-07"
+          description: Server-configured current document version from TERMS_VERSION or PRIVACY_POLICY_VERSION.
+        includes:
+          type: array
+          items:
+            type: string
+    LegalAcceptanceRequest:
+      type: object
+      required: [terms_accepted, terms_version, privacy_accepted, privacy_version]
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+          description: Workspace receiving the acceptance. Defaults to the workspace embedded in the access token for backward compatibility.
+        terms_accepted:
+          type: boolean
+          const: true
+        terms_version:
+          type: string
+        privacy_accepted:
+          type: boolean
+          const: true
+        privacy_version:
+          type: string
+    LegalDocumentAcceptance:
+      type: object
+      required: [version, accepted]
+      properties:
+        version:
+          type: string
+        accepted:
+          type: boolean
+        accepted_at:
+          type: string
+          format: date-time
+    CurrentLegalAcceptance:
+      type: object
+      required: [workspace_id, complete, terms, privacy]
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+          description: Authorized workspace for which this status was evaluated.
+        complete:
+          type: boolean
+          description: True only when both current per-workspace document versions have real acceptance records.
+        terms:
+          $ref: "#/components/schemas/LegalDocumentAcceptance"
+        privacy:
+          $ref: "#/components/schemas/LegalDocumentAcceptance"
+    CreateModerationReportRequest:
+      type: object
+      required: [target_type, target_id, reason]
+      properties:
+        target_type:
+          type: string
+          enum: [message, user]
+        target_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          enum: [spam, harassment, hate_speech, sexual_content, violence, illegal_content, privacy, impersonation, other]
+        details:
+          type: string
+          maxLength: 2000
+    UpdateModerationReportRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [pending, reviewing, resolved, dismissed]
+        resolution_note:
+          type: string
+          maxLength: 2000
+          description: Required when status is resolved or dismissed.
+    ModerationReport:
+      type: object
+      required: [id, workspace_id, target_type, target_id, reason, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        reporter_user_id:
+          type: [string, "null"]
+          format: uuid
+        reporter_display_name:
+          type: [string, "null"]
+        target_type:
+          type: string
+          enum: [message, user]
+        target_id:
+          type: string
+          format: uuid
+        target_user_id:
+          type: [string, "null"]
+          format: uuid
+        target_user_display_name:
+          type: [string, "null"]
+        target_snapshot:
+          type: object
+          readOnly: true
+          additionalProperties: true
+          description: Immutable minimal evidence captured when the report is created. Included only in permissioned moderator list/update responses, not the reporter's creation receipt. Message snapshots contain a bounded body excerpt and SHA-256, never attachment payloads. The object becomes empty after the configured moderation-evidence retention window.
+        reason:
+          type: string
+          enum: [spam, harassment, hate_speech, sexual_content, violence, illegal_content, privacy, impersonation, other]
+        details:
+          type: [string, "null"]
+        status:
+          type: string
+          enum: [pending, reviewing, resolved, dismissed]
+        resolution_note:
+          type: [string, "null"]
+        resolved_by:
+          type: [string, "null"]
+          format: uuid
+        resolved_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateUserBlockRequest:
+      type: object
+      required: [blocked_user_id]
+      properties:
+        blocked_user_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          maxLength: 500
+    UserBlock:
+      type: object
+      required: [id, workspace_id, blocked_user_id, blocked_username, blocked_display_name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        blocked_user_id:
+          type: string
+          format: uuid
+        blocked_username:
+          type: string
+        blocked_display_name:
+          type: string
+        blocked_avatar_url:
+          type: [string, "null"]
+          format: uri
+        reason:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     PublicOIDCProvider:
       type: object
       required: [id, name]

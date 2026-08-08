@@ -15,6 +15,10 @@ type PermissionChecker interface {
 	HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error)
 }
 
+type BlockChecker interface {
+	IsInteractionBlocked(ctx context.Context, workspaceID string, firstUserID string, secondUserID string) (bool, error)
+}
+
 type Repository interface {
 	Create(ctx context.Context, params CreateParams) (callsdomain.Call, error)
 	Get(ctx context.Context, workspaceID string, callID string) (callsdomain.Call, error)
@@ -37,6 +41,7 @@ type Service struct {
 	realtime      RealtimePublisher
 	notifications NotificationPublisher
 	ringTimeout   time.Duration
+	blockChecker  BlockChecker
 }
 
 type NotificationPublisher interface {
@@ -170,11 +175,33 @@ func (s *Service) SetRingTimeout(timeout time.Duration) {
 	}
 }
 
+func (s *Service) SetBlockChecker(checker BlockChecker) {
+	s.blockChecker = checker
+}
+
 func (s *Service) Create(ctx context.Context, input CreateInput) (CallDTO, error) {
 	userID := strings.TrimSpace(input.ActorUserID)
 	workspaceID := strings.TrimSpace(input.WorkspaceID)
 	if err := s.ensureWorkspaceMember(ctx, userID, workspaceID); err != nil {
 		return CallDTO{}, err
+	}
+	if s.blockChecker != nil {
+		blocked, err := s.blockChecker.IsInteractionBlocked(
+			ctx,
+			workspaceID,
+			userID,
+			strings.TrimSpace(input.TargetUserID),
+		)
+		if err != nil {
+			return CallDTO{}, err
+		}
+		if blocked {
+			return CallDTO{}, apperrors.New(
+				"INTERACTION_BLOCKED",
+				"This call cannot be started because a block is active.",
+				403,
+			)
+		}
 	}
 	mode := normalizeMode(input.Mode)
 	if mode == "" {
@@ -233,6 +260,32 @@ func (s *Service) FindIncomingRinging(
 	if err != nil {
 		return nil, mapCallError(err)
 	}
+	blocked, err := s.isInteractionBlocked(ctx, call)
+	if err != nil {
+		return nil, err
+	}
+	if blocked {
+		// A block may be created after the invite was persisted or pushed. Move
+		// the still-ringing call to a terminal state before hiding it so clients
+		// cannot accept a stale invite and the caller receives a terminal event.
+		terminated, terminateErr := s.repo.UpdateStatus(ctx, StatusParams{
+			WorkspaceID:    call.WorkspaceID,
+			CallID:         call.ID,
+			Status:         "rejected",
+			ExpectedStatus: "ringing",
+			ActorUserID:    userID,
+		})
+		if terminateErr != nil && !errors.Is(terminateErr, callsdomain.ErrCallInvalidTransition) {
+			return nil, mapCallError(terminateErr)
+		}
+		if terminateErr == nil {
+			_ = s.notifyCallTerminal(ctx, terminated)
+			_ = s.publish(ctx, "CallRejected", terminated, userID, terminated.InitiatorUserID, map[string]any{
+				"reason": "interaction_blocked",
+			})
+		}
+		return nil, nil
+	}
 	dto := toCallDTO(call)
 	return &dto, nil
 }
@@ -246,6 +299,11 @@ func (s *Service) ChangeStatus(ctx context.Context, input StatusInput) (CallDTO,
 	nextStatus, eventType, err := nextStatusForAction(call, actorID, strings.TrimSpace(input.Action))
 	if err != nil {
 		return CallDTO{}, err
+	}
+	if nextStatus == "accepted" {
+		if err := s.ensureCallInteractionAllowed(ctx, call); err != nil {
+			return CallDTO{}, err
+		}
 	}
 	updated, err := s.repo.UpdateStatus(ctx, StatusParams{
 		WorkspaceID:    call.WorkspaceID,
@@ -312,6 +370,9 @@ func (s *Service) SendSignal(ctx context.Context, input SignalInput) (SignalDTO,
 	if !isParticipant(call, actorID) {
 		return SignalDTO{}, apperrors.Forbidden("Bạn không thuộc cuộc gọi này.")
 	}
+	if err := s.ensureCallInteractionAllowed(ctx, call); err != nil {
+		return SignalDTO{}, err
+	}
 	signalType := normalizeSignalType(input.SignalType)
 	if signalType == "" {
 		return SignalDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Loại tín hiệu cuộc gọi không hợp lệ.")
@@ -372,6 +433,33 @@ func (s *Service) ensureWorkspaceMember(ctx context.Context, userID string, work
 		return apperrors.Forbidden("Bạn không thuộc workspace này.")
 	}
 	return nil
+}
+
+func (s *Service) ensureCallInteractionAllowed(ctx context.Context, call callsdomain.Call) error {
+	blocked, err := s.isInteractionBlocked(ctx, call)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return apperrors.New(
+			"INTERACTION_BLOCKED",
+			"This call interaction is unavailable because a block is active.",
+			403,
+		)
+	}
+	return nil
+}
+
+func (s *Service) isInteractionBlocked(ctx context.Context, call callsdomain.Call) (bool, error) {
+	if s.blockChecker == nil {
+		return false, nil
+	}
+	return s.blockChecker.IsInteractionBlocked(
+		ctx,
+		call.WorkspaceID,
+		call.InitiatorUserID,
+		call.TargetUserID,
+	)
 }
 
 func nextStatusForAction(call callsdomain.Call, actorID string, action string) (string, string, error) {

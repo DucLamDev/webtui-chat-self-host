@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createBrowserPlatformServices, setPlatformServices } from "@webtui/chat-core";
-import { buildChatRoute, buildWorkspaceSectionRoute, directIdPrefix, directRouteRef, parseChatRoute } from "../../apps/web/src/lib/chat-route";
+import { buildChatRoute, buildWorkspaceSectionRoute, directIdPrefix, directRouteRef, isAccountDeletionRoute, parseChatRoute } from "../../apps/web/src/lib/chat-route";
 
 describe("chat route", () => {
   afterEach(() => {
@@ -17,6 +17,12 @@ describe("chat route", () => {
     const path = buildWorkspaceSectionRoute("vpsttt", "automation");
     expect(path).toBe("/chat/vpsttt/automation");
     expect(parseChatRoute(path)?.sectionRef).toBe("automation");
+  });
+
+  it("recognizes only the explicit account deletion route request", () => {
+    expect(isAccountDeletionRoute(new URLSearchParams("account_action=delete"))).toBe(true);
+    expect(isAccountDeletionRoute(new URLSearchParams("account_action=export"))).toBe(false);
+    expect(isAccountDeletionRoute()).toBe(false);
   });
 
   it("keeps a short stable id in direct-message routes", () => {

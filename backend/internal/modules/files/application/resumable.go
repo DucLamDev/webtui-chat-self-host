@@ -160,6 +160,9 @@ func (s *Service) CreateUploadSession(ctx context.Context, input CreateUploadSes
 		if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "message.send"); err != nil {
 			return UploadSessionDTO{}, err
 		}
+		if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+			return UploadSessionDTO{}, err
+		}
 	} else if err := s.ensureAnyPermission(ctx, input.ActorUserID, input.WorkspaceID, "file.upload", "message.send"); err != nil {
 		return UploadSessionDTO{}, err
 	}
@@ -269,12 +272,19 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 	if err != nil {
 		return FileDTO{}, mapFileError(err)
 	}
-	storageLocation, err := s.storageForWorkspace(ctx, session.WorkspaceID)
-	if err != nil {
-		return FileDTO{}, err
-	}
 	failSession := func() {
 		_ = s.resumableRepository().FailUploadSession(ctx, session.WorkspaceID, session.ID, session.OwnerID)
+	}
+	if session.ChannelID != nil {
+		if err := s.ensureDirectInteractionAllowed(ctx, session.WorkspaceID, *session.ChannelID, session.OwnerID); err != nil {
+			failSession()
+			return FileDTO{}, err
+		}
+	}
+	storageLocation, err := s.storageForWorkspace(ctx, session.WorkspaceID)
+	if err != nil {
+		failSession()
+		return FileDTO{}, err
 	}
 	parts, err := s.resumableRepository().ListUploadParts(ctx, session.WorkspaceID, session.ID, session.OwnerID)
 	if err != nil {

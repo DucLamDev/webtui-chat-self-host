@@ -29,6 +29,10 @@ type PermissionChecker interface {
 	HasWorkspacePermission(ctx context.Context, userID string, workspaceID string, permissionCode string) (bool, error)
 }
 
+type BlockChecker interface {
+	IsDirectChannelBlocked(ctx context.Context, workspaceID string, channelID string, actorUserID string) (bool, error)
+}
+
 type Repository interface {
 	CreateFile(ctx context.Context, params CreateFileParams) (filesdomain.File, error)
 	FindFile(ctx context.Context, workspaceID string, fileID string) (filesdomain.File, error)
@@ -109,6 +113,7 @@ type Service struct {
 	storageResolver StorageResolver
 	now             func() time.Time
 	realtime        RealtimePublisher
+	blockChecker    BlockChecker
 }
 
 type UploadInput struct {
@@ -287,6 +292,10 @@ func (s *Service) SetRealtimePublisher(publisher RealtimePublisher) {
 	s.realtime = publisher
 }
 
+func (s *Service) SetBlockChecker(checker BlockChecker) {
+	s.blockChecker = checker
+}
+
 func (s *Service) SetStorageResolver(resolver StorageResolver) {
 	s.storageResolver = resolver
 }
@@ -329,6 +338,9 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (FileDTO, error
 	attachedUpload := strings.TrimSpace(input.ChannelID) != "" && strings.TrimSpace(input.MessageID) != ""
 	if attachedUpload {
 		if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "message.send"); err != nil {
+			return FileDTO{}, err
+		}
+		if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
 			return FileDTO{}, err
 		}
 	} else {
@@ -656,6 +668,9 @@ func (s *Service) AttachFile(ctx context.Context, input AttachFileInput) (Attach
 	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "message.send"); err != nil {
 		return AttachmentDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+		return AttachmentDTO{}, err
+	}
 	attachment, err := s.repo.AttachFile(ctx, AttachFileParams{
 		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
 		ChannelID:   strings.TrimSpace(input.ChannelID),
@@ -763,6 +778,29 @@ func (s *Service) ensureAnyPermission(ctx context.Context, userID string, worksp
 		}
 	}
 	return apperrors.Forbidden("Bạn không có quyền thực hiện thao tác này.")
+}
+
+func (s *Service) ensureDirectInteractionAllowed(ctx context.Context, workspaceID string, channelID string, actorUserID string) error {
+	if s.blockChecker == nil || strings.TrimSpace(channelID) == "" {
+		return nil
+	}
+	blocked, err := s.blockChecker.IsDirectChannelBlocked(
+		ctx,
+		strings.TrimSpace(workspaceID),
+		strings.TrimSpace(channelID),
+		strings.TrimSpace(actorUserID),
+	)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return apperrors.New(
+			"INTERACTION_BLOCKED",
+			"This file cannot be attached because a block is active in the direct conversation.",
+			403,
+		)
+	}
+	return nil
 }
 
 func (s *Service) ensureFileAccess(ctx context.Context, userID string, workspaceID string, fileID string) error {

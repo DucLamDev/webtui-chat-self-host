@@ -124,7 +124,17 @@ type scheduledJob struct {
 	clientMessageID  string
 }
 
-func (r *Repository) ProcessDueScheduledMessages(ctx context.Context, limit int) (int, error) {
+func (r *Repository) ProcessDueScheduledMessages(
+	ctx context.Context,
+	limit int,
+	authorizer messagesapp.ScheduledMessageDeliveryAuthorizer,
+) (int, error) {
+	if authorizer == nil {
+		return 0, errors.New("scheduled message delivery authorizer is required")
+	}
+	if r.scheduledTermsVersion == "" || r.scheduledPrivacyVersion == "" {
+		return 0, errors.New("scheduled message legal document versions are required")
+	}
 	rows, err := r.pool.Query(ctx, `
 WITH picked AS (
     SELECT id
@@ -195,37 +205,95 @@ SELECT * FROM claimed
 	processed := 0
 	var processingErrors []error
 	for _, job := range jobs {
+		authorizationErr := authorizer.AuthorizeScheduledMessageDelivery(ctx, messagesapp.ScheduledMessageDelivery{
+			WorkspaceID: job.workspaceID,
+			ChannelID:   job.channelID,
+			SenderID:    job.senderID,
+		})
+		if authorizationErr != nil {
+			if reason, terminal := scheduledDeliveryCancellationReason(authorizationErr); terminal {
+				if updateErr := setScheduledMessageDeliveryState(ctx, r.pool, job.id, "cancelled", reason, ""); updateErr != nil {
+					processingErrors = append(processingErrors, fmt.Errorf("cancel scheduled message %s: %w", job.id, updateErr))
+				}
+				continue
+			}
+			if updateErr := setScheduledMessageDeliveryState(ctx, r.pool, job.id, "failed", authorizationErr.Error(), ""); updateErr != nil {
+				processingErrors = append(processingErrors, fmt.Errorf("record scheduled message %s authorization failure: %w", job.id, updateErr))
+			}
+			processingErrors = append(processingErrors, fmt.Errorf("authorize scheduled message %s: %w", job.id, authorizationErr))
+			continue
+		}
 		message, sendErr := r.Send(ctx, messagesapp.SendParams{
-			WorkspaceID:      job.workspaceID,
-			ChannelID:        job.channelID,
-			SenderID:         job.senderID,
-			ParentID:         job.parentID,
-			ClientMessageID:  job.clientMessageID,
-			Kind:             job.kind,
-			Body:             job.body,
-			Metadata:         ensureScheduledClientID(job.metadata, job.clientMessageID, job.id),
-			MentionedUserIDs: job.mentionedUserIDs,
+			WorkspaceID:                    job.workspaceID,
+			ChannelID:                      job.channelID,
+			SenderID:                       job.senderID,
+			ParentID:                       job.parentID,
+			ClientMessageID:                job.clientMessageID,
+			Kind:                           job.kind,
+			Body:                           job.body,
+			Metadata:                       ensureScheduledClientID(job.metadata, job.clientMessageID, job.id),
+			MentionedUserIDs:               job.mentionedUserIDs,
+			EnforceScheduledDeliveryPolicy: true,
+			ScheduledTermsVersion:          r.scheduledTermsVersion,
+			ScheduledPrivacyVersion:        r.scheduledPrivacyVersion,
 		})
 		if sendErr != nil {
-			_, _ = r.pool.Exec(ctx, `
-UPDATE scheduled_messages
-SET status = 'failed', last_error = left($2, 1000)
-WHERE id = $1::uuid
-`, job.id, sendErr.Error())
+			if reason, terminal := scheduledDeliveryCancellationReason(sendErr); terminal {
+				if updateErr := setScheduledMessageDeliveryState(ctx, r.pool, job.id, "cancelled", reason, ""); updateErr != nil {
+					processingErrors = append(processingErrors, fmt.Errorf("cancel scheduled message %s: %w", job.id, updateErr))
+				}
+				continue
+			}
+			if updateErr := setScheduledMessageDeliveryState(ctx, r.pool, job.id, "failed", sendErr.Error(), ""); updateErr != nil {
+				processingErrors = append(processingErrors, fmt.Errorf("record scheduled message %s send failure: %w", job.id, updateErr))
+			}
 			processingErrors = append(processingErrors, fmt.Errorf("scheduled message %s: %w", job.id, sendErr))
 			continue
 		}
-		if _, err := r.pool.Exec(ctx, `
-UPDATE scheduled_messages
-SET status = 'sent', sent_message_id = $2::uuid, last_error = NULL
-WHERE id = $1::uuid
-`, job.id, message.ID); err != nil {
-			processingErrors = append(processingErrors, err)
+		if err := setScheduledMessageDeliveryState(ctx, r.pool, job.id, "sent", "", message.ID); err != nil {
+			processingErrors = append(processingErrors, fmt.Errorf("mark scheduled message %s sent: %w", job.id, err))
 			continue
 		}
 		processed++
 	}
 	return processed, errors.Join(processingErrors...)
+}
+
+func setScheduledMessageDeliveryState(
+	ctx context.Context,
+	exec commandExecutor,
+	jobID string,
+	status string,
+	lastError string,
+	sentMessageID string,
+) error {
+	command, err := exec.Exec(ctx, `
+UPDATE scheduled_messages
+SET status = $2,
+    last_error = left(NULLIF($3, ''), 1000),
+    sent_message_id = CASE WHEN $2 = 'sent' THEN NULLIF($4, '')::uuid ELSE sent_message_id END
+WHERE id = $1::uuid
+`, jobID, status, lastError, sentMessageID)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return fmt.Errorf("scheduled message state update affected %d rows", command.RowsAffected())
+	}
+	return nil
+}
+
+func scheduledDeliveryCancellationReason(err error) (string, bool) {
+	switch {
+	case errors.Is(err, messagesdomain.ErrScheduledDeliveryPermissionRevoked):
+		return "sender permission revoked before delivery", true
+	case errors.Is(err, messagesdomain.ErrScheduledDeliveryLegalAcceptanceStale):
+		return "current legal documents not accepted before delivery", true
+	case errors.Is(err, messagesdomain.ErrInteractionBlocked):
+		return "interaction blocked before delivery", true
+	default:
+		return "", false
+	}
 }
 
 func ensureScheduledClientID(metadata []byte, clientMessageID string, scheduledID string) []byte {

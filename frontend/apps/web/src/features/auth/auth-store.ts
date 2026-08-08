@@ -17,6 +17,7 @@ export type AuthAccount = {
   sessionId: string | null;
   updatedAt: string;
   user: AuthUser | null;
+  workspaceId?: string | null;
 };
 
 type AuthState = {
@@ -29,10 +30,12 @@ type AuthState = {
   user: AuthUser | null;
   zoneDomain: string | null;
   zoneRuntime: ZoneRuntime | null;
+  workspaceId: string | null;
   clearZoneRuntime: () => void;
   clearSession: () => void;
   setHydrated: (hydrated: boolean) => void;
   setRememberLogin: (remember: boolean) => void;
+  setActiveWorkspaceId: (workspaceId: string | null) => void;
   setSession: (result: AuthResult) => void;
   setUser: (user: AuthUser | null) => void;
   setZoneRuntime: (domain: string, runtime: ZoneRuntime) => void;
@@ -50,6 +53,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       zoneDomain: null,
       zoneRuntime: null,
+      workspaceId: null,
       clearZoneRuntime: () =>
         set((state) => ({
           accessToken: null,
@@ -58,7 +62,8 @@ export const useAuthStore = create<AuthState>()(
           sessionId: null,
           user: null,
           zoneDomain: null,
-          zoneRuntime: null
+          zoneRuntime: null,
+          workspaceId: null
         })),
       clearSession: () =>
         set((state) => ({
@@ -77,10 +82,18 @@ export const useAuthStore = create<AuthState>()(
           ),
           refreshToken: null,
           sessionId: null,
-          user: null
+          user: null,
+          workspaceId: null
         })),
       setHydrated: (hydrated) => set({ hydrated }),
       setRememberLogin: (rememberLogin) => set({ rememberLogin }),
+      setActiveWorkspaceId: (workspaceId) =>
+        set((state) => ({
+          accounts: state.accounts.map((account) =>
+            account.domain === state.zoneDomain ? { ...account, workspaceId } : account
+          ),
+          workspaceId
+        })),
       setSession: (result) =>
         set((state) => {
           const accessToken = result.tokens?.access_token ?? result.access_token ?? state.accessToken;
@@ -91,6 +104,7 @@ export const useAuthStore = create<AuthState>()(
             refreshToken,
             sessionId: result.session_id ?? state.sessionId,
             user: result.user ?? state.user,
+            workspaceId: state.workspaceId ?? result.zone?.workspace_id ?? null,
             zoneDomain: result.zone?.domain ?? state.zoneDomain
           };
           return {
@@ -104,7 +118,8 @@ export const useAuthStore = create<AuthState>()(
                     runtime: state.zoneRuntime,
                     sessionId: next.sessionId,
                     updatedAt: new Date().toISOString(),
-                    user: next.user
+                    user: next.user,
+                    workspaceId: next.workspaceId
                   })
                 : state.accounts
           };
@@ -120,7 +135,8 @@ export const useAuthStore = create<AuthState>()(
                   runtime: state.zoneRuntime,
                   sessionId: state.sessionId,
                   updatedAt: new Date().toISOString(),
-                  user
+                  user,
+                  workspaceId: state.workspaceId
                 })
               : state.accounts,
           user
@@ -138,11 +154,13 @@ export const useAuthStore = create<AuthState>()(
               runtime: zoneRuntime,
               sessionId: existing?.sessionId ?? null,
               updatedAt: new Date().toISOString(),
-              user: existing?.user ?? null
+              user: existing?.user ?? null,
+              workspaceId: existing?.workspaceId ?? null
             }),
             refreshToken: existing?.refreshToken ?? null,
             sessionId: existing?.sessionId ?? null,
             user: existing?.user ?? null,
+            workspaceId: existing?.workspaceId ?? null,
             zoneDomain,
             zoneRuntime
           };
@@ -171,6 +189,7 @@ export const useAuthStore = create<AuthState>()(
         rememberLogin: state.rememberLogin,
         sessionId: state.sessionId,
         user: state.user,
+        workspaceId: state.workspaceId,
         zoneDomain: state.zoneDomain,
         zoneRuntime: state.zoneRuntime
       }),
@@ -199,7 +218,8 @@ function rememberCurrentAccount(state: AuthState): AuthAccount[] {
     runtime: state.zoneRuntime,
     sessionId: state.sessionId ?? existing?.sessionId ?? null,
     updatedAt: new Date().toISOString(),
-    user: state.user ?? existing?.user ?? null
+    user: state.user ?? existing?.user ?? null,
+    workspaceId: state.workspaceId ?? existing?.workspaceId ?? null
   });
 }
 

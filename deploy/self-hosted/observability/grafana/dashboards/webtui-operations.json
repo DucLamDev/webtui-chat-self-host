@@ -135,6 +135,40 @@
       "targets": [{ "expr": "webtui_push_relay_dead_jobs_24h", "refId": "A" }],
       "title": "Official relay dead-letter (24h)",
       "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 14,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "webtui_moderation_reports", "legendFormat": "{{status}}", "refId": "A" }],
+      "title": "Moderation queue by status",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "orange", "value": 14400 }, { "color": "red", "value": 86400 }] } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 28 },
+      "id": 15,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
+      "targets": [{ "expr": "webtui_moderation_oldest_open_age_seconds", "refId": "A" }],
+      "title": "Oldest open moderation report",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "min": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 28 },
+      "id": 16,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
+      "targets": [
+        { "expr": "webtui_moderation_urgent_triage_overdue", "legendFormat": "urgent 4h", "refId": "A" },
+        { "expr": "webtui_moderation_normal_triage_overdue", "legendFormat": "normal 24h", "refId": "B" },
+        { "expr": "webtui_moderation_closure_overdue", "legendFormat": "closure 72h", "refId": "C" }
+      ],
+      "title": "Moderation SLO breaches",
+      "type": "stat"
     }
   ],
   "refresh": "15s",

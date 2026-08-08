@@ -3,6 +3,7 @@ import {
   adminNavigationGroups,
   adminPageMeta,
   adminSectionGroup,
+  canAccessAdminSection,
   type AdminNavId,
   resolveAdminSection
 } from "../../apps/admin/src/features/dashboard/model/navigation";
@@ -39,6 +40,7 @@ describe("admin navigation", () => {
   it.each([
     ["overview", "Giám sát"],
     ["push", "Giám sát"],
+    ["moderation", "Workspace"],
     ["messages", "Workspace"],
     ["channels", "Workspace"],
     ["users", "Workspace"],
@@ -55,5 +57,14 @@ describe("admin navigation", () => {
 
   it("uses the management fallback for an unknown runtime section", () => {
     expect(adminSectionGroup("unknown" as AdminNavId)).toBe("Quản trị");
+  });
+
+  it("gates only the moderation section with moderation.manage", () => {
+    const denied = () => false;
+    const moderationManager = (permission: string) => permission === "moderation.manage";
+
+    expect(canAccessAdminSection("moderation", denied)).toBe(false);
+    expect(canAccessAdminSection("moderation", moderationManager)).toBe(true);
+    expect(canAccessAdminSection("messages", denied)).toBe(true);
   });
 });

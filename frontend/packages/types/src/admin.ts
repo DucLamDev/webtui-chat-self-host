@@ -125,3 +125,75 @@ export type AuditLog = {
   metadata?: JsonValue;
   created_at: ISODateTime;
 };
+
+export type ModerationReportStatus =
+  "pending" | "reviewing" | "resolved" | "dismissed";
+
+export type ModerationReportTargetType = "message" | "user";
+
+export type ModerationReportReason =
+  | "spam"
+  | "harassment"
+  | "hate_speech"
+  | "sexual_content"
+  | "violence"
+  | "illegal_content"
+  | "privacy"
+  | "impersonation"
+  | "other";
+
+export type ModerationMessageSnapshot = {
+  message_id?: Id;
+  channel_id?: Id;
+  sender_user_id?: Id;
+  sender_display_name?: string;
+  producer_kind?: "user" | "bot" | "integration" | "system";
+  kind?: string;
+  body_excerpt?: string;
+  body_sha256?: string;
+  created_at?: ISODateTime;
+  [key: string]: unknown;
+};
+
+export type ModerationUserSnapshot = {
+  user_id?: Id;
+  username?: string;
+  display_name?: string;
+  created_at?: ISODateTime;
+  [key: string]: unknown;
+};
+
+export type ModerationTargetSnapshot =
+  ModerationMessageSnapshot | ModerationUserSnapshot;
+
+export type ModerationReport = {
+  id: Id;
+  workspace_id: Id;
+  reporter_user_id?: Id | null;
+  reporter_display_name?: string | null;
+  target_type: ModerationReportTargetType;
+  target_id: Id;
+  target_user_id?: Id | null;
+  target_user_display_name?: string | null;
+  target_snapshot?: ModerationTargetSnapshot;
+  reason: ModerationReportReason;
+  details?: string | null;
+  status: ModerationReportStatus;
+  resolution_note?: string | null;
+  resolved_by?: Id | null;
+  resolved_at?: ISODateTime | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+};
+
+export type ListModerationReportsParams = {
+  status?: ModerationReportStatus;
+  target_type?: ModerationReportTargetType;
+  limit?: number;
+  offset?: number;
+};
+
+export type UpdateModerationReportInput = {
+  status: ModerationReportStatus;
+  resolution_note?: string;
+};

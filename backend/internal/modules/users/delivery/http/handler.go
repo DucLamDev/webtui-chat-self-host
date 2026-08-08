@@ -47,18 +47,24 @@ func (h *Handler) SetStorageResolver(resolver *tenantstorage.Resolver) {
 	h.storageResolver = resolver
 }
 
-func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc, legalAcceptanceMiddleware gin.HandlerFunc) {
 	router.GET("/avatars/:zone_id/:user_id/:file_name", h.ServeAvatar)
 	private := router.Group("")
 	private.Use(authMiddleware)
 	private.GET("/me", h.Me)
-	private.PATCH("/me", h.UpdateMe)
-	private.POST("/me/avatar", h.UploadMyAvatar)
 	private.DELETE("/me", h.DeleteMe)
 	private.GET("", h.List)
 	private.GET("/:user_id", h.Get)
 	private.PATCH("/:user_id", h.Update)
 	private.DELETE("/:user_id", h.Delete)
+
+	// Display names and avatars are user-generated content visible to other
+	// workspace members. Keep account deletion and admin moderation reachable,
+	// but require current legal acceptance for self-authored profile content.
+	ugc := private.Group("")
+	ugc.Use(legalAcceptanceMiddleware)
+	ugc.PATCH("/me", h.UpdateMe)
+	ugc.POST("/me/avatar", h.UploadMyAvatar)
 }
 
 func (h *Handler) DeleteMe(c *gin.Context) {

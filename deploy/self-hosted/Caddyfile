@@ -23,6 +23,22 @@
 		respond "Not Found" 404
 	}
 
+	# Android App Links and Apple Universal Links must be returned directly from
+	# the app-link host. The publisher portal owns the signed association
+	# payloads, while this ingress keeps the public chat host and TLS identity.
+	@appAssociations {
+		host {$WEBTUI_APP_LINK_HOST}
+		path /.well-known/assetlinks.json /.well-known/apple-app-site-association
+	}
+	handle @appAssociations {
+		reverse_proxy https://{$PORTAL_DOMAIN} {
+			header_up Host {$PORTAL_DOMAIN}
+			transport http {
+				tls_server_name {$PORTAL_DOMAIN}
+			}
+		}
+	}
+
 	# /metrics is intentionally internal-only; Prometheus scrapes api:8080 on
 	# the backend network and Caddy never publishes operational metadata.
 	@backend path /api /api/* /ws /ws/* /health /ready /version /.well-known/*

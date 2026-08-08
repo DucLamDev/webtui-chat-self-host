@@ -106,15 +106,18 @@ type CollaborationRole struct {
 }
 
 type GuestRequest struct {
-	ID          string
-	ChannelID   string
-	DisplayName string
-	Status      string
-	ReviewedBy  *string
-	ReviewedAt  *time.Time
-	ExpiresAt   time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                   string
+	ChannelID            string
+	DisplayName          string
+	Status               string
+	ReviewedBy           *string
+	ReviewedAt           *time.Time
+	TermsVersion         *string
+	PrivacyPolicyVersion *string
+	LegalAcceptedAt      *time.Time
+	ExpiresAt            time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type CollaborationDocument struct {

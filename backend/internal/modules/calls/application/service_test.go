@@ -8,6 +8,7 @@ import (
 	"time"
 
 	callsdomain "github.com/duclamdev/application-chat/backend/internal/modules/calls/domain"
+	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
 type fakeCallRepo struct {
@@ -118,6 +119,35 @@ type fakeCallChecker struct {
 
 func (c fakeCallChecker) HasWorkspacePermission(context.Context, string, string, string) (bool, error) {
 	return c.allowed, nil
+}
+
+type staticCallBlockChecker struct {
+	blocked bool
+}
+
+func (c staticCallBlockChecker) IsInteractionBlocked(context.Context, string, string, string) (bool, error) {
+	return c.blocked, nil
+}
+
+type mutableCallBlockChecker struct {
+	blocked bool
+}
+
+func (c *mutableCallBlockChecker) IsInteractionBlocked(context.Context, string, string, string) (bool, error) {
+	return c.blocked, nil
+}
+
+func TestCreateRejectsBlockedInteraction(t *testing.T) {
+	service := NewService(nil, fakeCallChecker{allowed: true}, nil)
+	service.SetBlockChecker(staticCallBlockChecker{blocked: true})
+
+	_, err := service.Create(context.Background(), CreateInput{
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", TargetUserID: "user-b", Mode: "audio",
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" {
+		t.Fatalf("Create() error = %#v, want INTERACTION_BLOCKED", err)
+	}
 }
 
 type fakeRealtime struct {
@@ -445,6 +475,141 @@ func TestFindIncomingRingingReturnsOnlyTargetCall(t *testing.T) {
 	}
 	if missing != nil {
 		t.Fatalf("incoming call for unrelated user = %#v, want nil", missing)
+	}
+}
+
+func TestBlockAfterInviteHidesAndTerminatesIncomingCall(t *testing.T) {
+	repo := &fakeCallRepo{}
+	realtime := &fakeRealtime{}
+	notifications := &fakeCallNotifications{}
+	blocks := &mutableCallBlockChecker{}
+	service := NewService(repo, fakeCallChecker{allowed: true}, realtime, notifications)
+	service.SetBlockChecker(blocks)
+
+	created, err := service.Create(context.Background(), CreateInput{
+		ActorUserID:  "user-1",
+		WorkspaceID:  "workspace-1",
+		ChannelID:    "channel-1",
+		TargetUserID: "user-2",
+		Mode:         "audio",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	blocks.blocked = true
+
+	incoming, err := service.FindIncomingRinging(context.Background(), "user-2", "workspace-1")
+	if err != nil {
+		t.Fatalf("FindIncomingRinging() error = %v", err)
+	}
+	if incoming != nil {
+		t.Fatalf("incoming = %#v, want hidden after block", incoming)
+	}
+	if repo.call.ID != created.ID || repo.call.Status != "rejected" {
+		t.Fatalf("persisted call = %#v, want rejected", repo.call)
+	}
+	if repo.messageCalled {
+		t.Fatal("automatic block rejection must not create new call content")
+	}
+	if len(notifications.terminal) != 1 || notifications.terminal[0].Status != "rejected" {
+		t.Fatalf("terminal notifications = %#v", notifications.terminal)
+	}
+	if len(realtime.events) != 2 || realtime.events[1].Type != "CallRejected" ||
+		realtime.events[1].Payload["reason"] != "interaction_blocked" {
+		t.Fatalf("realtime events = %#v", realtime.events)
+	}
+}
+
+func TestBlockAfterInviteDeniesAcceptAndSignaling(t *testing.T) {
+	blocks := &mutableCallBlockChecker{blocked: true}
+	repo := &fakeCallRepo{call: callsdomain.Call{
+		ID:              "call-1",
+		WorkspaceID:     "workspace-1",
+		ChannelID:       "channel-1",
+		InitiatorUserID: "user-1",
+		TargetUserID:    "user-2",
+		Mode:            "audio",
+		Status:          "ringing",
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}}
+	service := NewService(repo, fakeCallChecker{allowed: true}, nil)
+	service.SetBlockChecker(blocks)
+
+	_, err := service.ChangeStatus(context.Background(), StatusInput{
+		ActorUserID: "user-2",
+		WorkspaceID: "workspace-1",
+		CallID:      "call-1",
+		Action:      "accept",
+	})
+	assertCallInteractionBlocked(t, err)
+	if repo.updateStatusCalled {
+		t.Fatal("blocked accept must not update the call")
+	}
+
+	repo.call.Status = "accepted"
+	_, err = service.SendSignal(context.Background(), SignalInput{
+		ActorUserID: "user-1",
+		WorkspaceID: "workspace-1",
+		CallID:      "call-1",
+		SignalType:  "offer",
+		Payload:     json.RawMessage(`{"sdp":{"type":"offer","sdp":"v=0"}}`),
+	})
+	assertCallInteractionBlocked(t, err)
+	if repo.lastSignal.CallID != "" {
+		t.Fatalf("blocked signal was persisted: %#v", repo.lastSignal)
+	}
+}
+
+func TestBlockAllowsTerminalCallCleanup(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		actor  string
+		action string
+		want   string
+	}{
+		{name: "recipient rejects ringing", status: "ringing", actor: "user-2", action: "reject", want: "rejected"},
+		{name: "caller cancels ringing", status: "ringing", actor: "user-1", action: "cancel", want: "cancelled"},
+		{name: "participant ends accepted", status: "accepted", actor: "user-2", action: "hangup", want: "ended"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := &fakeCallRepo{call: callsdomain.Call{
+				ID:              "call-1",
+				WorkspaceID:     "workspace-1",
+				ChannelID:       "channel-1",
+				InitiatorUserID: "user-1",
+				TargetUserID:    "user-2",
+				Mode:            "audio",
+				Status:          test.status,
+				CreatedAt:       time.Now(),
+				UpdatedAt:       time.Now(),
+			}}
+			service := NewService(repo, fakeCallChecker{allowed: true}, nil)
+			service.SetBlockChecker(staticCallBlockChecker{blocked: true})
+
+			updated, err := service.ChangeStatus(context.Background(), StatusInput{
+				ActorUserID: test.actor,
+				WorkspaceID: "workspace-1",
+				CallID:      "call-1",
+				Action:      test.action,
+			})
+			if err != nil {
+				t.Fatalf("ChangeStatus(%s) error = %v", test.action, err)
+			}
+			if updated.Status != test.want {
+				t.Fatalf("status = %q, want %q", updated.Status, test.want)
+			}
+		})
+	}
+}
+
+func assertCallInteractionBlocked(t *testing.T, err error) {
+	t.Helper()
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" || appErr.Status != 403 {
+		t.Fatalf("error = %#v, want 403 INTERACTION_BLOCKED", err)
 	}
 }
 

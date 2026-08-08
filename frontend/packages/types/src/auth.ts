@@ -55,6 +55,10 @@ export type GoogleLoginInput = {
   credential: string;
   domain?: string;
   device_name?: string;
+  terms_accepted?: true;
+  terms_version?: string;
+  privacy_accepted?: true;
+  privacy_version?: string;
 };
 
 export type OIDCProviderSummary = {
@@ -88,6 +92,44 @@ export type RegisterInput = {
   invite_token?: string;
   password: string;
   device_name?: string;
+  terms_accepted: true;
+  terms_version: string;
+  privacy_accepted: true;
+  privacy_version: string;
+};
+
+export type LegalDocumentAcceptance = {
+  version: string;
+  accepted: boolean;
+  accepted_at?: ISODateTime | null;
+};
+
+export type CurrentLegalAcceptance = {
+  complete: boolean;
+  workspace_id: Id;
+  terms: LegalDocumentAcceptance;
+  privacy: LegalDocumentAcceptance;
+};
+
+export type LegalAcceptanceInput = {
+  workspace_id: Id;
+  terms_accepted: true;
+  terms_version: string;
+  privacy_accepted: true;
+  privacy_version: string;
+};
+
+export type LegalDocumentType = "terms" | "privacy";
+
+export type LegalDocumentVersion = {
+  document_type: LegalDocumentType;
+  includes: string[];
+  version: string;
+};
+
+export type CurrentLegalDocuments = {
+  privacy: LegalDocumentVersion;
+  terms: LegalDocumentVersion;
 };
 
 export type RefreshInput = {

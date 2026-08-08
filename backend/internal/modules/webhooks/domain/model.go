@@ -6,11 +6,14 @@ import (
 )
 
 var (
-	ErrWebhookQuotaExceeded       = errors.New("zone da vuot webhook quota")
-	ErrIncomingWebhookNotFound    = errors.New("không tìm thấy incoming webhook")
-	ErrOutgoingWebhookNotFound    = errors.New("không tìm thấy outgoing webhook")
-	ErrWebhookDeliveryNotFound    = errors.New("không tìm thấy webhook delivery")
-	ErrIntegrationChannelNotFound = errors.New("không tìm thấy kênh tích hợp")
+	ErrWebhookQuotaExceeded        = errors.New("zone da vuot webhook quota")
+	ErrIncomingWebhookNotFound     = errors.New("không tìm thấy incoming webhook")
+	ErrOutgoingWebhookNotFound     = errors.New("không tìm thấy outgoing webhook")
+	ErrWebhookDeliveryNotFound     = errors.New("không tìm thấy webhook delivery")
+	ErrIntegrationChannelNotFound  = errors.New("không tìm thấy kênh tích hợp")
+	ErrIntegrationCredentialStale  = errors.New("credential tích hợp không còn hoạt động")
+	ErrIntegrationLegalRequired    = errors.New("chủ sở hữu tích hợp chưa chấp nhận tài liệu pháp lý hiện hành")
+	ErrIntegrationLegalUnavailable = errors.New("chưa cấu hình phiên bản tài liệu pháp lý cho tích hợp")
 )
 
 type IncomingWebhook struct {

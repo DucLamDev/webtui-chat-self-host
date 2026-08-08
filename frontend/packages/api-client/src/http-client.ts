@@ -14,10 +14,19 @@ export type JsonRequestBody =
 
 export type HttpClientOptions = {
   baseUrl: string | (() => string);
+  beforeRequest?: (request: HttpRequestContext) => Promise<void> | void;
   fetcher?: typeof fetch;
   getAccessToken?: () => string | null | undefined;
   onUnauthorized?: () => void;
+  onRequestError?: (error: ApiClientError, request?: HttpRequestContext) => void;
   refreshAccessToken?: () => Promise<string | null | undefined>;
+};
+
+export type HttpRequestContext = {
+  auth: boolean;
+  body?: BodyInit | JsonRequestBody;
+  method: string;
+  path: string;
 };
 
 export type RequestOptions = Omit<RequestInit, "body"> & {
@@ -55,17 +64,21 @@ export class ApiClientError extends Error {
 
 export class HttpClient {
   private baseUrl: string | (() => string);
+  private readonly beforeRequest?: (request: HttpRequestContext) => Promise<void> | void;
   private readonly fetcher: typeof fetch;
   private readonly getAccessToken?: () => string | null | undefined;
   private readonly onUnauthorized?: () => void;
+  private readonly onRequestError?: (error: ApiClientError, request?: HttpRequestContext) => void;
   private readonly refreshAccessToken?: () => Promise<string | null | undefined>;
   private refreshPromise?: Promise<string | null | undefined>;
 
   constructor(options: HttpClientOptions) {
     this.baseUrl = options.baseUrl;
+    this.beforeRequest = options.beforeRequest;
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.getAccessToken = options.getAccessToken;
     this.onUnauthorized = options.onUnauthorized;
+    this.onRequestError = options.onRequestError;
     this.refreshAccessToken = options.refreshAccessToken;
   }
 
@@ -128,6 +141,8 @@ export class HttpClient {
   }
 
   async blob(path: string, options: RequestOptions = {}): Promise<Blob> {
+    const requestContext = this.requestContext(path, options);
+    await this.beforeRequest?.(requestContext);
     const response = await this.fetch(path, {
       ...options,
       method: options.method ?? "GET",
@@ -135,7 +150,7 @@ export class HttpClient {
     });
 
     if (!response.ok) {
-      await this.throwResponseError(response, options.auth !== false);
+      await this.throwResponseError(response, options.auth !== false, requestContext);
     }
 
     return response.blob();
@@ -145,6 +160,8 @@ export class HttpClient {
     path: string,
     options: RequestOptions = {}
   ): Promise<TData> {
+    const requestContext = this.requestContext(path, options);
+    await this.beforeRequest?.(requestContext);
     const response = await this.fetch(path, options);
 
     if (
@@ -169,7 +186,8 @@ export class HttpClient {
     return this.readJsonResponse<TData>(
       response,
       options.unwrap !== false,
-      options.auth !== false
+      options.auth !== false,
+      requestContext
     );
   }
 
@@ -242,12 +260,13 @@ export class HttpClient {
   private async readJsonResponse<TData>(
     response: Response,
     unwrap: boolean,
-    notifyUnauthorized: boolean
+    notifyUnauthorized: boolean,
+    requestContext?: HttpRequestContext
   ): Promise<TData> {
     const payload = await this.parseJson(response);
 
     if (!response.ok) {
-      throw this.toError(response, payload, notifyUnauthorized);
+      throw this.toError(response, payload, notifyUnauthorized, requestContext);
     }
 
     if (!unwrap) {
@@ -256,7 +275,7 @@ export class HttpClient {
 
     if (this.isEnvelope<TData>(payload)) {
       if (!payload.success) {
-        throw this.toError(response, payload, notifyUnauthorized);
+        throw this.toError(response, payload, notifyUnauthorized, requestContext);
       }
 
       return payload.data as TData;
@@ -265,9 +284,13 @@ export class HttpClient {
     return payload as TData;
   }
 
-  private async throwResponseError(response: Response, notifyUnauthorized: boolean): Promise<never> {
+  private async throwResponseError(
+    response: Response,
+    notifyUnauthorized: boolean,
+    requestContext?: HttpRequestContext
+  ): Promise<never> {
     const payload = await this.parseJson(response);
-    throw this.toError(response, payload, notifyUnauthorized);
+    throw this.toError(response, payload, notifyUnauthorized, requestContext);
   }
 
   private async parseJson(response: Response): Promise<unknown> {
@@ -284,7 +307,12 @@ export class HttpClient {
     }
   }
 
-  private toError(response: Response, payload: unknown, notifyUnauthorized = true): ApiClientError {
+  private toError(
+    response: Response,
+    payload: unknown,
+    notifyUnauthorized = true,
+    requestContext?: HttpRequestContext
+  ): ApiClientError {
     const envelope = this.isEnvelope<unknown>(payload) ? payload : undefined;
     const fallbackMessage =
       typeof payload === "object" && payload && "message" in payload
@@ -303,13 +331,24 @@ export class HttpClient {
       this.onUnauthorized?.();
     }
 
-    return new ApiClientError({
+    const error = new ApiClientError({
       code: envelope?.error?.code ?? `HTTP_${response.status}`,
       details: envelope?.error?.details,
       message,
       requestId,
       status: response.status
     });
+    this.onRequestError?.(error, requestContext);
+    return error;
+  }
+
+  private requestContext(path: string, options: RequestOptions): HttpRequestContext {
+    return {
+      auth: options.auth !== false,
+      body: options.body,
+      method: options.method ?? "GET",
+      path
+    };
   }
 
   private async refreshOnce(): Promise<string | null | undefined> {

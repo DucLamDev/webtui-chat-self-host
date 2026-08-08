@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	messagesapp "github.com/duclamdev/application-chat/backend/internal/modules/messages/application"
@@ -18,15 +19,27 @@ import (
 )
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool                    *pgxpool.Pool
+	scheduledTermsVersion   string
+	scheduledPrivacyVersion string
 }
 
 type commandExecutor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
+type queryExecutor interface {
+	commandExecutor
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
+}
+
+func (r *Repository) SetScheduledDeliveryLegalVersions(termsVersion string, privacyVersion string) {
+	r.scheduledTermsVersion = strings.TrimSpace(termsVersion)
+	r.scheduledPrivacyVersion = strings.TrimSpace(privacyVersion)
 }
 
 func (r *Repository) ListActiveChannelMemberIDs(ctx context.Context, workspaceID string, channelID string) ([]string, error) {
@@ -69,6 +82,26 @@ func (r *Repository) Send(ctx context.Context, params messagesapp.SendParams) (m
 		_ = tx.Rollback(ctx)
 	}()
 
+	// A worker can publish successfully and then fail while marking the
+	// scheduled row as sent. Resolve that retry before mutable policy checks so
+	// a later role revocation/block does not mislabel already-published content
+	// as cancelled or create a duplicate.
+	if params.ClientMessageID != "" {
+		existing, err := r.findByClientMessageID(ctx, tx, params)
+		if err == nil {
+			return existing, nil
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return messagesdomain.Message{}, fmt.Errorf("message send check idempotency: %w", err)
+		}
+	}
+
+	if params.EnforceScheduledDeliveryPolicy {
+		if err := ensureScheduledDeliveryPolicy(ctx, tx, params); err != nil {
+			return messagesdomain.Message{}, err
+		}
+	}
+
 	threadRootID := ""
 	if params.ParentID != "" {
 		if err := tx.QueryRow(ctx, `
@@ -89,15 +122,8 @@ WHERE workspace_id = $1::uuid
 	if err := ensureDirectChannelMember(ctx, tx, params.WorkspaceID, params.ChannelID, params.SenderID); err != nil {
 		return messagesdomain.Message{}, fmt.Errorf("message send repair direct channel members: %w", err)
 	}
-
-	if params.ClientMessageID != "" {
-		existing, err := r.findByClientMessageID(ctx, tx, params)
-		if err == nil {
-			return existing, nil
-		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return messagesdomain.Message{}, fmt.Errorf("message send check idempotency: %w", err)
-		}
+	if err := ensureDirectInteractionUnblocked(ctx, tx, params.WorkspaceID, params.ChannelID, params.SenderID); err != nil {
+		return messagesdomain.Message{}, fmt.Errorf("message send block policy: %w", err)
 	}
 
 	row := tx.QueryRow(ctx, `
@@ -246,6 +272,135 @@ func withEmptyMessageRelations(message messagesdomain.Message) messagesdomain.Me
 	return message
 }
 
+func ensureScheduledDeliveryPolicy(ctx context.Context, tx pgx.Tx, params messagesapp.SendParams) error {
+	termsVersion := strings.TrimSpace(params.ScheduledTermsVersion)
+	privacyVersion := strings.TrimSpace(params.ScheduledPrivacyVersion)
+	if termsVersion == "" || privacyVersion == "" {
+		return errors.New("scheduled message legal document versions are required")
+	}
+
+	// Suspension/deletion does not necessarily remove role or channel rows.
+	// Lock the sender account so a concurrent moderation action is serialized
+	// with publication and an already-disabled user can never deliver a queue.
+	var activeUser bool
+	err := tx.QueryRow(ctx, `
+SELECT sender.status = 'active' AND sender.deleted_at IS NULL
+FROM users sender
+WHERE sender.id = $1::uuid
+FOR SHARE OF sender
+`, params.SenderID).Scan(&activeUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return messagesdomain.ErrScheduledDeliveryPermissionRevoked
+	}
+	if err != nil {
+		return fmt.Errorf("scheduled message lock sender authorization: %w", err)
+	}
+	if !activeUser {
+		return messagesdomain.ErrScheduledDeliveryPermissionRevoked
+	}
+
+	// Lock the workspace row first. An ownership transfer that races this
+	// delivery must complete either before authorization or after publication.
+	var owner bool
+	err = tx.QueryRow(ctx, `
+SELECT workspace.owner_id = $1::uuid
+FROM workspaces workspace
+JOIN zones zone
+  ON zone.id = workspace.zone_id
+ AND zone.status = 'active'
+ AND zone.deleted_at IS NULL
+WHERE workspace.id = $2::uuid
+  AND workspace.status = 'active'
+  AND workspace.deleted_at IS NULL
+FOR SHARE OF workspace, zone
+`, params.SenderID, params.WorkspaceID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return messagesdomain.ErrScheduledDeliveryPermissionRevoked
+	}
+	if err != nil {
+		return fmt.Errorf("scheduled message lock workspace authorization: %w", err)
+	}
+
+	if !owner {
+		var allowed bool
+		err = tx.QueryRow(ctx, `
+SELECT true
+FROM workspace_members member
+JOIN workspace_member_roles assignment
+  ON assignment.workspace_id = member.workspace_id
+ AND assignment.user_id = member.user_id
+JOIN roles role
+  ON role.id = assignment.role_id
+ AND role.deleted_at IS NULL
+JOIN role_permissions role_permission
+  ON role_permission.role_id = role.id
+JOIN permissions permission
+  ON permission.id = role_permission.permission_id
+WHERE member.workspace_id = $2::uuid
+  AND member.user_id = $1::uuid
+  AND member.status = 'active'
+  AND (role.workspace_id IS NULL OR role.workspace_id = $2::uuid)
+  AND permission.code = 'message.send'
+LIMIT 1
+FOR SHARE OF member, assignment, role, role_permission, permission
+`, params.SenderID, params.WorkspaceID).Scan(&allowed)
+		if err := scheduledRoleAuthorizationResult(allowed, err); err != nil {
+			return err
+		}
+	}
+
+	rows, err := tx.Query(ctx, `
+SELECT acceptance.document_type, acceptance.document_version
+FROM user_legal_acceptances acceptance
+WHERE acceptance.user_id = $1::uuid
+  AND acceptance.workspace_id = $2::uuid
+  AND (
+      (acceptance.document_type = 'terms' AND acceptance.document_version = $3)
+      OR
+      (acceptance.document_type = 'privacy' AND acceptance.document_version = $4)
+  )
+FOR SHARE OF acceptance
+`, params.SenderID, params.WorkspaceID, termsVersion, privacyVersion)
+	if err != nil {
+		return fmt.Errorf("scheduled message lock legal acceptance: %w", err)
+	}
+	defer rows.Close()
+	termsAccepted := false
+	privacyAccepted := false
+	for rows.Next() {
+		var documentType, documentVersion string
+		if err := rows.Scan(&documentType, &documentVersion); err != nil {
+			return fmt.Errorf("scheduled message scan legal acceptance: %w", err)
+		}
+		switch {
+		case documentType == "terms" && documentVersion == termsVersion:
+			termsAccepted = true
+		case documentType == "privacy" && documentVersion == privacyVersion:
+			privacyAccepted = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("scheduled message read legal acceptance: %w", err)
+	}
+	if !termsAccepted || !privacyAccepted {
+		return messagesdomain.ErrScheduledDeliveryLegalAcceptanceStale
+	}
+	return nil
+}
+
+func scheduledRoleAuthorizationResult(allowed bool, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return messagesdomain.ErrScheduledDeliveryPermissionRevoked
+	}
+	if err != nil {
+		return fmt.Errorf("scheduled message lock role authorization: %w", err)
+	}
+	if !allowed {
+		return messagesdomain.ErrScheduledDeliveryPermissionRevoked
+	}
+	return nil
+}
+
 func ensureDirectChannelMember(ctx context.Context, exec commandExecutor, workspaceID, channelID, userID string) error {
 	_, err := exec.Exec(ctx, `
 INSERT INTO channel_members (channel_id, user_id, status)
@@ -266,6 +421,40 @@ DO UPDATE SET status = 'active'
 WHERE channel_members.status IN ('left', 'removed', 'invited')
 `, workspaceID, channelID, userID)
 	return err
+}
+
+func ensureDirectInteractionUnblocked(ctx context.Context, exec queryExecutor, workspaceID, channelID, actorUserID string) error {
+	var blocked bool
+	err := exec.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM channels channel
+    JOIN direct_conversations direct
+      ON direct.channel_id = channel.id
+     AND direct.workspace_id = channel.workspace_id
+     AND direct.archived_at IS NULL
+    JOIN direct_conversation_members other_member
+      ON other_member.direct_conversation_id = direct.id
+     AND other_member.user_id <> $3::uuid
+    JOIN user_blocks block
+      ON block.workspace_id = channel.workspace_id
+     AND (
+          (block.blocker_user_id = $3::uuid AND block.blocked_user_id = other_member.user_id) OR
+          (block.blocked_user_id = $3::uuid AND block.blocker_user_id = other_member.user_id)
+     )
+    WHERE channel.workspace_id = $1::uuid
+      AND channel.id = $2::uuid
+      AND channel.type = 'direct'
+      AND channel.deleted_at IS NULL
+)
+`, workspaceID, channelID, actorUserID).Scan(&blocked)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return messagesdomain.ErrInteractionBlocked
+	}
+	return nil
 }
 
 func touchDirectConversationLastMessage(ctx context.Context, exec commandExecutor, message messagesdomain.Message) error {

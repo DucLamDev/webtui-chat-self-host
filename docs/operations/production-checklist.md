@@ -66,6 +66,29 @@ docker compose --env-file .env.example -f compose.yml config >/dev/null
 - [ ] Nếu app tạo account: có self-delete bằng `DELETE /api/v1/users/me`, xác nhận
       trong app và URL công khai `/account-deletion` cho yêu cầu ngoài app.
 - [ ] Chính sách deletion nói rõ ownership transfer, retention pháp lý và backup expiry.
+- [ ] Hai well-known URL App/Universal Links trả HTTP 200 trực tiếp, không redirect:
+      `/.well-known/assetlinks.json` và `/.well-known/apple-app-site-association`.
+- [ ] Đã test report message/user, block/unblock, blocked DM/call và hàng đợi moderator bằng hai tài khoản thật.
+- [ ] Owner/admin có `moderation.manage`; member thường không đọc hoặc xử lý được report.
+- [ ] Moderator xóa được nội dung vi phạm qua `message.manage`, đóng report với resolution note,
+      và alert hàng đợi theo SLO triage 4h/24h, đóng trong 72h.
+- [ ] Store disclosure nói đúng hiện trạng: human moderation + removal/blocking; backend chưa có
+      automated objectionable-content filter.
+- [ ] Prometheus/Alertmanager loads all three moderation SLO rules, a real receiver
+      passes an alert drill, and `MODERATION_EVIDENCE_RETENTION_DAYS=365` matches
+      the public portal policy while the worker retention task is healthy.
+- [ ] Đăng ký mobile gửi đúng phiên bản Terms/AUP và Privacy từ `/api/v1/auth/legal-documents`;
+      bản ghi xuất hiện trong `user_legal_acceptances`.
+- [ ] `TERMS_VERSION` và `PRIVACY_POLICY_VERSION` khớp policy version portal; Google JIT signup
+      thiếu consent trả `LEGAL_ACCEPTANCE_REQUIRED`, còn Google user hiện hữu vẫn đăng nhập được.
+- [ ] Với user thuộc nhiều workspace, GET/POST legal acceptance gửi explicit `workspace_id`,
+      response echo đúng workspace, và workspace khác zone/non-member bị từ chối 403.
+- [ ] Worker hẹn giờ đã test: suspend/delete sender, revoke `message.send`, đổi policy version,
+      hoặc block DM trước giờ phát đều chuyển job sang `cancelled`; lỗi DB tạm thời vẫn retry.
+- [ ] Khách phòng công khai phải check Terms/AUP + Privacy hiện hành trước khi join;
+      migration 40 đã revoke grant cũ và bản ghi guest mới có version/timestamp/IP/User-Agent thật.
+- [ ] OIDC user mới được pre-provision/đăng ký chuẩn trước; `jit_provisioning=true` vẫn fail-closed
+      với `OIDC_JIT_LEGAL_ACCEPTANCE_REQUIRED` cho đến khi redirect flow lưu được versioned consent.
 
 ## Quyền riêng tư và pháp lý
 

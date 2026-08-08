@@ -26,13 +26,17 @@ type Handler struct {
 }
 
 type registerRequest struct {
-	Email       string `json:"email"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	Domain      string `json:"domain"`
-	InviteToken string `json:"invite_token"`
-	Password    string `json:"password"`
-	DeviceName  string `json:"device_name"`
+	Email           string `json:"email"`
+	Username        string `json:"username"`
+	DisplayName     string `json:"display_name"`
+	Domain          string `json:"domain"`
+	InviteToken     string `json:"invite_token"`
+	Password        string `json:"password"`
+	DeviceName      string `json:"device_name"`
+	TermsAccepted   bool   `json:"terms_accepted"`
+	TermsVersion    string `json:"terms_version"`
+	PrivacyAccepted bool   `json:"privacy_accepted"`
+	PrivacyVersion  string `json:"privacy_version"`
 }
 
 type loginRequest struct {
@@ -52,9 +56,21 @@ type logoutRequest struct {
 }
 
 type googleLoginRequest struct {
-	Credential string `json:"credential"`
-	DeviceName string `json:"device_name"`
-	Domain     string `json:"domain"`
+	Credential      string `json:"credential"`
+	DeviceName      string `json:"device_name"`
+	Domain          string `json:"domain"`
+	TermsAccepted   bool   `json:"terms_accepted"`
+	TermsVersion    string `json:"terms_version"`
+	PrivacyAccepted bool   `json:"privacy_accepted"`
+	PrivacyVersion  string `json:"privacy_version"`
+}
+
+type legalAcceptanceRequest struct {
+	WorkspaceID     string `json:"workspace_id"`
+	TermsAccepted   bool   `json:"terms_accepted"`
+	TermsVersion    string `json:"terms_version"`
+	PrivacyAccepted bool   `json:"privacy_accepted"`
+	PrivacyVersion  string `json:"privacy_version"`
 }
 
 type oidcStartRequest struct {
@@ -102,6 +118,7 @@ func (h *Handler) SetInstanceDomain(domain string) {
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+	router.GET("/legal-documents", h.LegalDocuments)
 	router.POST("/register", h.Register)
 	router.POST("/login", h.Login)
 	router.POST("/google", h.GoogleLogin)
@@ -114,10 +131,72 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 
 	private := router.Group("")
 	private.Use(authMiddleware)
+	private.GET("/legal-acceptance", h.GetLegalAcceptance)
+	private.POST("/legal-acceptance", h.AcceptLegalDocuments)
 	private.GET("/me", h.Me)
 	private.GET("/sessions", h.ListSessions)
 	private.DELETE("/sessions/:session_id", h.RevokeSession)
 	private.DELETE("/sessions", h.RevokeAllSessions)
+}
+
+func (h *Handler) LegalDocuments(c *gin.Context) {
+	versions := h.service.LegalDocumentVersions()
+	response.OK(c, nethttp.StatusOK, gin.H{
+		"documents": []gin.H{
+			{
+				"document_type": "terms",
+				"version":       versions.Terms,
+				"includes":      []string{"terms_of_use", "acceptable_use_policy"},
+			},
+			{
+				"document_type": "privacy",
+				"version":       versions.PrivacyPolicy,
+				"includes":      []string{"privacy_policy"},
+			},
+		},
+	})
+}
+
+func (h *Handler) GetLegalAcceptance(c *gin.Context) {
+	workspaceID := legalAcceptanceWorkspaceID(c.Query("workspace_id"), middleware.CurrentWorkspaceID(c))
+	status, err := h.service.GetCurrentLegalAcceptance(
+		c.Request.Context(),
+		middleware.CurrentUserID(c),
+		workspaceID,
+		middleware.CurrentZoneID(c),
+	)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, nethttp.StatusOK, gin.H{"legal_acceptance": status})
+}
+
+func (h *Handler) AcceptLegalDocuments(c *gin.Context) {
+	var req legalAcceptanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Request body must be valid JSON.", nil)
+		return
+	}
+	workspaceID := legalAcceptanceWorkspaceID(req.WorkspaceID, middleware.CurrentWorkspaceID(c))
+	status, err := h.service.AcceptCurrentLegalDocuments(c.Request.Context(), authapp.AcceptLegalDocumentsInput{
+		UserID: middleware.CurrentUserID(c), WorkspaceID: workspaceID, ZoneID: middleware.CurrentZoneID(c),
+		TermsAccepted: req.TermsAccepted, TermsVersion: req.TermsVersion,
+		PrivacyAccepted: req.PrivacyAccepted, PrivacyVersion: req.PrivacyVersion,
+		IPAddress: clientIP(c), UserAgent: c.Request.UserAgent(),
+	})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, nethttp.StatusOK, gin.H{"legal_acceptance": status})
+}
+
+func legalAcceptanceWorkspaceID(explicit string, tokenWorkspace string) string {
+	if workspaceID := strings.TrimSpace(explicit); workspaceID != "" {
+		return workspaceID
+	}
+	return strings.TrimSpace(tokenWorkspace)
 }
 
 func (h *Handler) ListOIDCProviders(c *gin.Context) {
@@ -219,15 +298,19 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 		return
 	}
 	result, err := h.service.LoginWithGoogle(c.Request.Context(), authapp.GoogleLoginInput{
-		Subject:       profile.Subject,
-		Email:         profile.Email,
-		EmailVerified: profile.EmailVerified == "true",
-		DisplayName:   profile.Name,
-		AvatarURL:     profile.Picture,
-		Domain:        h.authRequestDomain(c, req.Domain),
-		DeviceName:    req.DeviceName,
-		IPAddress:     clientIP(c),
-		UserAgent:     c.Request.UserAgent(),
+		Subject:         profile.Subject,
+		Email:           profile.Email,
+		EmailVerified:   profile.EmailVerified == "true",
+		DisplayName:     profile.Name,
+		AvatarURL:       profile.Picture,
+		Domain:          h.authRequestDomain(c, req.Domain),
+		DeviceName:      req.DeviceName,
+		IPAddress:       clientIP(c),
+		UserAgent:       c.Request.UserAgent(),
+		TermsAccepted:   req.TermsAccepted,
+		TermsVersion:    req.TermsVersion,
+		PrivacyAccepted: req.PrivacyAccepted,
+		PrivacyVersion:  req.PrivacyVersion,
 	})
 	if err != nil {
 		response.Error(c, err)
@@ -272,15 +355,19 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 
 	result, err := h.service.Register(c.Request.Context(), authapp.RegisterInput{
-		Email:       req.Email,
-		Username:    req.Username,
-		DisplayName: req.DisplayName,
-		Domain:      h.authRequestDomain(c, req.Domain),
-		InviteToken: req.InviteToken,
-		Password:    req.Password,
-		DeviceName:  req.DeviceName,
-		IPAddress:   clientIP(c),
-		UserAgent:   c.Request.UserAgent(),
+		Email:           req.Email,
+		Username:        req.Username,
+		DisplayName:     req.DisplayName,
+		Domain:          h.authRequestDomain(c, req.Domain),
+		InviteToken:     req.InviteToken,
+		Password:        req.Password,
+		DeviceName:      req.DeviceName,
+		IPAddress:       clientIP(c),
+		UserAgent:       c.Request.UserAgent(),
+		TermsAccepted:   req.TermsAccepted,
+		TermsVersion:    req.TermsVersion,
+		PrivacyAccepted: req.PrivacyAccepted,
+		PrivacyVersion:  req.PrivacyVersion,
 	})
 	if err != nil {
 		response.Error(c, err)

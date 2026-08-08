@@ -55,22 +55,27 @@ func (h *Handler) SetICEConfiguration(publicServers []map[string]any, turnURLs [
 	}
 }
 
-func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc) {
+func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerFunc, legalMiddleware ...gin.HandlerFunc) {
 	credentials := router.Group("/calls")
 	credentials.Use(authMiddleware)
 	credentials.GET("/ice-servers", h.ICEServers)
 
 	private := router.Group("/workspaces/:workspace_id/calls")
 	private.Use(authMiddleware)
-	private.POST("", h.Create)
+	ugc := router.Group("/workspaces/:workspace_id/calls")
+	ugc.Use(authMiddleware)
+	if len(legalMiddleware) > 0 && legalMiddleware[0] != nil {
+		ugc.Use(legalMiddleware[0])
+	}
+	ugc.POST("", h.Create)
 	private.GET("/incoming", h.Incoming)
 	private.GET("/:call_id", h.Get)
-	private.POST("/:call_id/accept", h.Accept)
+	ugc.POST("/:call_id/accept", h.Accept)
 	private.POST("/:call_id/reject", h.Reject)
 	private.POST("/:call_id/cancel", h.Cancel)
 	private.POST("/:call_id/hangup", h.Hangup)
 	private.POST("/:call_id/miss", h.Miss)
-	private.POST("/:call_id/signals", h.Signal)
+	ugc.POST("/:call_id/signals", h.Signal)
 }
 
 func (h *Handler) ICEServers(c *gin.Context) {

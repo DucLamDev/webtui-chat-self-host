@@ -18,7 +18,7 @@ type ProductivityRepository interface {
 	ScheduleMessage(ctx context.Context, params ScheduleMessageParams) (ScheduledMessageDTO, error)
 	ListScheduledMessages(ctx context.Context, params UserProductivityParams) ([]ScheduledMessageDTO, error)
 	CancelScheduledMessage(ctx context.Context, params ScheduledMessageRef) error
-	ProcessDueScheduledMessages(ctx context.Context, limit int) (int, error)
+	ProcessDueScheduledMessages(ctx context.Context, limit int, authorizer ScheduledMessageDeliveryAuthorizer) (int, error)
 	CreateReminder(ctx context.Context, params CreateReminderParams) (MessageReminderDTO, error)
 	ListReminders(ctx context.Context, params UserProductivityParams) ([]MessageReminderDTO, error)
 	CancelReminder(ctx context.Context, params ReminderRef) error
@@ -28,6 +28,16 @@ type ProductivityRepository interface {
 	ListThreadDetails(ctx context.Context, params ListThreadDetailsParams) ([]ThreadDetailsDTO, error)
 	SetThreadSubscription(ctx context.Context, params ThreadSubscriptionParams) (ThreadDetailsDTO, error)
 	MarkThreadRead(ctx context.Context, params ThreadReadParams) (ThreadDetailsDTO, error)
+}
+
+type ScheduledMessageDelivery struct {
+	WorkspaceID string
+	ChannelID   string
+	SenderID    string
+}
+
+type ScheduledMessageDeliveryAuthorizer interface {
+	AuthorizeScheduledMessageDelivery(ctx context.Context, delivery ScheduledMessageDelivery) error
 }
 
 type ScheduleMessageInput struct {
@@ -179,6 +189,9 @@ func (s *Service) ScheduleMessage(ctx context.Context, input ScheduleMessageInpu
 	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "message.send"); err != nil {
 		return ScheduledMessageDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, input.WorkspaceID, input.ChannelID, input.ActorUserID); err != nil {
+		return ScheduledMessageDTO{}, err
+	}
 	kind := strings.ToLower(strings.TrimSpace(input.Kind))
 	if kind == "" {
 		kind = "text"
@@ -318,6 +331,9 @@ func (s *Service) UpsertThreadDetails(ctx context.Context, actorUserID string, w
 	if err := s.ensurePermission(ctx, actorUserID, workspaceID, "message.send"); err != nil {
 		return ThreadDetailsDTO{}, err
 	}
+	if err := s.ensureDirectInteractionAllowed(ctx, workspaceID, channelID, actorUserID); err != nil {
+		return ThreadDetailsDTO{}, err
+	}
 	title = strings.TrimSpace(title)
 	description = strings.TrimSpace(description)
 	status = strings.ToLower(strings.TrimSpace(status))
@@ -379,7 +395,7 @@ func (s *Service) MarkThreadRead(ctx context.Context, actorUserID string, worksp
 }
 
 func (s *Service) ProcessDueScheduledMessages(ctx context.Context, limit int) (int, error) {
-	return s.productivityRepository().ProcessDueScheduledMessages(ctx, normalizeWorkerLimit(limit))
+	return s.productivityRepository().ProcessDueScheduledMessages(ctx, normalizeWorkerLimit(limit), s)
 }
 
 func (s *Service) ProcessDueReminders(ctx context.Context, limit int) (int, error) {

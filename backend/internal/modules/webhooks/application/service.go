@@ -58,6 +58,8 @@ type Service struct {
 	tokenAuth           TokenAuthenticator
 	sender              DeliverySender
 	signingMasterSecret string
+	termsVersion        string
+	privacyVersion      string
 }
 
 type CreateIncomingInput struct {
@@ -159,6 +161,8 @@ type IncomingMessageParams struct {
 	ChannelID      string
 	Body           string
 	Metadata       []byte
+	TermsVersion   string
+	PrivacyVersion string
 }
 
 type TokenMessageInput struct {
@@ -170,11 +174,16 @@ type TokenMessageInput struct {
 }
 
 type IntegrationMessageParams struct {
-	WorkspaceID string
-	ChannelID   string
-	Kind        string
-	Body        string
-	Metadata    []byte
+	ExpectedZoneID string
+	TokenID        string
+	OwnerUserID    string
+	WorkspaceID    string
+	ChannelID      string
+	Kind           string
+	Body           string
+	Metadata       []byte
+	TermsVersion   string
+	PrivacyVersion string
 }
 
 type OutboxDeliveryParams struct {
@@ -264,6 +273,15 @@ func NewService(
 		sender:              sender,
 		signingMasterSecret: signingMasterSecret,
 	}
+}
+
+// SetLegalDocumentVersions configures the exact, currently published legal
+// documents that an integration owner must have accepted. Message-producing
+// repository methods still validate these versions inside their transaction;
+// this setter only supplies the policy input and never creates acceptance.
+func (s *Service) SetLegalDocumentVersions(termsVersion string, privacyVersion string) {
+	s.termsVersion = strings.TrimSpace(termsVersion)
+	s.privacyVersion = strings.TrimSpace(privacyVersion)
 }
 
 func (s *Service) CreateIncoming(ctx context.Context, input CreateIncomingInput, appURL string) (CreatedIncomingWebhookDTO, error) {
@@ -520,6 +538,10 @@ func (s *Service) DispatchIncoming(ctx context.Context, input IncomingMessageInp
 	if err != nil {
 		return IntegrationMessageDTO{}, err
 	}
+	termsVersion, privacyVersion, err := s.integrationLegalVersions()
+	if err != nil {
+		return IntegrationMessageDTO{}, err
+	}
 	message, err := s.repo.SendIncomingMessage(ctx, IncomingMessageParams{
 		ExpectedZoneID: input.ExpectedZoneID,
 		WebhookID:      strings.TrimSpace(input.WebhookID),
@@ -527,6 +549,8 @@ func (s *Service) DispatchIncoming(ctx context.Context, input IncomingMessageInp
 		ChannelID:      strings.TrimSpace(input.ChannelID),
 		Body:           body,
 		Metadata:       metadata,
+		TermsVersion:   termsVersion,
+		PrivacyVersion: privacyVersion,
 	})
 	if err != nil {
 		return IntegrationMessageDTO{}, mapWebhookError(err)
@@ -549,6 +573,13 @@ func (s *Service) SendTokenMessage(ctx context.Context, input TokenMessageInput)
 	if authenticated.ZoneID == "" || authenticated.ZoneID != input.ExpectedZoneID {
 		return IntegrationMessageDTO{}, apperrors.Forbidden("API token không thuộc tên miền hoặc vùng máy chủ hiện tại.")
 	}
+	ownerUserID := ""
+	if authenticated.OwnerID != nil {
+		ownerUserID = strings.TrimSpace(*authenticated.OwnerID)
+	}
+	if ownerUserID == "" {
+		return IntegrationMessageDTO{}, mapWebhookError(webhooksdomain.ErrIntegrationCredentialStale)
+	}
 	body := strings.TrimSpace(input.Body)
 	if body == "" || len([]rune(body)) > 8000 {
 		return IntegrationMessageDTO{}, apperrors.BadRequest("VALIDATION_ERROR", "Nội dung API token message phải dài từ 1 đến 8000 ký tự.")
@@ -557,12 +588,21 @@ func (s *Service) SendTokenMessage(ctx context.Context, input TokenMessageInput)
 	if err != nil {
 		return IntegrationMessageDTO{}, err
 	}
+	termsVersion, privacyVersion, err := s.integrationLegalVersions()
+	if err != nil {
+		return IntegrationMessageDTO{}, err
+	}
 	message, err := s.repo.SendIntegrationMessage(ctx, IntegrationMessageParams{
-		WorkspaceID: authenticated.WorkspaceID,
-		ChannelID:   strings.TrimSpace(input.ChannelID),
-		Kind:        "event",
-		Body:        body,
-		Metadata:    metadata,
+		ExpectedZoneID: input.ExpectedZoneID,
+		TokenID:        authenticated.TokenID,
+		OwnerUserID:    ownerUserID,
+		WorkspaceID:    authenticated.WorkspaceID,
+		ChannelID:      strings.TrimSpace(input.ChannelID),
+		Kind:           "event",
+		Body:           body,
+		Metadata:       metadata,
+		TermsVersion:   termsVersion,
+		PrivacyVersion: privacyVersion,
 	})
 	if err != nil {
 		return IntegrationMessageDTO{}, mapWebhookError(err)
@@ -709,6 +749,15 @@ func stringPtr(value string) *string {
 	return &value
 }
 
+func (s *Service) integrationLegalVersions() (string, string, error) {
+	termsVersion := strings.TrimSpace(s.termsVersion)
+	privacyVersion := strings.TrimSpace(s.privacyVersion)
+	if termsVersion == "" || privacyVersion == "" {
+		return "", "", mapWebhookError(webhooksdomain.ErrIntegrationLegalUnavailable)
+	}
+	return termsVersion, privacyVersion, nil
+}
+
 func mapWebhookError(err error) error {
 	if errors.Is(err, webhooksdomain.ErrWebhookQuotaExceeded) {
 		return apperrors.Conflict("ZONE_QUOTA_EXCEEDED", "Vùng máy chủ đã đạt giới hạn webhook.")
@@ -721,6 +770,18 @@ func mapWebhookError(err error) error {
 	}
 	if errors.Is(err, webhooksdomain.ErrIntegrationChannelNotFound) {
 		return apperrors.BadRequest("CHANNEL_NOT_FOUND", "Không tìm thấy kênh để gửi message tích hợp.")
+	}
+	if errors.Is(err, webhooksdomain.ErrIntegrationCredentialStale) {
+		return apperrors.Unauthorized("Credential tích hợp không còn hoạt động hoặc không còn scope gửi message.")
+	}
+	if errors.Is(err, webhooksdomain.ErrIntegrationLegalRequired) {
+		return apperrors.Conflict(
+			"LEGAL_ACCEPTANCE_REQUIRED",
+			"Chủ sở hữu integration phải là thành viên đang hoạt động và chấp nhận Terms, Acceptable Use Policy, cùng Privacy Policy hiện hành trước khi integration tạo nội dung.",
+		)
+	}
+	if errors.Is(err, webhooksdomain.ErrIntegrationLegalUnavailable) {
+		return apperrors.ServiceUnavailable("LEGAL_ACCEPTANCE_UNAVAILABLE", "Không thể xác minh trạng thái chấp nhận tài liệu pháp lý cho integration.")
 	}
 	return err
 }

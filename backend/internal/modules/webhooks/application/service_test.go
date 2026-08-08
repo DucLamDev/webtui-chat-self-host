@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	outboxdomain "github.com/duclamdev/application-chat/backend/internal/modules/outbox/domain"
 	webhooksdomain "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/domain"
 	webhooksecurity "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/security"
+	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
 type fakeWebhookRepo struct {
@@ -97,10 +100,19 @@ func (r *fakeWebhookRepo) MarkDeliveryFailed(context.Context, string, int, strin
 	return nil
 }
 
-type fakeTokenAuth struct{}
+type fakeTokenAuth struct {
+	result aptokensapp.AuthenticatedTokenDTO
+	err    error
+}
 
-func (fakeTokenAuth) Authenticate(context.Context, string, string) (aptokensapp.AuthenticatedTokenDTO, error) {
-	return aptokensapp.AuthenticatedTokenDTO{ZoneID: "zone-1", WorkspaceID: "workspace-1"}, nil
+func (f fakeTokenAuth) Authenticate(context.Context, string, string) (aptokensapp.AuthenticatedTokenDTO, error) {
+	if f.err != nil {
+		return aptokensapp.AuthenticatedTokenDTO{}, f.err
+	}
+	if f.result.ZoneID == "" && f.result.WorkspaceID == "" {
+		return aptokensapp.AuthenticatedTokenDTO{ZoneID: "zone-1", WorkspaceID: "workspace-1"}, nil
+	}
+	return f.result, nil
 }
 
 type allowWebhookPermission struct{}
@@ -145,6 +157,7 @@ func TestHandleCreatesOutgoingDeliveriesFromOutboxEvent(t *testing.T) {
 func TestDispatchIncomingRequiresAndForwardsExpectedZone(t *testing.T) {
 	repo := &fakeWebhookRepo{}
 	service := NewService(repo, nil, fakeTokenAuth{}, nil, "")
+	service.SetLegalDocumentVersions("terms-v2", "privacy-v3")
 
 	if _, err := service.DispatchIncoming(context.Background(), IncomingMessageInput{
 		WebhookID: "webhook-1",
@@ -166,6 +179,9 @@ func TestDispatchIncomingRequiresAndForwardsExpectedZone(t *testing.T) {
 	if repo.incomingParams.ExpectedZoneID != "zone-1" {
 		t.Fatalf("expected zone = %q", repo.incomingParams.ExpectedZoneID)
 	}
+	if repo.incomingParams.TermsVersion != "terms-v2" || repo.incomingParams.PrivacyVersion != "privacy-v3" {
+		t.Fatalf("legal versions = (%q, %q)", repo.incomingParams.TermsVersion, repo.incomingParams.PrivacyVersion)
+	}
 }
 
 func TestSendTokenMessageRejectsAnotherZone(t *testing.T) {
@@ -182,6 +198,96 @@ func TestSendTokenMessageRejectsAnotherZone(t *testing.T) {
 	}
 	if repo.integrationParams.WorkspaceID != "" {
 		t.Fatal("repository must not receive cross-zone token message")
+	}
+}
+
+func TestSendTokenMessageRequiresOwnerAndForwardsTransactionalPolicy(t *testing.T) {
+	repo := &fakeWebhookRepo{}
+	service := NewService(repo, nil, fakeTokenAuth{
+		result: aptokensapp.AuthenticatedTokenDTO{
+			TokenID:     "token-1",
+			ZoneID:      "zone-1",
+			WorkspaceID: "workspace-1",
+		},
+	}, nil, "")
+	service.SetLegalDocumentVersions("terms-v2", "privacy-v3")
+
+	_, err := service.SendTokenMessage(context.Background(), TokenMessageInput{
+		ExpectedZoneID: "zone-1",
+		Token:          "token",
+		ChannelID:      "channel-1",
+		Body:           "hello",
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "UNAUTHORIZED" || appErr.Status != http.StatusUnauthorized {
+		t.Fatalf("ownerless token error = %#v, want UNAUTHORIZED/401", err)
+	}
+	if repo.integrationParams.WorkspaceID != "" {
+		t.Fatal("ownerless token must not reach message persistence")
+	}
+
+	ownerID := "owner-1"
+	service.tokenAuth = fakeTokenAuth{
+		result: aptokensapp.AuthenticatedTokenDTO{
+			TokenID:     "token-1",
+			ZoneID:      "zone-1",
+			WorkspaceID: "workspace-1",
+			OwnerID:     &ownerID,
+		},
+	}
+	if _, err := service.SendTokenMessage(context.Background(), TokenMessageInput{
+		ExpectedZoneID: "zone-1",
+		Token:          "token",
+		ChannelID:      "channel-1",
+		Body:           "hello",
+	}); err != nil {
+		t.Fatalf("SendTokenMessage() error = %v", err)
+	}
+	got := repo.integrationParams
+	if got.ExpectedZoneID != "zone-1" || got.TokenID != "token-1" || got.OwnerUserID != ownerID || got.WorkspaceID != "workspace-1" {
+		t.Fatalf("credential policy params = %#v", got)
+	}
+	if got.TermsVersion != "terms-v2" || got.PrivacyVersion != "privacy-v3" {
+		t.Fatalf("legal versions = (%q, %q)", got.TermsVersion, got.PrivacyVersion)
+	}
+}
+
+func TestIntegrationLegalPolicyErrorsHaveStablePublicContracts(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantCode   string
+		wantStatus int
+	}{
+		{name: "missing or stale acceptance", err: webhooksdomain.ErrIntegrationLegalRequired, wantCode: "LEGAL_ACCEPTANCE_REQUIRED", wantStatus: http.StatusConflict},
+		{name: "policy unavailable", err: webhooksdomain.ErrIntegrationLegalUnavailable, wantCode: "LEGAL_ACCEPTANCE_UNAVAILABLE", wantStatus: http.StatusServiceUnavailable},
+		{name: "credential revoked after authentication", err: webhooksdomain.ErrIntegrationCredentialStale, wantCode: "UNAUTHORIZED", wantStatus: http.StatusUnauthorized},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var appErr *apperrors.AppError
+			if err := mapWebhookError(test.err); !errors.As(err, &appErr) || appErr.Code != test.wantCode || appErr.Status != test.wantStatus {
+				t.Fatalf("mapWebhookError() = %#v, want %s/%d", err, test.wantCode, test.wantStatus)
+			}
+		})
+	}
+}
+
+func TestIntegrationMessageFailsClosedWithoutConfiguredLegalVersions(t *testing.T) {
+	repo := &fakeWebhookRepo{}
+	service := NewService(repo, nil, fakeTokenAuth{}, nil, "")
+	_, err := service.DispatchIncoming(context.Background(), IncomingMessageInput{
+		ExpectedZoneID: "zone-1",
+		WebhookID:      "webhook-1",
+		Secret:         "secret",
+		Body:           "hello",
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "LEGAL_ACCEPTANCE_UNAVAILABLE" || appErr.Status != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured integration legal policy error = %#v", err)
+	}
+	if repo.incomingParams.WebhookID != "" {
+		t.Fatal("unconfigured legal policy must fail before message persistence")
 	}
 }
 

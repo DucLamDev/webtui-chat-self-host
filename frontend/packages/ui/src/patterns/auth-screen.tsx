@@ -16,7 +16,19 @@ export type RegisterFormValues = {
   email: string;
   inviteToken?: string;
   password: string;
+  privacyAccepted: boolean;
+  termsAccepted: boolean;
   username: string;
+};
+export type LegalConsentValues = Pick<RegisterFormValues, "privacyAccepted" | "termsAccepted">;
+export type RegistrationLegalNotice = {
+  error?: string | null;
+  isLoading?: boolean;
+  onRetry?: () => void;
+  privacyUrl: string;
+  privacyVersion?: string;
+  termsUrl: string;
+  termsVersion?: string;
 };
 export type AuthMode = "login" | "register";
 export type AuthOIDCProvider = {
@@ -32,8 +44,11 @@ export type AuthScreenProps = {
   googleClientId?: string;
   initialDomain?: string;
   initialInviteToken?: string;
+  hasPendingGoogleRegistration?: boolean;
   mode: AuthMode;
-  onGoogleCredential?: (credential: string, domain: string) => void;
+  onGoogleCredential?: (credential: string, domain: string, consent?: LegalConsentValues) => void;
+  onGoogleRegistrationContinue?: (consent: LegalConsentValues) => void;
+  onOpenLegalDocument?: (url: string) => Promise<void> | void;
   onOIDCDiscover?: (domain: string) => Promise<AuthOIDCProvider[]>;
   onOIDCStart?: (domain: string, providerId: string) => Promise<void> | void;
   onLogin: (values: LoginFormValues) => void;
@@ -42,6 +57,7 @@ export type AuthScreenProps = {
   onRegister: (values: RegisterFormValues) => void;
   panelLogoAlt?: string;
   panelLogoSrc?: string;
+  registrationLegal?: RegistrationLegalNotice;
   showServerField?: boolean;
   subtitle?: string;
   title?: string;
@@ -54,9 +70,12 @@ export function AuthScreen({
   googleClientId,
   initialDomain = "",
   initialInviteToken = "",
+  hasPendingGoogleRegistration = false,
   isPending = false,
   mode,
   onGoogleCredential,
+  onGoogleRegistrationContinue,
+  onOpenLegalDocument,
   onOIDCDiscover,
   onOIDCStart,
   onLogin,
@@ -65,6 +84,7 @@ export function AuthScreen({
   onRegister,
   panelLogoAlt = "",
   panelLogoSrc,
+  registrationLegal,
   showServerField = true,
   subtitle = "Kết nối – Trò chuyện – Hiệu quả",
   title = "ỨNG DỤNG CHAT"
@@ -78,18 +98,35 @@ export function AuthScreen({
   const [email, setEmail] = useState("");
   const [inviteToken, setInviteToken] = useState(initialInviteToken);
   const [username, setUsername] = useState("");
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [isGoogleReady, setIsGoogleReady] = useState(false);
   const [isOIDCPending, setIsOIDCPending] = useState(false);
   const [oidcProviders, setOIDCProviders] = useState<AuthOIDCProvider[]>([]);
   const [selectedOIDCProvider, setSelectedOIDCProvider] = useState("");
   const googleButtonRef = useRef<HTMLDivElement>(null);
+  const registrationLegalReady = Boolean(
+    registrationLegal
+      && !registrationLegal.isLoading
+      && !registrationLegal.error
+      && registrationLegal.privacyUrl
+      && registrationLegal.privacyVersion
+      && registrationLegal.termsUrl
+      && registrationLegal.termsVersion
+  );
+  const registrationConsentComplete = registrationLegalReady && privacyAccepted && termsAccepted;
 
   useEffect(() => {
     if (initialInviteToken) {
       setInviteToken(initialInviteToken);
     }
   }, [initialInviteToken]);
+
+  useEffect(() => {
+    setPrivacyAccepted(false);
+    setTermsAccepted(false);
+  }, [mode, registrationLegal?.privacyVersion, registrationLegal?.termsVersion]);
 
   useEffect(() => {
     if (!googleClientId || !onGoogleCredential) {
@@ -105,8 +142,16 @@ export function AuthScreen({
       window.google.accounts.id.initialize({
         callback: (response) => {
           if (response.credential) {
+            if (mode === "register" && !registrationConsentComplete) {
+              setLocalError("Vui lòng đọc và chấp nhận cả Điều khoản lẫn Chính sách quyền riêng tư trước khi đăng ký bằng Google.");
+              return;
+            }
             setLocalError(null);
-            onGoogleCredential(response.credential, domain);
+            onGoogleCredential(
+              response.credential,
+              domain,
+              mode === "register" ? { privacyAccepted, termsAccepted } : undefined
+            );
           }
         },
         client_id: googleClientId
@@ -140,7 +185,7 @@ export function AuthScreen({
       cancelled = true;
       existing?.removeEventListener("load", renderGoogleButton);
     };
-  }, [domain, googleClientId, mode, onGoogleCredential]);
+  }, [domain, googleClientId, mode, onGoogleCredential, privacyAccepted, registrationConsentComplete, termsAccepted]);
 
   useEffect(() => {
     setDomain(initialDomain);
@@ -194,12 +239,18 @@ export function AuthScreen({
       setLocalError("Mật khẩu xác nhận không khớp.");
       return;
     }
+    if (!registrationConsentComplete) {
+      setLocalError("Vui lòng đọc và chấp nhận cả Điều khoản lẫn Chính sách quyền riêng tư trước khi đăng ký.");
+      return;
+    }
     onRegister({
       displayName,
       domain,
       email,
       inviteToken: inviteToken.trim() || undefined,
       password,
+      privacyAccepted,
+      termsAccepted,
       username
     });
   }
@@ -276,8 +327,36 @@ export function AuthScreen({
           </> : <label>Email hoặc tên đăng nhập<Input autoComplete="username" onChange={(event) => setIdentifier(event.target.value)} placeholder="Nhập email hoặc tên đăng nhập" required value={identifier} /></label>}
           <label>Mật khẩu<Input autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "login" ? "Nhập mật khẩu của bạn" : "Tạo mật khẩu ít nhất 8 ký tự"} required type="password" value={password} /></label>
           {mode === "register" ? <label>Xác nhận mật khẩu<Input autoComplete="new-password" minLength={8} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Nhập lại mật khẩu" required type="password" value={confirmPassword} /></label> : <div className="auth-helper-row"><label className="auth-check"><input checked={remember} onChange={(event) => setRemember(event.target.checked)} type="checkbox" />Ghi nhớ đăng nhập</label><span>Quên mật khẩu?</span></div>}
+          {mode === "register" ? (
+            <fieldset className="auth-legal-consent">
+              <legend>Tài liệu pháp lý hiện hành</legend>
+              {registrationLegal?.isLoading ? <p>Đang tải phiên bản tài liệu từ máy chủ...</p> : null}
+              {registrationLegal?.error ? <p className="auth-error" role="alert">{registrationLegal.error}</p> : null}
+              {registrationLegal?.error && registrationLegal.onRetry ? (
+                <Button onClick={registrationLegal.onRetry} type="button" variant="secondary">Thử tải lại</Button>
+              ) : null}
+              <label className="auth-check auth-check--legal">
+                <input checked={termsAccepted} disabled={!registrationLegalReady || isPending} onChange={(event) => setTermsAccepted(event.target.checked)} type="checkbox" />
+                <span>Tôi đã đọc và chấp nhận <LegalDocumentLink label="Điều khoản & Quy tắc sử dụng" onOpen={onOpenLegalDocument} url={registrationLegal?.termsUrl} version={registrationLegal?.termsVersion} />.</span>
+              </label>
+              <label className="auth-check auth-check--legal">
+                <input checked={privacyAccepted} disabled={!registrationLegalReady || isPending} onChange={(event) => setPrivacyAccepted(event.target.checked)} type="checkbox" />
+                <span>Tôi đã đọc và chấp nhận <LegalDocumentLink label="Chính sách quyền riêng tư" onOpen={onOpenLegalDocument} url={registrationLegal?.privacyUrl} version={registrationLegal?.privacyVersion} />.</span>
+              </label>
+              {hasPendingGoogleRegistration && onGoogleRegistrationContinue ? (
+                <Button
+                  disabled={!registrationConsentComplete || isPending}
+                  onClick={() => onGoogleRegistrationContinue({ privacyAccepted, termsAccepted })}
+                  type="button"
+                  variant="secondary"
+                >
+                  Tiếp tục đăng ký bằng Google
+                </Button>
+              ) : null}
+            </fieldset>
+          ) : null}
           {localError || error ? <p className="auth-error">{localError || error}</p> : null}
-          <Button className="auth-submit" disabled={isPending} type="submit">
+          <Button className="auth-submit" disabled={isPending || (mode === "register" && !registrationConsentComplete)} type="submit">
             {isPending ? "Đang xử lý..." : mode === "login" ? "Đăng nhập" : "Đăng ký tài khoản"}
             <span className="auth-submit__arrow" aria-hidden="true">→</span>
           </Button>
@@ -334,6 +413,35 @@ export function AuthScreen({
         </p>
       </section>
     </main>
+  );
+}
+
+function LegalDocumentLink({
+  label,
+  onOpen,
+  url,
+  version
+}: {
+  label: string;
+  onOpen?: (url: string) => Promise<void> | void;
+  url?: string;
+  version?: string;
+}) {
+  if (!url) {
+    return <strong>{label}</strong>;
+  }
+  return (
+    <a
+      href={url}
+      onClick={onOpen ? (event) => {
+        event.preventDefault();
+        void onOpen(url);
+      } : undefined}
+      rel="noreferrer"
+      target="_blank"
+    >
+      {label}{version ? ` (bản ${version})` : ""}
+    </a>
   );
 }
 

@@ -98,6 +98,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
   const canManageRoles = can("role.manage");
   const canManageUsers = can("user.manage");
   const canManageMessages = can("message.manage");
+  const canManageModeration = can("moderation.manage");
   const canManageApiTokens = can("api_token.manage");
   const canManageBots = can("bot.manage");
   const canManageBackups = can("backup.manage");
@@ -845,6 +846,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
     canManageBots,
     canManageCronjobs,
     canManageMessages,
+    canManageModeration,
     canManageRoles,
     canManageUsers,
     canManageWebhooks,

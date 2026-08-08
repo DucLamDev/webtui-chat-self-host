@@ -2,6 +2,11 @@
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  legalDocumentsCompatibilityError,
+  queryKeys,
+  resolveCurrentLegalDocuments
+} from "@webtui/api-client";
 import { Badge, Button, ErrorState } from "@webtui/ui";
 import {
   CheckCircle2,
@@ -13,7 +18,8 @@ import {
   Video,
   VideoOff
 } from "@webtui/icons";
-import { api } from "@/lib/api";
+import { legalPolicyConfig } from "@/features/auth/legal-policy-config";
+import { publicApi, runtimeEnvironment } from "@/lib/api";
 import { JitsiMeeting, type JitsiMeetingHandle } from "@/features/chat/components/jitsi-meeting";
 
 type StoredGuestSession = {
@@ -26,11 +32,34 @@ export default function PublicConversationJoinPage() {
   const [token, setToken] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [guestSession, setGuestSession] = useState<StoredGuestSession | null>(null);
+
+  const legalDocumentsQuery = useQuery({
+    queryFn: () => publicApi.auth.legalDocuments(),
+    queryKey: queryKeys.auth.legalDocuments(runtimeEnvironment.apiBaseUrl),
+    retry: false
+  });
+  const legalDocumentsResolution = useMemo(
+    () => resolveCurrentLegalDocuments(legalDocumentsQuery.data),
+    [legalDocumentsQuery.data]
+  );
+  const legalDocuments = legalDocumentsResolution.documents;
+  const legalError = legalPolicyConfig.configurationError
+    ?? (legalDocumentsQuery.isError
+      ? legalDocumentsQuery.error instanceof Error
+        ? legalDocumentsQuery.error.message
+        : "Không tải được tài liệu pháp lý từ máy chủ."
+      : legalDocumentsQuery.isLoading ? null : legalDocumentsResolution.error)
+    ?? (legalDocuments
+      ? legalDocumentsCompatibilityError(legalDocuments, legalPolicyConfig)
+      : null);
+  const legalReady = Boolean(legalDocuments && !legalError && !legalDocumentsQuery.isFetching);
 
   const roomQuery = useQuery({
     enabled: Boolean(token),
-    queryFn: () => api.channels.publicRoom(token),
+    queryFn: () => publicApi.channels.publicRoom(token),
     queryKey: ["public-conversation", token],
     retry: false
   });
@@ -56,10 +85,19 @@ export default function PublicConversationJoinPage() {
   }, [token]);
 
   const joinMutation = useMutation({
-    mutationFn: () => api.channels.joinPublicRoom(token, {
-      display_name: displayName,
-      password: password || undefined
-    }),
+    mutationFn: () => {
+      if (!legalDocuments || legalError || !termsAccepted || !privacyAccepted) {
+        throw new Error("Hãy chấp nhận đầy đủ tài liệu pháp lý hiện hành trước khi tham gia.");
+      }
+      return publicApi.channels.joinPublicRoom(token, {
+        display_name: displayName,
+        password: password || undefined,
+        privacy_accepted: true,
+        privacy_version: legalDocuments.privacy.version,
+        terms_accepted: true,
+        terms_version: legalDocuments.terms.version
+      });
+    },
     onSuccess: (guest) => {
       if (!guest.guest_access_token) return;
       const next = {
@@ -75,7 +113,7 @@ export default function PublicConversationJoinPage() {
   const statusQuery = useQuery({
     enabled: Boolean(guestSession),
     queryFn: () =>
-      api.channels.publicJoinStatus(
+      publicApi.channels.publicJoinStatus(
         token,
         guestSession?.requestId ?? "",
         guestSession?.accessToken ?? ""
@@ -194,10 +232,57 @@ export default function PublicConversationJoinPage() {
                 <span><LockKeyhole size={16} /><input autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} /></span>
               </label>
             ) : null}
+            {legalError ? (
+              <div className="guest-legal-error" role="alert">
+                <p>{legalError}</p>
+                <Button
+                  disabled={legalDocumentsQuery.isFetching}
+                  onClick={() => void legalDocumentsQuery.refetch()}
+                  type="button"
+                  variant="ghost"
+                >
+                  Thử tải lại tài liệu
+                </Button>
+              </div>
+            ) : legalReady && legalDocuments ? (
+              <div className="guest-legal-consents">
+                <label className="guest-legal-consent">
+                  <input
+                    checked={termsAccepted}
+                    onChange={(event) => setTermsAccepted(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>
+                    Tôi chấp thuận <a href={legalPolicyConfig.termsUrl} rel="noreferrer" target="_blank">Điều khoản và Quy tắc sử dụng</a> (bản {legalDocuments.terms.version}).
+                  </span>
+                </label>
+                <label className="guest-legal-consent">
+                  <input
+                    checked={privacyAccepted}
+                    onChange={(event) => setPrivacyAccepted(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>
+                    Tôi xác nhận đã đọc <a href={legalPolicyConfig.privacyUrl} rel="noreferrer" target="_blank">Chính sách quyền riêng tư</a> (bản {legalDocuments.privacy.version}).
+                  </span>
+                </label>
+              </div>
+            ) : (
+              <p className="guest-legal-loading">Đang xác minh tài liệu pháp lý hiện hành…</p>
+            )}
             {joinMutation.isError ? (
               <p className="guest-join-error">{joinMutation.error instanceof Error ? joinMutation.error.message : "Không gửi được yêu cầu tham gia."}</p>
             ) : null}
-            <Button disabled={displayName.trim().length < 2 || joinMutation.isPending} type="submit">
+            <Button
+              disabled={
+                displayName.trim().length < 2
+                || !legalReady
+                || !termsAccepted
+                || !privacyAccepted
+                || joinMutation.isPending
+              }
+              type="submit"
+            >
               <Users size={17} /> {room?.lobby_enabled ? "Gửi yêu cầu tham gia" : "Vào phòng họp"}
             </Button>
           </form>

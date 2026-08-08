@@ -2,12 +2,18 @@
 
 import { createContext, type FormEvent, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Skeleton } from "@webtui/ui";
+import { Button, Skeleton, type LegalConsentValues } from "@webtui/ui";
 import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck, Sparkles } from "@webtui/icons";
-import type { AuthUser, LoginInput, OIDCProviderSummary, RegisterInput } from "@webtui/types";
-import { ApiClientError, queryKeys } from "@webtui/api-client";
+import type { AuthUser, CurrentLegalDocuments, LoginInput, OIDCProviderSummary, RegisterInput } from "@webtui/types";
+import {
+  ApiClientError,
+  legalDocumentsCompatibilityError,
+  queryKeys,
+  resolveCurrentLegalDocuments
+} from "@webtui/api-client";
 import { api, runtimeEnvironment } from "@/lib/api";
 import { useAuthStore } from "./auth-store";
+import { legalPolicyConfig } from "./legal-policy-config";
 
 type AuthContextValue = {
   isAuthenticated: boolean;
@@ -39,6 +45,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refetchOnWindowFocus: "always",
     retry: false
   });
+  const legalDocumentsServer = discoveryQuery.data?.runtime.api_base_url ?? runtimeEnvironment.apiBaseUrl;
+  const legalDocumentsQuery = useQuery({
+    enabled: hydrated && !accessToken && discoveryQuery.data?.setup_required === true,
+    queryFn: () => api.auth.legalDocuments(),
+    queryKey: queryKeys.auth.legalDocuments(legalDocumentsServer),
+    retry: false
+  });
+  const legalDocumentsResolution = useMemo(
+    () => resolveCurrentLegalDocuments(legalDocumentsQuery.data),
+    [legalDocumentsQuery.data]
+  );
+  const currentLegalDocuments: CurrentLegalDocuments | null = legalDocumentsResolution.documents;
+  const setupLegalError = legalPolicyConfig.configurationError
+    ?? (legalDocumentsQuery.isError
+      ? legalDocumentsQuery.error instanceof Error
+        ? legalDocumentsQuery.error.message
+        : "Không tải được tài liệu pháp lý từ máy chủ."
+      : legalDocumentsQuery.isLoading ? null : legalDocumentsResolution.error)
+    ?? (currentLegalDocuments
+      ? legalDocumentsCompatibilityError(currentLegalDocuments, legalPolicyConfig)
+      : null);
   const organizationName = discoveryQuery.data?.runtime.app_name || runtimeEnvironment.appName || "Tổ chức";
   const organizationLogo = resolveOrganizationLogo(
     discoveryQuery.data?.runtime.logo_url || discoveryQuery.data?.zone.logo_url,
@@ -219,6 +246,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isPending={loginMutation.isPending || setupMutation.isPending || isCompletingOIDC}
         organizationLogo={organizationLogo}
         organizationName={organizationName}
+        setupLegal={{
+          error: setupLegalError,
+          isLoading: legalDocumentsQuery.isLoading || legalDocumentsQuery.isFetching,
+          onRetry: () => void legalDocumentsQuery.refetch(),
+          privacyUrl: legalPolicyConfig.privacyUrl,
+          privacyVersion: currentLegalDocuments?.privacy.version,
+          termsUrl: legalPolicyConfig.termsUrl,
+          termsVersion: currentLegalDocuments?.terms.version
+        }}
         setupRequired={discoveryQuery.data?.setup_required === true}
         onOIDCDiscover={() => api.auth.oidcProviders(browserDomain())}
         onOIDCStart={async (providerId) => {
@@ -237,11 +273,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           identifier,
           password
         })}
-        onSetup={(profile) => setupMutation.mutate({
-          ...profile,
-          device_name: `${organizationName} - Trang quản trị`,
-          domain: browserDomain()
-        })}
+        onSetup={(profile) => {
+          if (
+            !currentLegalDocuments
+            || setupLegalError
+            || !profile.privacyAccepted
+            || !profile.termsAccepted
+          ) {
+            setFormError("Chưa thể tạo tài khoản quản trị vì tài liệu pháp lý chưa sẵn sàng hoặc chưa được chấp nhận đầy đủ.");
+            return;
+          }
+          setupMutation.mutate({
+            device_name: `${organizationName} - Trang quản trị`,
+            display_name: profile.display_name,
+            domain: browserDomain(),
+            email: profile.email,
+            password: profile.password,
+            privacy_accepted: true,
+            privacy_version: currentLegalDocuments.privacy.version,
+            terms_accepted: true,
+            terms_version: currentLegalDocuments.terms.version,
+            username: profile.username
+          });
+        }}
       />
     );
   }
@@ -321,16 +375,26 @@ function AdminLoginScreen({
   onSubmit,
   organizationLogo,
   organizationName,
+  setupLegal,
   setupRequired
 }: {
   error: string | null;
   isPending: boolean;
   onOIDCDiscover: () => Promise<OIDCProviderSummary[]>;
   onOIDCStart: (providerId: string) => Promise<void>;
-  onSetup: (profile: Pick<RegisterInput, "display_name" | "email" | "password" | "username">) => void;
+  onSetup: (profile: Pick<RegisterInput, "display_name" | "email" | "password" | "username"> & LegalConsentValues) => void;
   onSubmit: (identifier: string, password: string) => void;
   organizationLogo?: string;
   organizationName: string;
+  setupLegal: {
+    error: string | null;
+    isLoading: boolean;
+    onRetry: () => void;
+    privacyUrl: string;
+    privacyVersion?: string;
+    termsUrl: string;
+    termsVersion?: string;
+  };
   setupRequired: boolean;
 }) {
   const [identifier, setIdentifier] = useState("");
@@ -340,11 +404,26 @@ function AdminLoginScreen({
   const [setupUsername, setSetupUsername] = useState("");
   const [setupPassword, setSetupPassword] = useState("");
   const [setupPasswordConfirmation, setSetupPasswordConfirmation] = useState("");
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [isOIDCPending, setIsOIDCPending] = useState(false);
   const [oidcProviders, setOIDCProviders] = useState<OIDCProviderSummary[]>([]);
   const [selectedOIDCProvider, setSelectedOIDCProvider] = useState("");
   const [oidcError, setOIDCError] = useState<string | null>(null);
+  const setupLegalReady = Boolean(
+    !setupLegal.isLoading
+      && !setupLegal.error
+      && setupLegal.privacyUrl
+      && setupLegal.privacyVersion
+      && setupLegal.termsUrl
+      && setupLegal.termsVersion
+  );
+
+  useEffect(() => {
+    setPrivacyAccepted(false);
+    setTermsAccepted(false);
+  }, [setupLegal.privacyVersion, setupLegal.termsVersion]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -358,10 +437,16 @@ function AdminLoginScreen({
       setSetupError("Hai mật khẩu chưa giống nhau. Vui lòng kiểm tra lại.");
       return;
     }
+    if (!setupLegalReady || !privacyAccepted || !termsAccepted) {
+      setSetupError("Vui lòng đọc và chấp nhận cả Điều khoản lẫn Chính sách quyền riêng tư trước khi tạo tài khoản.");
+      return;
+    }
     onSetup({
       display_name: setupDisplayName.trim(),
       email: setupEmail.trim(),
       password: setupPassword,
+      privacyAccepted,
+      termsAccepted,
       username: setupUsername.trim().toLowerCase()
     });
   }
@@ -481,7 +566,31 @@ function AdminLoginScreen({
                 />
               </label>
             </div>
-            <Button disabled={isPending} type="submit">
+            <fieldset className="admin-legal-consent">
+              <legend>Tài liệu pháp lý hiện hành</legend>
+              {setupLegal.isLoading ? <p>Đang tải phiên bản tài liệu từ máy chủ...</p> : null}
+              {setupLegal.error ? <div className="admin-login-error" role="alert">{setupLegal.error}</div> : null}
+              {setupLegal.error ? <Button onClick={setupLegal.onRetry} type="button" variant="secondary">Thử tải lại</Button> : null}
+              <label className="admin-legal-consent__check">
+                <input
+                  checked={termsAccepted}
+                  disabled={!setupLegalReady || isPending}
+                  onChange={(event) => setTermsAccepted(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Tôi đã đọc và chấp nhận <AdminLegalDocumentLink label="Điều khoản & Quy tắc sử dụng" url={setupLegal.termsUrl} version={setupLegal.termsVersion} />.</span>
+              </label>
+              <label className="admin-legal-consent__check">
+                <input
+                  checked={privacyAccepted}
+                  disabled={!setupLegalReady || isPending}
+                  onChange={(event) => setPrivacyAccepted(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Tôi đã đọc và chấp nhận <AdminLegalDocumentLink label="Chính sách quyền riêng tư" url={setupLegal.privacyUrl} version={setupLegal.privacyVersion} />.</span>
+              </label>
+            </fieldset>
+            <Button disabled={isPending || !setupLegalReady || !privacyAccepted || !termsAccepted} type="submit">
               {isPending ? "Đang tạo tài khoản..." : "Bắt đầu quản lý"}<ArrowRight size={17} />
             </Button>
             <small className="admin-login-card__notice">Vì lý do an toàn, biểu mẫu này sẽ tự ẩn sau khi tài khoản đầu tiên được tạo.</small>
@@ -552,6 +661,13 @@ function AdminLoginScreen({
       </section>
     </main>
   );
+}
+
+function AdminLegalDocumentLink({ label, url, version }: { label: string; url: string; version?: string }) {
+  if (!url) {
+    return <strong>{label}</strong>;
+  }
+  return <a href={url} rel="noreferrer" target="_blank">{label}{version ? ` (bản ${version})` : ""}</a>;
 }
 
 export function useAuth() {

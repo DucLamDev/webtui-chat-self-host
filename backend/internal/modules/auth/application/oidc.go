@@ -34,6 +34,7 @@ var (
 	ErrOIDCResultNotFound   = errors.New("oidc login result not found")
 	ErrOIDCIdentityNotFound = errors.New("oidc identity not found")
 	ErrOIDCJITDisabled      = errors.New("oidc jit provisioning disabled")
+	ErrOIDCJITLegalBlocked  = errors.New("oidc jit provisioning requires an unsupported legal acceptance flow")
 	ErrOIDCProviderNotReady = errors.New("oidc provider not ready")
 )
 
@@ -632,6 +633,11 @@ func mapOIDCError(err error) error {
 		return apperrors.BadRequest("INVALID_OIDC_CODE", "Mã hoàn tất OIDC đã hết hạn hoặc đã được sử dụng.")
 	case errors.Is(err, ErrOIDCJITDisabled):
 		return apperrors.Forbidden("Nhà cung cấp OIDC không cho phép tạo thành viên mới.")
+	case errors.Is(err, ErrOIDCJITLegalBlocked):
+		return apperrors.Conflict(
+			"OIDC_JIT_LEGAL_ACCEPTANCE_REQUIRED",
+			"OIDC cannot create a new account until the user completes the required legal acceptance flow. Pre-provision the account or use standard registration first.",
+		)
 	case errors.Is(err, ErrOIDCProviderNotReady), errors.Is(err, tenancydomain.ErrOIDCProviderNotFound):
 		return apperrors.NotFound("OIDC_PROVIDER_NOT_FOUND", "Không tìm thấy nhà cung cấp OIDC sẵn sàng cho tên miền.")
 	case errors.Is(err, authdomain.ErrUserAlreadyExists):

@@ -55,6 +55,9 @@ import (
 	messageshttp "github.com/duclamdev/application-chat/backend/internal/modules/messages/delivery/http"
 	messagespostgres "github.com/duclamdev/application-chat/backend/internal/modules/messages/infrastructure/postgres"
 	messagesws "github.com/duclamdev/application-chat/backend/internal/modules/messages/infrastructure/websocket"
+	moderationapp "github.com/duclamdev/application-chat/backend/internal/modules/moderation/application"
+	moderationhttp "github.com/duclamdev/application-chat/backend/internal/modules/moderation/delivery/http"
+	moderationpostgres "github.com/duclamdev/application-chat/backend/internal/modules/moderation/infrastructure/postgres"
 	notificationsapp "github.com/duclamdev/application-chat/backend/internal/modules/notifications/application"
 	notificationshttp "github.com/duclamdev/application-chat/backend/internal/modules/notifications/delivery/http"
 	notificationspostgres "github.com/duclamdev/application-chat/backend/internal/modules/notifications/infrastructure/postgres"
@@ -177,6 +180,8 @@ func (a *API) registerAPIV1() {
 	tenancyHandler.RegisterRoutes(a.engine, v1, authMiddleware, zoneRecoveryAuthMiddleware)
 
 	authService := authapp.NewService(authRepo, tokenManager)
+	authService.SetLegalDocumentVersions(a.cfg.Legal.TermsVersion, a.cfg.Legal.PrivacyPolicyVersion)
+	legalAcceptanceMiddleware := middleware.RequireCurrentLegalAcceptance(authService)
 	authHandler := authhttp.NewHandler(authService, a.cfg.Security.GoogleClientID)
 	if a.cfg.Deployment.IsSelfHosted() {
 		authHandler.SetInstanceDomain(a.cfg.Deployment.InstanceDomain)
@@ -195,6 +200,11 @@ func (a *API) registerAPIV1() {
 	rbacHandler := rbachttp.NewHandler(rbacService)
 	rbacHandler.RegisterRoutes(v1.Group("/rbac"), authMiddleware)
 
+	moderationRepo := moderationpostgres.NewRepository(pool)
+	moderationService := moderationapp.NewService(moderationRepo, rbacService)
+	moderationHandler := moderationhttp.NewHandler(moderationService)
+	moderationHandler.RegisterRoutes(v1, authMiddleware)
+
 	usersRepo := userspostgres.NewRepository(pool)
 	usersService := usersapp.NewService(usersRepo, rbacService)
 	if a.resources.WebSocket != nil {
@@ -204,7 +214,7 @@ func (a *API) registerAPIV1() {
 	if a.resources.TenantStorage != nil {
 		usersHandler.SetStorageResolver(a.resources.TenantStorage)
 	}
-	usersHandler.RegisterRoutes(v1.Group("/users"), authMiddleware)
+	usersHandler.RegisterRoutes(v1.Group("/users"), authMiddleware, legalAcceptanceMiddleware)
 
 	pushDevicesRepo := pushdevicespostgres.NewRepository(pool)
 	pushDevicesService := pushdevicesapp.NewService(pushDevicesRepo, rbacService)
@@ -262,12 +272,14 @@ func (a *API) registerAPIV1() {
 
 	channelsRepo := channelspostgres.NewRepository(pool)
 	channelsService := channelsapp.NewService(channelsRepo, rbacService, channelsRepo)
+	channelsService.SetBlockChecker(moderationService)
+	channelsService.SetLegalDocumentVersions(a.cfg.Legal.TermsVersion, a.cfg.Legal.PrivacyPolicyVersion)
 	channelsService.SetMeetingBaseURL(a.cfg.Calls.JitsiBaseURL)
 	channelsService.SetTalkAIProvider(channelslocalai.NewClient(
 		strings.Split(os.Getenv("TALK_AI_ALLOWED_HOSTS"), ","),
 	))
 	channelsHandler := channelshttp.NewHandler(channelsService)
-	channelsHandler.RegisterRoutes(v1, authMiddleware)
+	channelsHandler.RegisterRoutes(v1, authMiddleware, legalAcceptanceMiddleware)
 
 	if a.resources.WebSocket != nil {
 		wsHandler := wshttp.NewHandler(a.resources.WebSocket, tokenManager, channelsService)
@@ -308,7 +320,7 @@ func (a *API) registerAPIV1() {
 		a.cfg.Security.BotAISecretKey,
 	))
 	botsHandler := botshttp.NewHandler(botsService)
-	botsHandler.RegisterRoutes(v1, authMiddleware)
+	botsHandler.RegisterRoutes(v1, authMiddleware, legalAcceptanceMiddleware)
 
 	callsRepo := callspostgres.NewRepository(pool)
 	var callsRealtime callsapp.RealtimePublisher
@@ -316,6 +328,7 @@ func (a *API) registerAPIV1() {
 		callsRealtime = callsws.NewPublisher(a.resources.WebSocket)
 	}
 	callsService := callsapp.NewService(callsRepo, rbacService, callsRealtime, notificationsService)
+	callsService.SetBlockChecker(moderationService)
 	callsService.SetRingTimeout(a.cfg.Calls.RingTimeout)
 	callsHandler := callshttp.NewHandler(callsService)
 	callsHandler.SetICEConfiguration(
@@ -324,7 +337,7 @@ func (a *API) registerAPIV1() {
 		a.cfg.Calls.TURNSharedSecret,
 		a.cfg.Calls.TURNCredentialTTL,
 	)
-	callsHandler.RegisterRoutes(v1, authMiddleware)
+	callsHandler.RegisterRoutes(v1, authMiddleware, legalAcceptanceMiddleware)
 
 	orderRepo := orderpostgres.NewRepository(pool)
 	orderAPIClient := orderclient.New(orderclient.Config{
@@ -350,6 +363,7 @@ func (a *API) registerAPIV1() {
 		webhooksender.NewSender(a.cfg.Security.WebhookSigningSecret),
 		a.cfg.Security.WebhookSigningSecret,
 	)
+	webhooksService.SetLegalDocumentVersions(a.cfg.Legal.TermsVersion, a.cfg.Legal.PrivacyPolicyVersion)
 	webhooksHandler := webhookshttp.NewHandler(webhooksService, a.cfg.App.URL)
 	webhooksHandler.RegisterRoutes(v1, authMiddleware)
 
@@ -357,6 +371,7 @@ func (a *API) registerAPIV1() {
 		filesRepo := filespostgres.NewRepository(pool)
 		filesStore := filesstorage.NewStore(a.resources.Storage)
 		filesService := filesapp.NewService(filesRepo, filesStore, rbacService, a.cfg.Storage.Provider, a.cfg.Storage.Bucket)
+		filesService.SetBlockChecker(moderationService)
 		if a.resources.TenantStorage != nil {
 			filesService.SetStorageResolver(filesstorage.NewResolver(a.resources.TenantStorage))
 		}
@@ -364,7 +379,7 @@ func (a *API) registerAPIV1() {
 			filesService.SetRealtimePublisher(filesws.NewPublisher(a.resources.WebSocket))
 		}
 		filesHandler := fileshttp.NewHandler(filesService)
-		filesHandler.RegisterRoutes(v1, authMiddleware)
+		filesHandler.RegisterRoutes(v1, authMiddleware, legalAcceptanceMiddleware)
 	}
 
 	messagesRepo := messagespostgres.NewRepository(pool)
@@ -373,9 +388,10 @@ func (a *API) registerAPIV1() {
 		realtimePublisher = messagesws.NewPublisher(a.resources.WebSocket)
 	}
 	messagesService := messagesapp.NewService(messagesRepo, rbacService, realtimePublisher)
+	messagesService.SetBlockChecker(moderationService)
 	messagesService.SetAutoResponders(botsService, orderService)
 	messagesHandler := messageshttp.NewHandler(messagesService)
-	messagesHandler.RegisterRoutes(v1, authMiddleware)
+	messagesHandler.RegisterRoutes(v1, authMiddleware, legalAcceptanceMiddleware)
 }
 
 func (a *API) healthChecks() map[string]healthhttp.CheckFunc {

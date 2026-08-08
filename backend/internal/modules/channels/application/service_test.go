@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -16,6 +17,22 @@ type staticPermissionChecker struct {
 
 func (c staticPermissionChecker) HasWorkspacePermission(context.Context, string, string, string) (bool, error) {
 	return c.allowed, nil
+}
+
+type staticBlockChecker struct {
+	blocked         bool
+	blockedChannels map[string]bool
+}
+
+func (c staticBlockChecker) IsInteractionBlocked(context.Context, string, string, string) (bool, error) {
+	return c.blocked, nil
+}
+
+func (c staticBlockChecker) IsDirectChannelBlocked(_ context.Context, _ string, channelID string, _ string) (bool, error) {
+	if c.blockedChannels != nil {
+		return c.blockedChannels[channelID], nil
+	}
+	return c.blocked, nil
 }
 
 type directConversationRepo struct {
@@ -112,6 +129,60 @@ func (r *directConversationRepo) RecordAudit(context.Context, AuditEvent) error 
 	return nil
 }
 
+type channelMetadataUpdateRepo struct {
+	directConversationRepo
+	updateCalls int
+}
+
+func (r *channelMetadataUpdateRepo) UpdateChannel(_ context.Context, params UpdateChannelParams) (channelsdomain.Channel, error) {
+	r.updateCalls++
+	name := ""
+	if params.Name != nil {
+		name = *params.Name
+	}
+	return channelsdomain.Channel{
+		ID:          params.ChannelID,
+		WorkspaceID: params.WorkspaceID,
+		Name:        name,
+		Type:        "private",
+	}, nil
+}
+
+func TestUpdateRejectsBlockedDirectChannelMetadataMutation(t *testing.T) {
+	repository := &channelMetadataUpdateRepo{}
+	service := NewService(repository, staticPermissionChecker{allowed: true})
+	service.SetBlockChecker(staticBlockChecker{blockedChannels: map[string]bool{"direct-1": true}})
+	name := "bypass"
+
+	_, err := service.Update(context.Background(), UpdateChannelInput{
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", ChannelID: "direct-1", Name: &name,
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" || appErr.Status != 403 {
+		t.Fatalf("Update() error = %#v, want 403 INTERACTION_BLOCKED", err)
+	}
+	if repository.updateCalls != 0 {
+		t.Fatalf("UpdateChannel() calls = %d, want 0", repository.updateCalls)
+	}
+}
+
+func TestUpdateAllowsGroupChannelMetadataWhenDirectBlockExists(t *testing.T) {
+	repository := &channelMetadataUpdateRepo{}
+	service := NewService(repository, staticPermissionChecker{allowed: true})
+	service.SetBlockChecker(staticBlockChecker{blockedChannels: map[string]bool{"direct-1": true}})
+	name := "Group name"
+
+	channel, err := service.Update(context.Background(), UpdateChannelInput{
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", ChannelID: "group-1", Name: &name,
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if repository.updateCalls != 1 || channel.ID != "group-1" || channel.Name != name {
+		t.Fatalf("Update() calls = %d, channel = %#v", repository.updateCalls, channel)
+	}
+}
+
 func TestCreateDirectNormalizesParticipants(t *testing.T) {
 	repo := &directConversationRepo{}
 	service := NewService(repo, staticPermissionChecker{allowed: true})
@@ -137,6 +208,19 @@ func TestCreateDirectNormalizesParticipants(t *testing.T) {
 	}
 	if dto.ParticipantKey != repo.params.ParticipantKey {
 		t.Fatalf("DTO ParticipantKey = %q", dto.ParticipantKey)
+	}
+}
+
+func TestCreateDirectRejectsBlockedInteraction(t *testing.T) {
+	service := NewService(&directConversationRepo{}, staticPermissionChecker{allowed: true})
+	service.SetBlockChecker(staticBlockChecker{blocked: true})
+
+	_, err := service.CreateDirect(context.Background(), CreateDirectInput{
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", ParticipantIDs: []string{"user-b"},
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" {
+		t.Fatalf("CreateDirect() error = %#v, want INTERACTION_BLOCKED", err)
 	}
 }
 

@@ -12,6 +12,7 @@ INSTANCE_LOGO_URL=""
 INSTANCE_REGISTRATION_MODE="open"
 TURN_EXTERNAL_IP=""
 PORTAL_ORIGIN="https://download.vpsttt.com"
+PORTAL_DOMAIN="download.vpsttt.com"
 FORCE=0
 SKIP_DNS_CHECK=0
 
@@ -64,6 +65,11 @@ case "$INSTANCE_REGISTRATION_MODE" in
 esac
 if ! printf '%s' "$PORTAL_ORIGIN" | grep -Eq '^https://([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}(:[0-9]{1,5})?$'; then
   echo "Portal origin must be an HTTPS origin without a path." >&2
+  exit 1
+fi
+PORTAL_DOMAIN=${PORTAL_ORIGIN#https://}
+if printf '%s' "$PORTAL_DOMAIN" | grep -q ':'; then
+  echo "Portal origin must use the standard HTTPS port so its hostname can be used for SNI." >&2
   exit 1
 fi
 for command_name in docker openssl curl; do
@@ -145,10 +151,18 @@ APP_URL=https://$DOMAIN
 APP_VERSION=self-hosted
 LOG_LEVEL=info
 LOG_FORMAT=json
+TERMS_VERSION=2026-08-07
+PRIVACY_POLICY_VERSION=2026-08-07
+NEXT_PUBLIC_TERMS_URL=$PORTAL_ORIGIN/terms
+NEXT_PUBLIC_PRIVACY_URL=$PORTAL_ORIGIN/privacy
+NEXT_PUBLIC_TERMS_VERSION=2026-08-07
+NEXT_PUBLIC_PRIVACY_VERSION=2026-08-07
 API_HTTP_HOST=0.0.0.0
 API_HTTP_PORT=8080
 TRUSTED_PROXIES=172.16.0.0/12,127.0.0.1
 PORTAL_ORIGIN=$PORTAL_ORIGIN
+PORTAL_DOMAIN=$PORTAL_DOMAIN
+WEBTUI_APP_LINK_HOST=$DOMAIN
 DESKTOP_DOWNLOAD_URL=$PORTAL_ORIGIN/download/
 MOBILE_DOWNLOAD_URL=$PORTAL_ORIGIN/download/
 DOCUMENTATION_URL=$PORTAL_ORIGIN/#self-host
@@ -235,6 +249,7 @@ JICOFO_AUTH_PASSWORD=$JICOFO_AUTH_PASSWORD
 JVB_AUTH_PASSWORD=$JVB_AUTH_PASSWORD
 LETSENCRYPT_EMAIL=$EMAIL
 WORKER_CONCURRENCY=4
+MODERATION_EVIDENCE_RETENTION_DAYS=365
 EOF
 
 # Dedicated credentials are loaded only by the opt-in backup/restore services.

@@ -6,10 +6,13 @@ import (
 )
 
 var (
-	ErrMessageNotFound  = errors.New("không tìm thấy tin nhắn")
-	ErrChannelNotFound  = errors.New("không tìm thấy kênh hoặc bạn chưa thuộc kênh")
-	ErrMentionNotFound  = errors.New("người được nhắc chưa thuộc kênh")
-	ErrReactionNotFound = errors.New("không tìm thấy reaction")
+	ErrMessageNotFound                       = errors.New("không tìm thấy tin nhắn")
+	ErrChannelNotFound                       = errors.New("không tìm thấy kênh hoặc bạn chưa thuộc kênh")
+	ErrMentionNotFound                       = errors.New("người được nhắc chưa thuộc kênh")
+	ErrReactionNotFound                      = errors.New("không tìm thấy reaction")
+	ErrInteractionBlocked                    = errors.New("direct interaction is blocked")
+	ErrScheduledDeliveryPermissionRevoked    = errors.New("scheduled message sender permission was revoked")
+	ErrScheduledDeliveryLegalAcceptanceStale = errors.New("scheduled message sender legal acceptance is not current")
 )
 
 var ErrPinNotFound = errors.New("không tìm thấy tin ghim")

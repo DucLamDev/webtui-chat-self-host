@@ -22,6 +22,7 @@ export type { WebTuiApiClient } from "./client-factory";
 export { createFilesClient } from "./files-client";
 export { ApiClientError, HttpClient } from "./http-client";
 export type { HttpClientOptions, QueryParams, RequestOptions } from "./http-client";
+export type { HttpRequestContext } from "./http-client";
 export { createHealthClient } from "./health-client";
 export type { HealthStatus, VersionInfo } from "./health-client";
 export {
@@ -42,6 +43,20 @@ export type {
 } from "./modules-client";
 export { createMessagesClient } from "./messages-client";
 export type { MessagePage } from "./messages-client";
+export { createModerationClient } from "./moderation-client";
+export { isUGCMutationRequest } from "./legal-acceptance-policy";
+export {
+  createLegalPolicyConfig,
+  isCompleteLegalAcceptance,
+  legalAcceptanceCompatibilityError,
+  legalDocumentsCompatibilityError,
+  resolveCurrentLegalDocuments
+} from "./legal-policy-config";
+export type {
+  LegalDocumentsResolution,
+  LegalPolicyConfig,
+  LegalPolicySource
+} from "./legal-policy-config";
 export { queryKeys } from "./query-keys";
 export { createRbacClient } from "./rbac-client";
 export { createRealtimeGateway } from "./realtime-gateway";

@@ -167,12 +167,17 @@ WHERE s.public_access_enabled = true
 func (r *Repository) CreateGuestRequest(ctx context.Context, params channelsapp.CreateGuestRequestParams) (channelsdomain.GuestRequest, error) {
 	return scanGuestRequest(r.pool.QueryRow(ctx, `
 INSERT INTO channel_guest_requests (
-    channel_id, display_name, status, access_token_hash, expires_at
+    channel_id, display_name, status, access_token_hash,
+    terms_version, privacy_policy_version, legal_accepted_at,
+    legal_ip_address, legal_user_agent, expires_at
 )
-VALUES ($1::uuid, $2, $3, $4, $5)
+VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::inet, NULLIF($9, ''), $10)
 RETURNING id::text, channel_id::text, display_name, status, reviewed_by::text,
-          reviewed_at, expires_at, created_at, updated_at
-`, params.ChannelID, params.DisplayName, params.Status, params.AccessTokenHash, params.ExpiresAt))
+          reviewed_at, terms_version, privacy_policy_version, legal_accepted_at,
+          expires_at, created_at, updated_at
+`, params.ChannelID, params.DisplayName, params.Status, params.AccessTokenHash,
+		params.TermsVersion, params.PrivacyPolicyVersion, params.LegalAcceptedAt,
+		params.LegalIPAddress, params.LegalUserAgent, params.ExpiresAt))
 }
 
 func (r *Repository) GetGuestRequest(ctx context.Context, channelID string, requestID string, accessTokenHash string) (channelsdomain.GuestRequest, error) {
@@ -181,7 +186,8 @@ UPDATE channel_guest_requests
 SET status = CASE WHEN expires_at <= now() AND status IN ('waiting', 'approved') THEN 'expired' ELSE status END
 WHERE channel_id = $1::uuid AND id = $2::uuid AND access_token_hash = $3
 RETURNING id::text, channel_id::text, display_name, status, reviewed_by::text,
-          reviewed_at, expires_at, created_at, updated_at
+          reviewed_at, terms_version, privacy_policy_version, legal_accepted_at,
+          expires_at, created_at, updated_at
 `, channelID, requestID, accessTokenHash))
 }
 
@@ -189,7 +195,8 @@ func (r *Repository) ListGuestRequests(ctx context.Context, workspaceID string, 
 	rows, err := r.pool.Query(ctx, `
 SELECT g.id::text, g.channel_id::text, g.display_name,
        CASE WHEN g.expires_at <= now() AND g.status IN ('waiting', 'approved') THEN 'expired' ELSE g.status END,
-       g.reviewed_by::text, g.reviewed_at, g.expires_at, g.created_at, g.updated_at
+       g.reviewed_by::text, g.reviewed_at, g.terms_version, g.privacy_policy_version,
+       g.legal_accepted_at, g.expires_at, g.created_at, g.updated_at
 FROM channel_guest_requests g
 JOIN channels c ON c.id = g.channel_id AND c.deleted_at IS NULL
 WHERE c.workspace_id = $1::uuid AND c.id = $2::uuid
@@ -224,7 +231,8 @@ WHERE c.id = g.channel_id
   AND g.status = 'waiting'
   AND g.expires_at > now()
 RETURNING g.id::text, g.channel_id::text, g.display_name, g.status, g.reviewed_by::text,
-          g.reviewed_at, g.expires_at, g.created_at, g.updated_at
+          g.reviewed_at, g.terms_version, g.privacy_policy_version, g.legal_accepted_at,
+          g.expires_at, g.created_at, g.updated_at
 `, params.WorkspaceID, params.ChannelID, params.RequestID, params.Status, params.ActorUserID))
 }
 
@@ -545,6 +553,9 @@ func scanGuestRequest(row rowScanner) (channelsdomain.GuestRequest, error) {
 	var guest channelsdomain.GuestRequest
 	var reviewedBy sql.NullString
 	var reviewedAt sql.NullTime
+	var termsVersion sql.NullString
+	var privacyPolicyVersion sql.NullString
+	var legalAcceptedAt sql.NullTime
 	if err := row.Scan(
 		&guest.ID,
 		&guest.ChannelID,
@@ -552,6 +563,9 @@ func scanGuestRequest(row rowScanner) (channelsdomain.GuestRequest, error) {
 		&guest.Status,
 		&reviewedBy,
 		&reviewedAt,
+		&termsVersion,
+		&privacyPolicyVersion,
+		&legalAcceptedAt,
 		&guest.ExpiresAt,
 		&guest.CreatedAt,
 		&guest.UpdatedAt,
@@ -563,6 +577,9 @@ func scanGuestRequest(row rowScanner) (channelsdomain.GuestRequest, error) {
 	}
 	guest.ReviewedBy = nullStringPtr(reviewedBy)
 	guest.ReviewedAt = nullTimePtr(reviewedAt)
+	guest.TermsVersion = nullStringPtr(termsVersion)
+	guest.PrivacyPolicyVersion = nullStringPtr(privacyPolicyVersion)
+	guest.LegalAcceptedAt = nullTimePtr(legalAcceptedAt)
 	return guest, nil
 }
 

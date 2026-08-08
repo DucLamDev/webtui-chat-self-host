@@ -8,6 +8,7 @@ Base path: `/api/v1/auth`
 
 | Endpoint | Mục đích | Auth |
 |---|---|---|
+| `GET /legal-documents` | Lấy version Terms/AUP và Privacy hiện hành cho client đăng ký | Không |
 | `POST /register` | Tạo user mới và trả access/refresh token | Không |
 | `POST /login` | Đăng nhập bằng email hoặc username | Không |
 | `POST /refresh` | Rotate refresh token và cấp access token mới | Không |
@@ -16,6 +17,28 @@ Base path: `/api/v1/auth`
 | `GET /sessions` | Xem danh sách phiên đăng nhập | Có |
 | `DELETE /sessions/{session_id}` | Thu hồi một phiên đăng nhập | Có |
 | `DELETE /sessions` | Thu hồi toàn bộ phiên đăng nhập của user hiện tại | Có |
+
+Client đăng ký hiện hành gửi `terms_accepted`, `terms_version`,
+`privacy_accepted`, `privacy_version`. Backend lưu version, timestamp, IP và
+User-Agent trong `user_legal_acceptances`; version Terms bao gồm Acceptable Use
+Policy. Tài khoản mới bắt buộc chấp nhận cả hai tài liệu với version từ
+`GET /legal-documents`. Google login cũ không bị chặn; Google JIT signup thiếu
+consent trả HTTP 409 / `LEGAL_ACCEPTANCE_REQUIRED` để client hiển thị tài liệu
+và retry cùng credential. Production bắt buộc cấu hình `TERMS_VERSION` và
+`PRIVACY_POLICY_VERSION`, khớp version được portal công bố.
+
+OIDC identity đã liên kết hoặc email đã có tài khoản vẫn đăng nhập bình thường.
+OIDC JIT cho một user hoàn toàn mới đang fail-closed với HTTP 409 /
+`OIDC_JIT_LEGAL_ACCEPTANCE_REQUIRED`, kể cả provider bật `jit_provisioning`, vì
+redirect flow hiện chưa mang và lưu versioned consent end-to-end. Operator phải
+pre-provision tài khoản (hoặc user đăng ký chuẩn trước) rồi mới liên kết OIDC.
+
+For existing users, scope consent to the selected workspace with
+`GET /api/v1/auth/legal-acceptance?workspace_id=<uuid>` and include
+`workspace_id` in the JSON body sent to `POST /api/v1/auth/legal-acceptance`.
+The field is optional only for backward compatibility; omission uses the token
+workspace. Both endpoints reject a workspace outside the token zone or an
+inactive/non-member actor, and the status response echoes `workspace_id`.
 
 ## Endpoint user
 

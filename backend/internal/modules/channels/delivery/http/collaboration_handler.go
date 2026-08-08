@@ -35,8 +35,12 @@ type createPublicLinkRequest struct {
 }
 
 type joinPublicRoomRequest struct {
-	DisplayName string `json:"display_name"`
-	Password    string `json:"password"`
+	DisplayName     string `json:"display_name"`
+	Password        string `json:"password"`
+	TermsAccepted   bool   `json:"terms_accepted"`
+	TermsVersion    string `json:"terms_version"`
+	PrivacyAccepted bool   `json:"privacy_accepted"`
+	PrivacyVersion  string `json:"privacy_version"`
 }
 
 type updateCollaborationRoleRequest struct {
@@ -180,9 +184,15 @@ func (h *Handler) JoinPublicRoom(c *gin.Context) {
 		return
 	}
 	guest, err := h.service.JoinPublicRoom(c.Request.Context(), channelsapp.JoinPublicRoomInput{
-		PublicToken: c.Param("public_token"),
-		DisplayName: req.DisplayName,
-		Password:    req.Password,
+		PublicToken:     c.Param("public_token"),
+		DisplayName:     req.DisplayName,
+		Password:        req.Password,
+		TermsAccepted:   req.TermsAccepted,
+		TermsVersion:    req.TermsVersion,
+		PrivacyAccepted: req.PrivacyAccepted,
+		PrivacyVersion:  req.PrivacyVersion,
+		IPAddress:       c.ClientIP(),
+		UserAgent:       c.Request.UserAgent(),
 	})
 	if err != nil {
 		response.Error(c, err)

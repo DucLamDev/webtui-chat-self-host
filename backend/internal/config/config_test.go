@@ -134,6 +134,63 @@ func TestLoadReadsRegistrationDefaultWorkspaceID(t *testing.T) {
 	}
 }
 
+func TestLoadReadsLegalDocumentVersions(t *testing.T) {
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("TERMS_VERSION", "terms-2026-08")
+	t.Setenv("PRIVACY_POLICY_VERSION", "privacy-2026-08")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Legal.TermsVersion != "terms-2026-08" || cfg.Legal.PrivacyPolicyVersion != "privacy-2026-08" {
+		t.Fatalf("Legal = %+v", cfg.Legal)
+	}
+}
+
+func TestLoadReadsModerationEvidenceRetention(t *testing.T) {
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("MODERATION_EVIDENCE_RETENTION_DAYS", "180")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Moderation.EvidenceRetentionDays != 180 {
+		t.Fatalf("Moderation.EvidenceRetentionDays = %d, want 180", cfg.Moderation.EvidenceRetentionDays)
+	}
+}
+
+func TestValidateRejectsUnsafeModerationEvidenceRetention(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.Moderation.EvidenceRetentionDays = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MODERATION_EVIDENCE_RETENTION_DAYS") {
+		t.Fatalf("Validate() error = %v, want moderation retention error", err)
+	}
+
+	cfg.Moderation.EvidenceRetentionDays = 3651
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MODERATION_EVIDENCE_RETENTION_DAYS") {
+		t.Fatalf("Validate() error = %v, want moderation retention upper-bound error", err)
+	}
+}
+
+func TestValidateProductionRequiresExplicitLegalDocumentVersions(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.App.Env = "production"
+	cfg.Legal = LegalConfig{}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "TERMS_VERSION") || !strings.Contains(err.Error(), "PRIVACY_POLICY_VERSION") {
+		t.Fatalf("Validate() error = %v, want both legal version errors", err)
+	}
+
+	cfg.Legal = LegalConfig{TermsVersion: "latest", PrivacyPolicyVersion: "1.0"}
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "TERMS_VERSION") {
+		t.Fatalf("Validate() error = %v, want placeholder terms version error", err)
+	}
+}
+
 func TestLoadReadsSelfHostedDeployment(t *testing.T) {
 	t.Setenv("APP_ENV", "dev")
 	t.Setenv("DEPLOYMENT_MODE", "self_hosted")
@@ -461,6 +518,8 @@ func validConfigForTest() *Config {
 		Worker:     WorkerConfig{Concurrency: 1},
 		Backup:     BackupConfig{PGDumpPath: "pg_dump", Timeout: time.Minute},
 		Deployment: DeploymentConfig{Mode: "saas"},
+		Legal:      LegalConfig{TermsVersion: "2026-08-07", PrivacyPolicyVersion: "2026-08-07"},
+		Moderation: ModerationConfig{EvidenceRetentionDays: 365},
 		Order:      OrderConfig{Timeout: time.Second},
 		Calls:      CallsConfig{RingTimeout: 30 * time.Second},
 	}

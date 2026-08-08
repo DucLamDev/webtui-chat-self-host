@@ -35,6 +35,7 @@ const navigationIcons: Record<AdminNavId, NavigationIcon> = {
   cronjobs: CalendarClock,
   integrations: Workflow,
   messages: MessageCircle,
+  moderation: ShieldCheck,
   overview: Activity,
   push: Bell,
   roles: ShieldCheck,
@@ -47,6 +48,7 @@ export function AdminSidebar({
   collapsed,
   mobileOpen,
   onCloseMobile,
+  isItemVisible = () => true,
   onPrefetch,
   onSelect,
   onToggleCollapsed,
@@ -57,6 +59,7 @@ export function AdminSidebar({
   collapsed: boolean;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  isItemVisible?: (id: AdminNavId) => boolean;
   onPrefetch: (id: AdminNavId) => void;
   onSelect: (id: AdminNavId) => void;
   onToggleCollapsed: () => void;
@@ -98,32 +101,35 @@ export function AdminSidebar({
         </div>
 
         <nav aria-label="Điều hướng quản trị" className="admin-sidebar__navigation">
-          {adminNavigationGroups.map((group) => (
-            <section className="admin-sidebar__group" key={group.id}>
-              <h2>{group.label}</h2>
-              <div>
-                {group.items.map((id) => {
-                  const Icon = navigationIcons[id];
-                  const active = id === activeId;
-                  return (
-                    <button
-                      aria-current={active ? "page" : undefined}
-                      className={`admin-sidebar__item${active ? " admin-sidebar__item--active" : ""}`}
-                      key={id}
-                      onFocus={() => onPrefetch(id)}
-                      onClick={() => onSelect(id)}
-                      onPointerEnter={() => onPrefetch(id)}
-                      title={collapsed ? adminPageMeta[id].label : undefined}
-                      type="button"
-                    >
-                      <Icon aria-hidden size={19} />
-                      <span>{adminPageMeta[id].label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          ))}
+          {adminNavigationGroups.map((group) => {
+            const visibleItems = group.items.filter(isItemVisible);
+            return visibleItems.length ? (
+              <section className="admin-sidebar__group" key={group.id}>
+                <h2>{group.label}</h2>
+                <div>
+                  {visibleItems.map((id) => {
+                    const Icon = navigationIcons[id];
+                    const active = id === activeId;
+                    return (
+                      <button
+                        aria-current={active ? "page" : undefined}
+                        className={`admin-sidebar__item${active ? " admin-sidebar__item--active" : ""}`}
+                        key={id}
+                        onFocus={() => onPrefetch(id)}
+                        onClick={() => onSelect(id)}
+                        onPointerEnter={() => onPrefetch(id)}
+                        title={collapsed ? adminPageMeta[id].label : undefined}
+                        type="button"
+                      >
+                        <Icon aria-hidden size={19} />
+                        <span>{adminPageMeta[id].label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null;
+          })}
         </nav>
 
         <footer className="admin-sidebar__footer">
