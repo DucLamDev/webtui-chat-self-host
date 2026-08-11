@@ -395,64 +395,6 @@ func TestValidateLegalAcceptancesRequiresCurrentVersionsForNewAccounts(t *testin
 	}
 }
 
-func TestGoogleLoginRequiresConsentOnlyWhenCreatingAccount(t *testing.T) {
-	user := authdomain.User{
-		ID:          "6c8dd8dd-e7c3-4fa9-9f95-1cdf312587ba",
-		Email:       "member@example.com",
-		Username:    "member",
-		DisplayName: "Member",
-		Status:      "active",
-	}
-	newUserRepo := &workspaceProvisioningRepo{user: user, findUserErr: authdomain.ErrUserNotFound}
-	newUserService := NewService(newUserRepo, sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour))
-	newUserService.SetLegalDocumentVersions("terms-v2", "privacy-v3")
-	input := GoogleLoginInput{
-		Subject:       "google-subject-123",
-		Email:         user.Email,
-		EmailVerified: true,
-		DisplayName:   user.DisplayName,
-		Domain:        "chat.vpsttt.com",
-	}
-
-	_, err := newUserService.LoginWithGoogle(context.Background(), input)
-	var appErr *apperrors.AppError
-	if !errors.As(err, &appErr) || appErr.Code != "LEGAL_ACCEPTANCE_REQUIRED" || appErr.Status != http.StatusConflict {
-		t.Fatalf("new Google account error = %#v, want LEGAL_ACCEPTANCE_REQUIRED/409", err)
-	}
-	if newUserRepo.createdUsers != 0 || newUserRepo.createdSessions != 0 {
-		t.Fatalf("missing consent created account/session: users=%d sessions=%d", newUserRepo.createdUsers, newUserRepo.createdSessions)
-	}
-
-	input.TermsAccepted = true
-	input.TermsVersion = "terms-v2"
-	input.PrivacyAccepted = true
-	input.PrivacyVersion = "privacy-v3"
-	if _, err := newUserService.LoginWithGoogle(context.Background(), input); err != nil {
-		t.Fatalf("Google signup retry with consent error = %v", err)
-	}
-	if newUserRepo.createdUsers != 1 || newUserRepo.createdSessions != 1 {
-		t.Fatalf("consented signup users=%d sessions=%d, want 1/1", newUserRepo.createdUsers, newUserRepo.createdSessions)
-	}
-	if !newUserRepo.createdUserParams.TermsAccepted || !newUserRepo.createdUserParams.PrivacyAccepted {
-		t.Fatalf("legal acceptance not passed transactionally: %+v", newUserRepo.createdUserParams)
-	}
-
-	existingRepo := &workspaceProvisioningRepo{user: user}
-	existingService := NewService(existingRepo, sharedauth.NewManager("access-secret", "refresh-secret", time.Hour, 24*time.Hour))
-	existingService.SetLegalDocumentVersions("terms-v2", "privacy-v3")
-	if _, err := existingService.LoginWithGoogle(context.Background(), GoogleLoginInput{
-		Subject:       input.Subject,
-		Email:         input.Email,
-		EmailVerified: true,
-		Domain:        input.Domain,
-	}); err != nil {
-		t.Fatalf("existing Google login without consent error = %v", err)
-	}
-	if existingRepo.createdUsers != 0 || existingRepo.createdSessions != 1 {
-		t.Fatalf("existing login users=%d sessions=%d, want 0/1", existingRepo.createdUsers, existingRepo.createdSessions)
-	}
-}
-
 func TestRegisterRejectsMissingOrStaleConsentBeforePersistence(t *testing.T) {
 	user := authdomain.User{
 		ID:          "6c8dd8dd-e7c3-4fa9-9f95-1cdf312587ba",
@@ -487,16 +429,6 @@ func TestRegisterRejectsMissingOrStaleConsentBeforePersistence(t *testing.T) {
 	}
 	if repo.createdUsers != 0 || repo.createdSessions != 0 {
 		t.Fatalf("invalid consent reached persistence: users=%d sessions=%d", repo.createdUsers, repo.createdSessions)
-	}
-}
-
-func TestGoogleUsernameIsStableAndValid(t *testing.T) {
-	username := googleUsername("Ho.Duc.Lam@example.com", "google-subject-123")
-	if !usernamePattern.MatchString(username) {
-		t.Fatalf("googleUsername() = %q không hợp lệ", username)
-	}
-	if username != googleUsername("Ho.Duc.Lam@example.com", "google-subject-123") {
-		t.Fatal("googleUsername() phải ổn định với cùng Google subject")
 	}
 }
 

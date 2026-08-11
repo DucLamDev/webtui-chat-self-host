@@ -22,9 +22,7 @@ Client đăng ký hiện hành gửi `terms_accepted`, `terms_version`,
 `privacy_accepted`, `privacy_version`. Backend lưu version, timestamp, IP và
 User-Agent trong `user_legal_acceptances`; version Terms bao gồm Acceptable Use
 Policy. Tài khoản mới bắt buộc chấp nhận cả hai tài liệu với version từ
-`GET /legal-documents`. Google login cũ không bị chặn; Google JIT signup thiếu
-consent trả HTTP 409 / `LEGAL_ACCEPTANCE_REQUIRED` để client hiển thị tài liệu
-và retry cùng credential. Production bắt buộc cấu hình `TERMS_VERSION` và
+`GET /legal-documents`. Production bắt buộc cấu hình `TERMS_VERSION` và
 `PRIVACY_POLICY_VERSION`, khớp version được portal công bố.
 
 OIDC identity đã liên kết hoặc email đã có tài khoản vẫn đăng nhập bình thường.

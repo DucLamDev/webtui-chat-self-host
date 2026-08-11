@@ -2,7 +2,6 @@ import type {
   AuthResult,
   AuthSession,
   AuthUser,
-  GoogleLoginInput,
   CurrentLegalAcceptance,
   LegalDocumentVersion,
   LegalAcceptanceInput,
@@ -22,9 +21,6 @@ export function createAuthClient(http: HttpClient) {
   return {
     login(input: LoginInput) {
       return http.post<AuthResult>("/api/v1/auth/login", input, { auth: false });
-    },
-    google(input: GoogleLoginInput) {
-      return http.post<AuthResult>("/api/v1/auth/google", input, { auth: false });
     },
     async oidcProviders(domain: string) {
       const query = new URLSearchParams({ domain });

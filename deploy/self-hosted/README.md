@@ -91,11 +91,19 @@ sh deploy/self-hosted/install.sh \
 
 Installer mặc định cho phép origin `https://download.vpsttt.com` của portal gọi
 discovery từ browser. Người dùng mở portal tại `https://download.vpsttt.com`.
-Installer cũng ghi `PORTAL_DOMAIN` và `WEBTUI_APP_LINK_HOST`. Caddy trả trực tiếp hai
-đường dẫn `/.well-known/assetlinks.json` và
-`/.well-known/apple-app-site-association` trên domain chat bằng cách proxy HTTPS
-tới portal, giữ nguyên path và không redirect. Portal phải có chứng chỉ TLS hợp lệ;
-Caddy đặt cả HTTP Host và TLS SNI theo `PORTAL_DOMAIN`.
+`WEBTUI_APP_LINK_HOST=chat.vpsttt.com` là host tĩnh do publisher kiểm soát và đã
+khai báo trong official binary. Domain customer như `chat.company.com` được nhập
+thủ công trong app; customer **không** cần và không được proxy `assetlinks.json`
+hoặc AASA của official app trên domain của mình. Matcher Caddy chỉ phục vụ hai
+association file khi chính deployment đó sở hữu publisher host. Một custom-
+branded binary phải dùng manifest, signing identity, portal và host association
+riêng, đồng bộ với nhau.
+
+Bản phát hành đầu chỉ có CH-Play nên installer đặt
+`ENABLE_IOS_ASSOCIATION=false`: Android `assetlinks.json` phải trả 200, còn AASA
+phải trả 404/410 fail-closed. Chỉ đổi cờ thành `true` sau khi publisher đã có app
+iOS ký thật, Apple Team/Bundle ID và portal AASA khớp; lúc đó `check.sh` mới yêu
+cầu AASA trả 200.
 
 Installer cũng ghim `TERMS_VERSION=2026-08-07` và
 `PRIVACY_POLICY_VERSION=2026-08-07`, đúng với bộ policy đang công bố trên
@@ -200,13 +208,44 @@ Mobile thực hiện:
 4. lưu base URL của instance vào secure storage;
 5. gửi login/register tới `/api/v1/auth/*` trên instance đó;
 6. lưu refresh token trong secure storage và cache local theo workspace;
-7. xóa token/workspace/cache cũ nếu chuyển sang một instance khác.
+7. cô lập token/workspace/cache theo `instance_id + origin`; khi chuyển server,
+   app cất phiên cũ trong secure storage và chỉ khôi phục đúng phiên của instance
+   đã discovery lại thành công. Dữ liệu server A không bao giờ được gửi sang B.
 
 Với self-hosted, mobile không gọi endpoint claim/provision domain. Nếu discovery
 trả `ZONE_NOT_FOUND`, `TLS` lỗi hoặc không có JSON discovery hợp lệ, nghĩa là
 admin chưa cài instance hoặc DNS/TLS chưa sẵn sàng.
 
+### Discovery compatibility contract
+
+Hai URL sau phải mô tả cùng một instance; URL well-known trả DTO trực tiếp,
+còn API v1 bọc DTO tại `data.discovery`:
+
+```sh
+curl -fsS "https://chat.company.com/.well-known/vpsttt-chat"
+curl -fsS "https://chat.company.com/api/v1/discovery?domain=chat.company.com"
+```
+
+Contract mobile production yêu cầu `instance_id` là UUID và bằng `zone.id`,
+`runtime.api_contract_version=1`, `runtime.minimum_supported_mobile_version` là
+SemVer, cùng các capability `moderation`, `reporting`, `blocking`,
+`account_deletion`, `legal_acceptance`. `runtime.server_version` và legacy
+`runtime.app_version` chỉ là release identifier; giá trị `self-hosted` của bản
+cài cũ vẫn hợp lệ.
+
+`instance_id` lấy từ zone UUID đã lưu trong PostgreSQL, không lấy từ domain hay
+`.env`: update và đổi domain không làm ID thay đổi. Restore phải phục hồi cả
+database để giữ identity. Cài database mới tạo identity mới; mobile phải coi đó
+là instance khác và không dùng lại token/cache cũ. Installer đặt
+`MOBILE_MIN_VERSION=1.0.0`; chỉ tăng giá trị này khi chủ động ngừng hỗ trợ mobile
+cũ, vì client thấp hơn sẽ từ chối kết nối.
+
 ## Push notification
+
+Đường direct FCM/APNs cho custom-branded binary vẫn được hỗ trợ. Ngay trước khi
+gọi provider, worker lấy `workspace.zone_id` từ PostgreSQL, clone payload và ghi
+đè `instance_id`; giá trị thiếu hoặc giả mạo trong notification job không được
+tin cậy. Vì vậy direct và publisher relay đều phát cùng identity với discovery.
 
 Realtime foreground dùng WebSocket trực tiếp tới instance. Khi app ở nền hoặc bị
 OS kill, push cần FCM/APNs. Một app official dùng chung được ký với một cấu hình
@@ -224,7 +263,13 @@ các instance customer. Dù chọn chính sách nào, mobile vẫn phải catch-
 sync cursor khi mở lại để không mất sự kiện.
 
 Relay client mặc định tắt. Chỉ điền đủ `PUSH_RELAY_URL`, `PUSH_RELAY_TOKEN` và
-`PUSH_RELAY_INSTANCE_ID` khi publisher đã cấp token riêng cho instance.
+`PUSH_RELAY_INSTANCE_ID` khi publisher đã cấp token riêng cho instance. ID này
+phải bằng UUID lowercase tại `data.discovery.instance_id` (cũng bằng
+`data.discovery.zone.id`); key tương ứng trong `PUSH_RELAY_PUBLISHERS` trên
+publisher phải giống hệt, không dùng slug/domain. Worker sẽ từ chối khởi động
+nếu ID cấu hình khác zone UUID đã lưu trong database.
+Khi dùng bundled Caddy, URL là
+`https://relay.publisher.example/push-relay/v1/deliveries`.
 Repository cũng có relay server tự host với queue PostgreSQL, auth publisher,
 idempotency, rate limit và retry; service này chỉ chạy khi bật compose profile
 `push-relay` và `PUSH_RELAY_SERVER_ENABLED=true`. Relay và migrator không load
@@ -346,6 +391,13 @@ sh deploy/self-hosted/update.sh
 Lệnh update chỉ tự tạo backup trước khi cập nhật nếu
 `OFFSITE_BACKUP_ENABLED=true` trong `offsite-backup.env`. Cài đặt mặc định chưa
 bật backup off-site vẫn cập nhật bình thường.
+
+Khi nâng cấp một bản cài cũ, `update.sh` đổi `WEBTUI_APP_LINK_HOST` đang trống
+hoặc còn bằng customer `INSTANCE_DOMAIN` sang `chat.vpsttt.com`, vì official
+universal app chỉ xác minh host do publisher kiểm soát. Giá trị custom khác
+instance domain được giữ nguyên. Nếu đang vận hành binary custom-branded đã ký
+riêng và cần giữ association host (kể cả bằng instance domain), đặt
+`PRESERVE_CUSTOM_APP_LINK_HOST=true` trong `.env` trước khi chạy update.
 
 Tài khoản Admin Panel không dùng mật khẩu mặc định. Tài khoản chủ sở hữu đầu
 tiên có thể đăng nhập Admin Panel bằng cùng username/mật khẩu của trang chat.

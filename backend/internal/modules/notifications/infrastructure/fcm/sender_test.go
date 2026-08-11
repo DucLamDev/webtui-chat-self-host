@@ -81,14 +81,29 @@ func TestBuildMessageKeepsMessagePayload(t *testing.T) {
 	message := buildMessage("device-token", map[string]any{
 		"event_type": "message",
 		"message_id": "message-1",
+		"title":      "Workspace A",
+		"body":       "Sensitive preview",
 		"unread":     2,
 	})
 	data := message["data"].(map[string]string)
-	if data["message_id"] != "message-1" || data["unread"] != "2" {
+	if data["message_id"] != "message-1" || data["unread"] != "2" ||
+		data["title"] != "Workspace A" || data["body"] != "Sensitive preview" {
 		t.Fatalf("data = %#v", data)
 	}
 	if _, exists := message["notification"]; exists {
-		t.Fatal("notification must be omitted when title and body are empty")
+		t.Fatal("message must stay data-only so the client can validate instance_id before display")
+	}
+	android := message["android"].(map[string]any)
+	if _, exists := android["notification"]; exists {
+		t.Fatal("Android notification config would auto-render before the client instance gate")
+	}
+	apns := message["apns"].(map[string]any)
+	if apns["headers"].(map[string]string)["apns-priority"] != "5" {
+		t.Fatalf("APNs headers = %#v", apns["headers"])
+	}
+	aps := apns["payload"].(map[string]any)["aps"].(map[string]any)
+	if _, exists := aps["sound"]; exists {
+		t.Fatal("ordinary message APNs fallback must not auto-render before instance validation")
 	}
 }
 

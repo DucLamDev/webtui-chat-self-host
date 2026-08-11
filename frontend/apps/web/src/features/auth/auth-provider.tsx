@@ -6,7 +6,6 @@ import { AuthScreen, Button, Input, Skeleton } from "@webtui/ui";
 import type {
   AuthUser,
   CurrentLegalDocuments,
-  GoogleLoginInput,
   LoginInput,
   RegisterInput,
   ZoneRuntime
@@ -62,7 +61,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setZoneRuntime = useAuthStore((state) => state.setZoneRuntime);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [formError, setFormError] = useState<string | null>(null);
-  const [pendingGoogleInput, setPendingGoogleInput] = useState<GoogleLoginInput | null>(null);
   const [initialInviteToken, setInitialInviteToken] = useState("");
   const [isCompletingOIDC, setIsCompletingOIDC] = useState(false);
   const oidcCompletionStarted = useRef(false);
@@ -430,34 +428,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  const googleMutation = useMutation({
-    mutationFn: async (input: GoogleLoginInput) => {
-      const { domain: requestedDomain, ...credential } = input;
-      await selectZone(requestedDomain ?? browserDomain(), setZoneRuntime, true);
-      return api.auth.google(credential);
-    },
-    onError: (error, input) => {
-      if (error instanceof ApiClientError && error.code === "LEGAL_ACCEPTANCE_REQUIRED") {
-        setPendingGoogleInput(input);
-        setMode("register");
-        setFormError("Tài khoản Google này chưa tồn tại. Hãy đọc và chấp nhận tài liệu pháp lý để tiếp tục đăng ký.");
-        return;
-      }
-      if (!isZoneNavigationStarted(error)) {
-        setFormError(error instanceof Error ? error.message : "Đăng nhập Google không thành công.");
-      }
-    },
-    onMutate: () => {
-      setFormError(null);
-      setRememberLogin(true);
-    },
-    onSuccess: (result) => {
-      setPendingGoogleInput(null);
-      setSession(result);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.auth.me });
-    }
-  });
-
   const logoutMutation = useMutation({
     mutationFn: () =>
       refreshToken ? api.auth.logout({ refresh_token: refreshToken }) : Promise.resolve({ status: "ok" }),
@@ -529,53 +499,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         brandLogoAlt={organizationName}
         brandLogoSrc={organizationLogo}
         error={formError}
-        googleClientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID}
-        hasPendingGoogleRegistration={Boolean(pendingGoogleInput)}
         initialDomain={zoneDomain ?? browserDomain()}
         initialInviteToken={initialInviteToken}
-        isPending={loginMutation.isPending || registerMutation.isPending || googleMutation.isPending || isCompletingOIDC}
+        isPending={loginMutation.isPending || registerMutation.isPending || isCompletingOIDC}
         mode={mode}
-        onGoogleCredential={(credential, domain, consent) => {
-          if (mode === "register" && (
-            !currentLegalDocuments
-            || registrationLegalError
-            || !consent?.privacyAccepted
-            || !consent.termsAccepted
-          )) {
-            setFormError("Chưa thể đăng ký vì tài liệu pháp lý chưa sẵn sàng hoặc chưa được chấp nhận đầy đủ.");
-            return;
-          }
-          googleMutation.mutate({
-            credential,
-            device_name: browserDeviceName(),
-            domain,
-            ...(mode === "register" && currentLegalDocuments ? {
-              privacy_accepted: true,
-              privacy_version: currentLegalDocuments.privacy.version,
-              terms_accepted: true,
-              terms_version: currentLegalDocuments.terms.version
-            } : {})
-          });
-        }}
-        onGoogleRegistrationContinue={(consent) => {
-          if (
-            !pendingGoogleInput
-            || !currentLegalDocuments
-            || registrationLegalError
-            || !consent.privacyAccepted
-            || !consent.termsAccepted
-          ) {
-            setFormError("Chưa thể tiếp tục đăng ký Google vì tài liệu pháp lý chưa sẵn sàng.");
-            return;
-          }
-          googleMutation.mutate({
-            ...pendingGoogleInput,
-            privacy_accepted: true,
-            privacy_version: currentLegalDocuments.privacy.version,
-            terms_accepted: true,
-            terms_version: currentLegalDocuments.terms.version
-          });
-        }}
         onLogin={(values) =>
           {
             setRememberLogin(values.remember);
@@ -591,10 +518,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setFormError(null);
           clearZoneRuntime();
         } : undefined}
-        onModeChange={(nextMode) => {
-          setMode(nextMode);
-          if (nextMode === "login") setPendingGoogleInput(null);
-        }}
+        onModeChange={setMode}
         onOpenLegalDocument={isDesktop
           ? (url) => getPlatformServices().links.openExternal(url)
           : undefined}

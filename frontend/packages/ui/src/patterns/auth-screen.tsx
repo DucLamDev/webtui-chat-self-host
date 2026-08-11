@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "../components/button";
 import { Input } from "../components/input";
 
@@ -41,13 +41,9 @@ export type AuthScreenProps = {
   brandLogoSrc?: string;
   error?: string | null;
   isPending?: boolean;
-  googleClientId?: string;
   initialDomain?: string;
   initialInviteToken?: string;
-  hasPendingGoogleRegistration?: boolean;
   mode: AuthMode;
-  onGoogleCredential?: (credential: string, domain: string, consent?: LegalConsentValues) => void;
-  onGoogleRegistrationContinue?: (consent: LegalConsentValues) => void;
   onOpenLegalDocument?: (url: string) => Promise<void> | void;
   onOIDCDiscover?: (domain: string) => Promise<AuthOIDCProvider[]>;
   onOIDCStart?: (domain: string, providerId: string) => Promise<void> | void;
@@ -67,14 +63,10 @@ export function AuthScreen({
   brandLogoAlt = "",
   brandLogoSrc,
   error,
-  googleClientId,
   initialDomain = "",
   initialInviteToken = "",
-  hasPendingGoogleRegistration = false,
   isPending = false,
   mode,
-  onGoogleCredential,
-  onGoogleRegistrationContinue,
   onOpenLegalDocument,
   onOIDCDiscover,
   onOIDCStart,
@@ -101,11 +93,9 @@ export function AuthScreen({
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  const [isGoogleReady, setIsGoogleReady] = useState(false);
   const [isOIDCPending, setIsOIDCPending] = useState(false);
   const [oidcProviders, setOIDCProviders] = useState<AuthOIDCProvider[]>([]);
   const [selectedOIDCProvider, setSelectedOIDCProvider] = useState("");
-  const googleButtonRef = useRef<HTMLDivElement>(null);
   const registrationLegalReady = Boolean(
     registrationLegal
       && !registrationLegal.isLoading
@@ -127,65 +117,6 @@ export function AuthScreen({
     setPrivacyAccepted(false);
     setTermsAccepted(false);
   }, [mode, registrationLegal?.privacyVersion, registrationLegal?.termsVersion]);
-
-  useEffect(() => {
-    if (!googleClientId || !onGoogleCredential) {
-      setIsGoogleReady(false);
-      return;
-    }
-    let cancelled = false;
-    const renderGoogleButton = () => {
-      if (cancelled || !window.google?.accounts?.id || !googleButtonRef.current) {
-        return;
-      }
-      googleButtonRef.current.replaceChildren();
-      window.google.accounts.id.initialize({
-        callback: (response) => {
-          if (response.credential) {
-            if (mode === "register" && !registrationConsentComplete) {
-              setLocalError("Vui lòng đọc và chấp nhận cả Điều khoản lẫn Chính sách quyền riêng tư trước khi đăng ký bằng Google.");
-              return;
-            }
-            setLocalError(null);
-            onGoogleCredential(
-              response.credential,
-              domain,
-              mode === "register" ? { privacyAccepted, termsAccepted } : undefined
-            );
-          }
-        },
-        client_id: googleClientId
-      });
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
-        logo_alignment: "left",
-        shape: "rectangular",
-        size: "large",
-        text: mode === "login" ? "signin_with" : "signup_with",
-        theme: "outline",
-        width: Math.min(420, Math.max(260, googleButtonRef.current.clientWidth || 360))
-      });
-      setIsGoogleReady(true);
-    };
-    const existing = document.querySelector<HTMLScriptElement>('script[data-webtui-google="true"]');
-    if (window.google?.accounts?.id) {
-      renderGoogleButton();
-    } else if (existing) {
-      existing.addEventListener("load", renderGoogleButton, { once: true });
-    } else {
-      const script = document.createElement("script");
-      script.async = true;
-      script.defer = true;
-      script.dataset.webtuiGoogle = "true";
-      script.src = "https://accounts.google.com/gsi/client";
-      script.addEventListener("load", renderGoogleButton, { once: true });
-      script.addEventListener("error", () => !cancelled && setLocalError("Không tải được dịch vụ đăng nhập Google."), { once: true });
-      document.head.appendChild(script);
-    }
-    return () => {
-      cancelled = true;
-      existing?.removeEventListener("load", renderGoogleButton);
-    };
-  }, [domain, googleClientId, mode, onGoogleCredential, privacyAccepted, registrationConsentComplete, termsAccepted]);
 
   useEffect(() => {
     setDomain(initialDomain);
@@ -343,16 +274,6 @@ export function AuthScreen({
                 <input checked={privacyAccepted} disabled={!registrationLegalReady || isPending} onChange={(event) => setPrivacyAccepted(event.target.checked)} type="checkbox" />
                 <span>Tôi đã đọc và chấp nhận <LegalDocumentLink label="Chính sách quyền riêng tư" onOpen={onOpenLegalDocument} url={registrationLegal?.privacyUrl} version={registrationLegal?.privacyVersion} />.</span>
               </label>
-              {hasPendingGoogleRegistration && onGoogleRegistrationContinue ? (
-                <Button
-                  disabled={!registrationConsentComplete || isPending}
-                  onClick={() => onGoogleRegistrationContinue({ privacyAccepted, termsAccepted })}
-                  type="button"
-                  variant="secondary"
-                >
-                  Tiếp tục đăng ký bằng Google
-                </Button>
-              ) : null}
             </fieldset>
           ) : null}
           {localError || error ? <p className="auth-error">{localError || error}</p> : null}
@@ -385,25 +306,6 @@ export function AuthScreen({
               >
                 {isOIDCPending ? "Đang kết nối..." : oidcProviders.length > 1 ? "Tiếp tục với SSO" : "Đăng nhập bằng SSO"}
               </Button>
-            </div>
-          </>
-        ) : null}
-        {onGoogleCredential ? (
-          <>
-            <div className="auth-divider"><span>hoặc tiếp tục với Google</span></div>
-            <div className="auth-google-area">
-              <div className="auth-google-render" ref={googleButtonRef} />
-              {!isGoogleReady ? (
-                <button
-                  className="auth-google-fallback"
-                  disabled={Boolean(googleClientId)}
-                  onClick={() => setLocalError("Đăng nhập Google cần cấu hình NEXT_PUBLIC_GOOGLE_CLIENT_ID.")}
-                  type="button"
-                >
-                  <GoogleMark />
-                  {mode === "login" ? "Đăng nhập với Google" : "Đăng ký với Google"}
-                </button>
-              ) : null}
             </div>
           </>
         ) : null}
@@ -448,28 +350,4 @@ function LegalDocumentLink({
 function organizationInitial(value: string): string {
   const normalized = value.trim();
   return normalized ? normalized.slice(0, 1).toUpperCase() : "O";
-}
-
-function GoogleMark() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M21.8 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.5a4.7 4.7 0 0 1-2 3.1v2.5h3.2c1.9-1.8 3.1-4.3 3.1-7.4Z" fill="#4285F4" />
-      <path d="M12 22c2.7 0 5-.9 6.7-2.4l-3.2-2.5c-.9.6-2 1-3.5 1a5.9 5.9 0 0 1-5.5-4.1H3.2v2.6A10 10 0 0 0 12 22Z" fill="#34A853" />
-      <path d="M6.5 14a6 6 0 0 1 0-3.9V7.5H3.2a10 10 0 0 0 0 9.1L6.5 14Z" fill="#FBBC05" />
-      <path d="M12 5.9c1.6 0 3 .5 4.1 1.6l3-3A10 10 0 0 0 3.2 7.5l3.3 2.6A5.9 5.9 0 0 1 12 5.9Z" fill="#EA4335" />
-    </svg>
-  );
-}
-
-declare global {
-  interface Window {
-    google?: {
-      accounts?: {
-        id?: {
-          initialize: (options: { callback: (response: { credential?: string }) => void; client_id: string }) => void;
-          renderButton: (element: HTMLElement, options: Record<string, string | number>) => void;
-        };
-      };
-    };
-  }
 }

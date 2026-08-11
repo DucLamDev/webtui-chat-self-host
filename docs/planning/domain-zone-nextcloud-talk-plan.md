@@ -123,7 +123,7 @@ Hoàn tất:
 - mọi workspace bắt buộc có `zone_id`;
 - access token và session chứa `zone_id`, `workspace_id`, `domain`;
 - token phải khớp domain đã resolve từ request host;
-- register, login, Google login, refresh, session và `/me` theo zone;
+- register, login, OIDC, refresh, session và `/me` theo zone;
 - users, contacts, notifications, push devices và RBAC theo zone;
 - WebSocket user room có prefix zone; join workspace phải thuộc token zone;
 - call event, contact event và notification không phát chéo zone;
@@ -148,7 +148,7 @@ Hoàn tất:
 Hoàn tất:
 
 - web auth lưu domain/runtime đã discovery và luôn gửi domain khi refresh;
-- web production chuyển sang `web_base_url` của zone trước password/Google login và sau
+- web production chuyển sang `web_base_url` của zone trước password/OIDC login và sau
   verify domain, tránh lưu token customer trên origin control-plane;
 - đăng ký domain mới có màn hướng dẫn TXT và thao tác verify;
 - API client và realtime tự dùng `api_base_url`/`ws_base_url` của zone;

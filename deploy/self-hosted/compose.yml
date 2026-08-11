@@ -335,6 +335,7 @@ services:
         required: false
     environment:
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      MOBILE_MIN_VERSION: ${MOBILE_MIN_VERSION:?MOBILE_MIN_VERSION is required}
       SERVICE_NAME: api
       # The API serves only the public VAPID key; keep the signing key in the worker.
       WEB_PUSH_VAPID_PRIVATE_KEY: ""
@@ -433,7 +434,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_TRACE_SAMPLE_RATIO: ${OTEL_TRACE_SAMPLE_RATIO:-0.10}
       PUSH_RELAY_HTTP_HOST: ${PUSH_RELAY_HTTP_HOST:-0.0.0.0}
-      PUSH_RELAY_HTTP_PORT: ${PUSH_RELAY_HTTP_PORT:-8090}
+      PUSH_RELAY_HTTP_PORT: "8090"
       PUSH_RELAY_MAX_BODY_BYTES: ${PUSH_RELAY_MAX_BODY_BYTES:-32768}
       PUSH_RELAY_POLL_INTERVAL: ${PUSH_RELAY_POLL_INTERVAL:-1s}
       PUSH_RELAY_PUBLISHERS: ${PUSH_RELAY_PUBLISHERS:-}
@@ -450,7 +451,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:$${PUSH_RELAY_HTTP_PORT}/ready || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8090/ready || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -463,7 +464,6 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: https://${INSTANCE_DOMAIN}
         NEXT_PUBLIC_APP_NAME: ${INSTANCE_NAME}
-        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS}
         NEXT_PUBLIC_JITSI_BASE_URL: ${NEXT_PUBLIC_JITSI_BASE_URL:-}
         NEXT_PUBLIC_TERMS_URL: ${NEXT_PUBLIC_TERMS_URL:?NEXT_PUBLIC_TERMS_URL is required}
@@ -484,7 +484,6 @@ services:
         ADMIN_BASE_PATH: /admin
         NEXT_PUBLIC_API_BASE_URL: https://${INSTANCE_DOMAIN}
         NEXT_PUBLIC_APP_NAME: ${INSTANCE_NAME}
-        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS}
         NEXT_PUBLIC_TERMS_URL: ${NEXT_PUBLIC_TERMS_URL:?NEXT_PUBLIC_TERMS_URL is required}
         NEXT_PUBLIC_PRIVACY_URL: ${NEXT_PUBLIC_PRIVACY_URL:?NEXT_PUBLIC_PRIVACY_URL is required}
@@ -585,7 +584,7 @@ services:
       INSTANCE_DOMAIN: ${INSTANCE_DOMAIN}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
       PORTAL_DOMAIN: ${PORTAL_DOMAIN:?PORTAL_DOMAIN is required for the HTTPS association upstream}
-      WEBTUI_APP_LINK_HOST: ${WEBTUI_APP_LINK_HOST:?WEBTUI_APP_LINK_HOST is required for mobile app associations}
+      WEBTUI_APP_LINK_HOST: ${WEBTUI_APP_LINK_HOST:?WEBTUI_APP_LINK_HOST is required for publisher mobile associations}
     ports:
       - "80:80"
       - "443:443"

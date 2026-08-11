@@ -23,6 +23,7 @@ Tài liệu dự án WebTui Chat được viết bằng tiếng Việt có dấu
 
 - [Cài đặt self-hosted cho customer](../deploy/self-hosted/README.md)
 - [Ranh giới portal, self-host và client](architecture/self-hosted-portal-clients.md)
+- [Mobile store release contract v1](architecture/mobile-store-release-contract-v1.md)
 - [Kế hoạch hoàn thiện backend](planning/backend-roadmap.md)
 - [Kế hoạch cải thiện Push, Realtime, Session và File Transfer](planning/cross-platform-reliability-improvement-plan.md)
 - [Roadmap chức năng self-host theo mức ưu tiên](planning/self-host-feature-roadmap.md)

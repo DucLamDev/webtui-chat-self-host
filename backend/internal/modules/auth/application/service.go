@@ -2,9 +2,7 @@ package application
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"log/slog"
@@ -99,22 +97,6 @@ type LoginInput struct {
 	DeviceName string
 	IPAddress  string
 	UserAgent  string
-}
-
-type GoogleLoginInput struct {
-	Subject         string
-	Email           string
-	EmailVerified   bool
-	DisplayName     string
-	AvatarURL       string
-	Domain          string
-	DeviceName      string
-	IPAddress       string
-	UserAgent       string
-	TermsAccepted   bool
-	TermsVersion    string
-	PrivacyAccepted bool
-	PrivacyVersion  string
 }
 
 type RefreshInput struct {
@@ -638,132 +620,6 @@ func (s *Service) recordFailedLogin(
 	})
 }
 
-func (s *Service) LoginWithGoogle(ctx context.Context, input GoogleLoginInput) (AuthResult, error) {
-	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
-	input.Subject = strings.TrimSpace(input.Subject)
-	input.DisplayName = strings.TrimSpace(input.DisplayName)
-	input.AvatarURL = strings.TrimSpace(input.AvatarURL)
-	input.TermsVersion = strings.TrimSpace(input.TermsVersion)
-	input.PrivacyVersion = strings.TrimSpace(input.PrivacyVersion)
-	input.DeviceName, input.IPAddress, input.UserAgent = normalizeClientInfo(input.DeviceName, input.IPAddress, input.UserAgent)
-	if input.Subject == "" || !input.EmailVerified {
-		return AuthResult{}, apperrors.Unauthorized("Tài khoản Google chưa xác minh email.")
-	}
-	if _, err := mail.ParseAddress(input.Email); err != nil {
-		return AuthResult{}, apperrors.Unauthorized("Google không trả về email hợp lệ.")
-	}
-
-	target, err := s.resolveZoneAccess(ctx, input.Domain)
-	if err != nil {
-		return AuthResult{}, err
-	}
-
-	user, err := s.repo.FindUserByIdentifier(ctx, input.Email)
-	createdUser := false
-	if errors.Is(err, authdomain.ErrUserNotFound) {
-		if err := s.validateLegalAcceptances(
-			input.TermsAccepted,
-			input.TermsVersion,
-			input.PrivacyAccepted,
-			input.PrivacyVersion,
-			true,
-		); err != nil {
-			return AuthResult{}, err
-		}
-		if target.ZoneStatus != "active" {
-			return AuthResult{}, apperrors.Forbidden("Máy chủ đang tạm dừng và không nhận tài khoản Google mới.")
-		}
-		passwordBytes := make([]byte, 32)
-		if _, randomErr := rand.Read(passwordBytes); randomErr != nil {
-			return AuthResult{}, apperrors.Internal("Không tạo được thông tin tài khoản Google.")
-		}
-		passwordHash, hashErr := sharedauth.HashPassword(base64.RawURLEncoding.EncodeToString(passwordBytes))
-		if hashErr != nil {
-			return AuthResult{}, apperrors.Internal("Không tạo được thông tin tài khoản Google.")
-		}
-		displayName := input.DisplayName
-		if displayName == "" {
-			displayName = strings.Split(input.Email, "@")[0]
-		}
-		user, err = s.repo.CreateUser(ctx, CreateUserParams{
-			Email:           input.Email,
-			Username:        googleUsername(input.Email, input.Subject),
-			DisplayName:     displayName,
-			PasswordHash:    passwordHash,
-			DeviceName:      input.DeviceName,
-			IPAddress:       input.IPAddress,
-			UserAgent:       input.UserAgent,
-			AvatarURL:       input.AvatarURL,
-			EmailVerified:   true,
-			Zone:            target,
-			TermsAccepted:   input.TermsAccepted,
-			TermsVersion:    input.TermsVersion,
-			PrivacyAccepted: input.PrivacyAccepted,
-			PrivacyVersion:  input.PrivacyVersion,
-		})
-		createdUser = err == nil
-		if errors.Is(err, authdomain.ErrUserAlreadyExists) {
-			user, err = s.repo.FindUserByIdentifier(ctx, input.Email)
-		}
-	} else if err == nil {
-		// Existing Google users must be able to log in without being forced back
-		// through registration consent. If they do submit a new acceptance, its
-		// version still has to match the server-advertised current document.
-		if err := s.validateLegalAcceptances(
-			input.TermsAccepted,
-			input.TermsVersion,
-			input.PrivacyAccepted,
-			input.PrivacyVersion,
-			false,
-		); err != nil {
-			return AuthResult{}, err
-		}
-	}
-	if err != nil {
-		return AuthResult{}, err
-	}
-	if user.Status != "active" {
-		return AuthResult{}, apperrors.Forbidden("Tài khoản chưa sẵn sàng hoặc đã bị khóa.")
-	}
-	if err := s.ensureZoneWorkspaceAccess(ctx, user.ID, target); err != nil {
-		return AuthResult{}, err
-	}
-	if recorder, ok := s.repo.(LegalAcceptanceRecorder); ok && !createdUser && (input.TermsAccepted || input.PrivacyAccepted) {
-		if err := recorder.RecordLegalAcceptances(ctx, LegalAcceptanceParams{
-			UserID: user.ID, WorkspaceID: target.WorkspaceID, ZoneID: target.ZoneID,
-			TermsAccepted: input.TermsAccepted, TermsVersion: input.TermsVersion,
-			PrivacyAccepted: input.PrivacyAccepted, PrivacyVersion: input.PrivacyVersion,
-			IPAddress: input.IPAddress, UserAgent: input.UserAgent, Source: "google_login",
-		}); err != nil {
-			return AuthResult{}, err
-		}
-	}
-
-	result, err := s.issueTokens(ctx, user, target, input.DeviceName, input.IPAddress, input.UserAgent)
-	if err != nil {
-		return AuthResult{}, err
-	}
-	_ = s.repo.UpdateLastLoginInfo(ctx, UpdateLastLoginInfoParams{
-		UserID:     user.ID,
-		SeenAt:     s.now().UTC(),
-		DeviceName: input.DeviceName,
-		IPAddress:  input.IPAddress,
-		UserAgent:  input.UserAgent,
-	})
-	_ = s.repo.RecordAudit(ctx, AuditEvent{
-		ActorUserID: user.ID,
-		Action:      "auth.google_login",
-		EntityType:  "user",
-		EntityID:    user.ID,
-		IPAddress:   input.IPAddress,
-		UserAgent:   input.UserAgent,
-		ZoneID:      target.ZoneID,
-		WorkspaceID: target.WorkspaceID,
-		Metadata:    map[string]any{"provider": "google", "domain": target.Domain},
-	})
-	return result, nil
-}
-
 func (s *Service) Refresh(ctx context.Context, input RefreshInput) (RefreshResult, error) {
 	refreshToken := strings.TrimSpace(input.RefreshToken)
 	if refreshToken == "" {
@@ -1058,20 +914,6 @@ func normalizeLogin(input LoginInput) LoginInput {
 	input.Domain = strings.TrimSpace(input.Domain)
 	input.DeviceName, input.IPAddress, input.UserAgent = normalizeClientInfo(input.DeviceName, input.IPAddress, input.UserAgent)
 	return input
-}
-
-func googleUsername(email string, subject string) string {
-	local := strings.ToLower(strings.Split(email, "@")[0])
-	local = regexp.MustCompile(`[^a-z0-9_.-]+`).ReplaceAllString(local, "-")
-	local = strings.Trim(local, "-._")
-	if local == "" {
-		local = "google-user"
-	}
-	if len(local) > 27 {
-		local = local[:27]
-	}
-	digest := sha256.Sum256([]byte(subject))
-	return local + "-" + hex.EncodeToString(digest[:4])
 }
 
 func normalizeClientInfo(deviceName string, ipAddress string, userAgent string) (string, string, string) {

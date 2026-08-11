@@ -1299,29 +1299,6 @@ a {
 .auth-panel__product-logo img { display: block; height: auto; object-fit: contain; width: 100%; }
 .auth-screen--register .auth-panel__product-logo { width: 72px; }
 .auth-panel__header h2 { font-size: 24px; }
-.auth-google-area { display: grid; min-height: 42px; position: relative; }
-.auth-google-render { display: flex; justify-content: center; min-height: 42px; overflow: hidden; width: 100%; }
-.auth-google-render > div { max-width: 100%; }
-.auth-google-fallback {
-  align-items: center;
-  background: #ffffff;
-  border: 1px solid #d7e0ef;
-  border-radius: 10px;
-  color: #23324a;
-  cursor: pointer;
-  display: flex;
-  font-size: 13px;
-  font-weight: 650;
-  gap: 10px;
-  inset: 0;
-  justify-content: center;
-  min-height: 42px;
-  padding: 0 14px;
-  position: absolute;
-  width: 100%;
-}
-.auth-google-fallback:disabled { cursor: wait; opacity: .7; }
-.auth-google-fallback svg { height: 19px; width: 19px; }
 .auth-oidc-area { display: grid; gap: 9px; }
 .auth-oidc-area select {
   appearance: auto;

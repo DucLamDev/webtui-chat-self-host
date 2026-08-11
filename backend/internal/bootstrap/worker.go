@@ -35,6 +35,7 @@ import (
 	presencepostgres "github.com/duclamdev/application-chat/backend/internal/modules/presence/infrastructure/postgres"
 	rbacapp "github.com/duclamdev/application-chat/backend/internal/modules/rbac/application"
 	rbacpostgres "github.com/duclamdev/application-chat/backend/internal/modules/rbac/infrastructure/postgres"
+	tenancypostgres "github.com/duclamdev/application-chat/backend/internal/modules/tenancy/infrastructure/postgres"
 	webhooksapp "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/application"
 	webhooksender "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/infrastructure/httpclient"
 	webhookspostgres "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/infrastructure/postgres"
@@ -96,7 +97,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 	slog.Info("Worker đã khởi động", "concurrency", w.cfg.Worker.Concurrency)
 
-	tasks, err := w.tasks()
+	tasks, err := w.tasks(ctx)
 	if err != nil {
 		return err
 	}
@@ -127,12 +128,27 @@ func (w *Worker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *Worker) tasks() ([]workerTask, error) {
+func (w *Worker) tasks(ctx context.Context) ([]workerTask, error) {
 	if w.resources.Database == nil {
 		return nil, nil
 	}
 
 	pool := w.resources.Database.Pool()
+	if w.cfg.PushRelay.URL != "" && w.cfg.Deployment.IsSelfHosted() {
+		identityCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		tenancyRepo := tenancypostgres.NewRepository(pool, w.cfg.Registration.DefaultWorkspaceID)
+		resolved, err := tenancyRepo.ResolveByDomain(
+			identityCtx,
+			strings.ToLower(strings.TrimSpace(w.cfg.Deployment.InstanceDomain)),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("resolve self-hosted push relay identity: %w", err)
+		}
+		if err := validatePushRelayInstanceIdentity(w.cfg.PushRelay.InstanceID, resolved.Zone.ID); err != nil {
+			return nil, err
+		}
+	}
 	pushSenders := make([]notificationspostgres.PushSender, 0, 2)
 	if w.cfg.PushRelay.URL != "" {
 		pushSenders = []notificationspostgres.PushSender{
@@ -449,6 +465,15 @@ WHERE report.id = expired.id
 			},
 		},
 	}, nil
+}
+
+func validatePushRelayInstanceIdentity(configuredID string, zoneID string) error {
+	configuredID = strings.ToLower(strings.TrimSpace(configuredID))
+	zoneID = strings.ToLower(strings.TrimSpace(zoneID))
+	if configuredID == "" || zoneID == "" || configuredID != zoneID {
+		return fmt.Errorf("PUSH_RELAY_INSTANCE_ID must equal the persisted discovery instance_id (zone UUID)")
+	}
+	return nil
 }
 
 func anyConfigured(values ...string) bool {

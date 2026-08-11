@@ -108,7 +108,7 @@ restore theo runbook của release.
 
 | Secret | Ảnh hưởng | Cách xoay |
 | --- | --- | --- |
-| `PUSH_RELAY_TOKEN` | push nền | cấp token mới, cập nhật/restart worker, test, thu hồi token cũ |
+| `PUSH_RELAY_TOKEN` | push nền | cửa sổ bảo trì ngắn: cập nhật/restart relay rồi customer worker; cấu hình hiện chỉ nhận một token/UUID, không có dual-token overlap |
 | Firebase/APNs key | push app custom | tạo key mới, cập nhật worker, test thiết bị thật, thu hồi key cũ |
 | `TURN_SHARED_SECRET` | cuộc gọi đang/chuẩn bị kết nối | cập nhật API và coturn cùng lúc, restart hai service |
 | JWT access/refresh | mọi session | maintenance window; người dùng có thể phải đăng nhập lại |

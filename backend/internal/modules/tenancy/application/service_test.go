@@ -3,12 +3,16 @@ package application
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	tenancydomain "github.com/duclamdev/application-chat/backend/internal/modules/tenancy/domain"
 	webhooksecurity "github.com/duclamdev/application-chat/backend/internal/modules/webhooks/security"
+	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
+
+const testDiscoveryInstanceID = "3f1e32b9-0a2f-4ca1-b0dc-04221a551c1c"
 
 type fakeRepo struct {
 	resolved            tenancydomain.ResolvedZone
@@ -226,7 +230,7 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 	repo := &fakeRepo{
 		resolved: tenancydomain.ResolvedZone{
 			Zone: tenancydomain.Zone{
-				ID:     "zone-1",
+				ID:     testDiscoveryInstanceID,
 				Slug:   "abc",
 				Name:   "ABC",
 				Kind:   "customer_dedicated",
@@ -248,9 +252,10 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 		},
 	}
 	service := NewService(repo, Options{
-		AppName:        "VPSTTT Chat",
-		AppVersion:     "0.9.0",
-		DeploymentMode: "self_hosted",
+		AppName:              "VPSTTT Chat",
+		AppVersion:           "0.9.0",
+		MinimumMobileVersion: "1.2.3",
+		DeploymentMode:       "self_hosted",
 	})
 
 	discovery, err := service.Discover(context.Background(), "HTTPS://CHAT.ABC.COM")
@@ -259,6 +264,17 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 	}
 	if repo.domain != "chat.abc.com" {
 		t.Fatalf("repo domain = %q", repo.domain)
+	}
+	if discovery.InstanceID != testDiscoveryInstanceID || discovery.InstanceID != discovery.Zone.ID {
+		t.Fatalf("instance identity = %q, zone = %q", discovery.InstanceID, discovery.Zone.ID)
+	}
+	if discovery.Version != "1" || discovery.Runtime.APIContractVersion != 1 {
+		t.Fatalf("discovery versions = legacy:%q contract:%d", discovery.Version, discovery.Runtime.APIContractVersion)
+	}
+	if discovery.Runtime.ServerVersion != "0.9.0" ||
+		discovery.Runtime.AppVersion != discovery.Runtime.ServerVersion ||
+		discovery.Runtime.MinimumSupportedMobileVersion != "1.2.3" {
+		t.Fatalf("runtime compatibility = %+v", discovery.Runtime)
 	}
 	if discovery.Runtime.APIBaseURL != "https://api.chat.abc.com" {
 		t.Fatalf("api base = %q", discovery.Runtime.APIBaseURL)
@@ -275,6 +291,11 @@ func TestDiscoverBuildsRuntimeFromDeployment(t *testing.T) {
 		discovery.Capabilities.CustomDomain {
 		t.Fatalf("capabilities = %+v", discovery.Capabilities)
 	}
+	if !discovery.Capabilities.Moderation || !discovery.Capabilities.Reporting ||
+		!discovery.Capabilities.Blocking || !discovery.Capabilities.AccountDeletion ||
+		!discovery.Capabilities.LegalAcceptance {
+		t.Fatalf("required safety capabilities = %+v", discovery.Capabilities)
+	}
 	if discovery.Workspace == nil || discovery.Workspace.ID != "workspace-1" {
 		t.Fatalf("workspace = %+v", discovery.Workspace)
 	}
@@ -287,7 +308,7 @@ func TestDiscoverRequiresSetupForOwnerlessSelfHostedInstance(t *testing.T) {
 	repo := &fakeRepo{
 		resolved: tenancydomain.ResolvedZone{
 			Zone: tenancydomain.Zone{
-				ID:     "zone-1",
+				ID:     testDiscoveryInstanceID,
 				Name:   "ABC",
 				Status: "active",
 			},
@@ -316,12 +337,25 @@ func TestDiscoverMapsMissingZone(t *testing.T) {
 	}
 }
 
+func TestDiscoverFailsClosedWithoutStableInstanceUUID(t *testing.T) {
+	service := NewService(&fakeRepo{resolved: tenancydomain.ResolvedZone{
+		Zone: tenancydomain.Zone{ID: "zone-1", Status: "active"},
+	}}, Options{})
+
+	_, err := service.Discover(context.Background(), "chat.abc.com")
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "DISCOVERY_COMPATIBILITY_UNAVAILABLE" ||
+		appErr.Status != http.StatusServiceUnavailable {
+		t.Fatalf("Discover() error = %#v, want fail-closed compatibility error", err)
+	}
+}
+
 func TestDiscoverEnablesSSOOnlyForRuntimeReadyProvider(t *testing.T) {
 	secretRef := "env://company"
 	repo := &fakeRepo{
 		resolved: tenancydomain.ResolvedZone{
 			Zone: tenancydomain.Zone{
-				ID:     "zone-1",
+				ID:     testDiscoveryInstanceID,
 				Status: "active",
 			},
 		},
@@ -474,7 +508,7 @@ func TestVerifyDomainClaimProvisionsOnlyAfterMatchingTXT(t *testing.T) {
 			},
 		},
 		resolved: tenancydomain.ResolvedZone{
-			Zone: tenancydomain.Zone{ID: "zone-1", Status: "active"},
+			Zone: tenancydomain.Zone{ID: testDiscoveryInstanceID, Status: "active"},
 			Deployment: &tenancydomain.Deployment{
 				Mode: "shared", DatabaseMode: "shared_schema", Status: "ready",
 			},

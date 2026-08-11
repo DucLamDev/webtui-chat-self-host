@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,7 +39,10 @@ type nativeDestination struct {
 	deviceID string
 	provider string
 	token    string
+	zoneID   string
 }
+
+var nativeInstanceIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func NewRepository(pool *pgxpool.Pool, pushSenders ...PushSender) *Repository {
 	repository := &Repository{pool: pool, pushSenders: make(map[string]PushSender)}
@@ -814,7 +818,8 @@ func (r *Repository) deliverJob(ctx context.Context, jobID string, workspaceID s
 
 func (r *Repository) deliverNativeJob(ctx context.Context, jobID string, workspaceID string, userID string, payload map[string]any) []error {
 	rows, err := r.pool.Query(ctx, `
-SELECT device.id::text, device.device_id, device.push_provider, device.push_token
+SELECT device.id::text, device.device_id, device.push_provider, device.push_token,
+       workspace.zone_id::text
 FROM push_devices device
 JOIN workspaces workspace
   ON workspace.id = $2::uuid
@@ -846,7 +851,7 @@ WHERE device.user_id = $1::uuid
 	destinations := make([]nativeDestination, 0)
 	for rows.Next() {
 		var item nativeDestination
-		if err := rows.Scan(&item.id, &item.deviceID, &item.provider, &item.token); err != nil {
+		if err := rows.Scan(&item.id, &item.deviceID, &item.provider, &item.token, &item.zoneID); err != nil {
 			return []error{err}
 		}
 		destinations = append(destinations, item)
@@ -869,7 +874,12 @@ WHERE device.user_id = $1::uuid
 			// disabled provider is not a failed delivery destination.
 			continue
 		}
-		if err := sender.Send(ctx, destination.token, payload); err != nil {
+		providerPayload, err := nativeProviderPayload(payload, destination.zoneID)
+		if err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("prepare %s notification: %w", destination.provider, err))
+			continue
+		}
+		if err := sender.Send(ctx, destination.token, providerPayload); err != nil {
 			if pusherror.IsPermanent(err) {
 				revoked, revokeErr := r.pool.Exec(ctx, `
 UPDATE push_devices
@@ -895,6 +905,21 @@ WHERE id = $1::uuid
 		}
 	}
 	return deliveryErrors
+}
+
+func nativeProviderPayload(payload map[string]any, zoneID string) (map[string]any, error) {
+	instanceID := strings.ToLower(strings.TrimSpace(zoneID))
+	if !nativeInstanceIDPattern.MatchString(instanceID) {
+		return nil, errors.New("destination zone identity is invalid")
+	}
+	cloned := make(map[string]any, len(payload)+1)
+	for key, value := range payload {
+		cloned[key] = value
+	}
+	// The workspace/device join is authoritative. A queued payload cannot select
+	// another instance or suppress the instance identity delivered to mobile.
+	cloned["instance_id"] = instanceID
+	return cloned, nil
 }
 
 func selectNativeDestinations(destinations []nativeDestination, eventType string, apnsEnabled bool) []nativeDestination {

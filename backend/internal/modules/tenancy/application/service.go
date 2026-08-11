@@ -23,10 +23,13 @@ import (
 var fqdnPattern = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 var slugSanitizer = regexp.MustCompile(`[^a-z0-9]+`)
 var oidcSecretAliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+var discoveryInstanceIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var semanticVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 
 const (
-	defaultVerificationTTL = 24 * time.Hour
-	dnsChallengePrefix     = "vpsttt-chat-verification="
+	defaultVerificationTTL      = 24 * time.Hour
+	discoveryAPIContractVersion = 1
+	dnsChallengePrefix          = "vpsttt-chat-verification="
 )
 
 type Repository interface {
@@ -71,6 +74,7 @@ type TXTResolver interface {
 type Options struct {
 	AppName               string
 	AppVersion            string
+	MinimumMobileVersion  string
 	DefaultLocale         string
 	ReleaseChannel        string
 	DeploymentMode        string
@@ -235,6 +239,7 @@ type UpdateAutomationInstallationParams struct {
 
 type DiscoveryDTO struct {
 	Version       string           `json:"version"`
+	InstanceID    string           `json:"instance_id"`
 	Domain        string           `json:"domain"`
 	SetupRequired bool             `json:"setup_required"`
 	Zone          ZoneDTO          `json:"zone"`
@@ -261,16 +266,19 @@ type WorkspaceRefDTO struct {
 }
 
 type RuntimeDTO struct {
-	AppName        string           `json:"app_name"`
-	LogoURL        string           `json:"logo_url,omitempty"`
-	AppVersion     string           `json:"app_version"`
-	ReleaseChannel string           `json:"release_channel"`
-	Locale         string           `json:"locale"`
-	WebBaseURL     string           `json:"web_base_url"`
-	APIBaseURL     string           `json:"api_base_url"`
-	WSBaseURL      string           `json:"ws_base_url"`
-	AdminBaseURL   string           `json:"admin_base_url,omitempty"`
-	RTCICEServers  []map[string]any `json:"rtc_ice_servers,omitempty"`
+	APIContractVersion            int              `json:"api_contract_version"`
+	AppName                       string           `json:"app_name"`
+	LogoURL                       string           `json:"logo_url,omitempty"`
+	ServerVersion                 string           `json:"server_version"`
+	AppVersion                    string           `json:"app_version"`
+	MinimumSupportedMobileVersion string           `json:"minimum_supported_mobile_version"`
+	ReleaseChannel                string           `json:"release_channel"`
+	Locale                        string           `json:"locale"`
+	WebBaseURL                    string           `json:"web_base_url"`
+	APIBaseURL                    string           `json:"api_base_url"`
+	WSBaseURL                     string           `json:"ws_base_url"`
+	AdminBaseURL                  string           `json:"admin_base_url,omitempty"`
+	RTCICEServers                 []map[string]any `json:"rtc_ice_servers,omitempty"`
 }
 
 type CapabilitiesDTO struct {
@@ -286,6 +294,11 @@ type CapabilitiesDTO struct {
 	CustomDomain      bool `json:"custom_domain"`
 	Dedicated         bool `json:"dedicated"`
 	SelfHosted        bool `json:"self_hosted"`
+	Moderation        bool `json:"moderation"`
+	Reporting         bool `json:"reporting"`
+	Blocking          bool `json:"blocking"`
+	AccountDeletion   bool `json:"account_deletion"`
+	LegalAcceptance   bool `json:"legal_acceptance"`
 }
 
 type DeploymentDTO struct {
@@ -365,6 +378,9 @@ func NewService(repo Repository, options Options) *Service {
 	if strings.TrimSpace(options.AppVersion) == "" {
 		options.AppVersion = "dev"
 	}
+	if strings.TrimSpace(options.MinimumMobileVersion) == "" {
+		options.MinimumMobileVersion = "0.1.0"
+	}
 	if strings.TrimSpace(options.DefaultLocale) == "" {
 		options.DefaultLocale = "vi-VN"
 	}
@@ -401,7 +417,7 @@ func (s *Service) Discover(ctx context.Context, rawDomain string) (DiscoveryDTO,
 		}
 		return DiscoveryDTO{}, err
 	}
-	return s.toDiscovery(ctx, domain, resolved), nil
+	return s.toDiscovery(ctx, domain, resolved)
 }
 
 func (s *Service) CertificateDomainAllowed(ctx context.Context, rawDomain string) bool {
@@ -518,7 +534,7 @@ func (s *Service) VerifyDomainClaim(ctx context.Context, actorUserID string, dom
 		if resolveErr != nil {
 			return DiscoveryDTO{}, resolveErr
 		}
-		return s.toDiscovery(ctx, claim.Domain.Domain, resolved), nil
+		return s.toDiscovery(ctx, claim.Domain.Domain, resolved)
 	}
 
 	now := s.now().UTC()
@@ -558,7 +574,7 @@ func (s *Service) VerifyDomainClaim(ctx context.Context, actorUserID string, dom
 	if err != nil {
 		return DiscoveryDTO{}, mapClaimError(err)
 	}
-	return s.toDiscovery(ctx, claim.Domain.Domain, resolved), nil
+	return s.toDiscovery(ctx, claim.Domain.Domain, resolved)
 }
 
 func (s *Service) ListAutomationTemplates(ctx context.Context, actorUserID string, zoneID string) ([]AutomationTemplateDTO, error) {
@@ -865,7 +881,21 @@ func (s *Service) toDiscovery(
 	ctx context.Context,
 	domain string,
 	resolved tenancydomain.ResolvedZone,
-) DiscoveryDTO {
+) (DiscoveryDTO, error) {
+	instanceID := strings.ToLower(strings.TrimSpace(resolved.Zone.ID))
+	if !discoveryInstanceIDPattern.MatchString(instanceID) {
+		return DiscoveryDTO{}, apperrors.ServiceUnavailable(
+			"DISCOVERY_COMPATIBILITY_UNAVAILABLE",
+			"The server cannot publish a stable instance identity.",
+		)
+	}
+	minimumMobileVersion := strings.TrimSpace(s.options.MinimumMobileVersion)
+	if !semanticVersionPattern.MatchString(minimumMobileVersion) {
+		return DiscoveryDTO{}, apperrors.ServiceUnavailable(
+			"DISCOVERY_COMPATIBILITY_UNAVAILABLE",
+			"The server cannot publish a valid minimum supported mobile version.",
+		)
+	}
 	runtime := s.runtime(domain, resolved.Deployment)
 	if name := strings.TrimSpace(resolved.Zone.Name); name != "" {
 		runtime.AppName = name
@@ -889,6 +919,13 @@ func (s *Service) toDiscovery(
 	}
 	capabilities.SelfHosted = strings.EqualFold(strings.TrimSpace(s.options.DeploymentMode), "self_hosted")
 	capabilities.CustomDomain = !capabilities.SelfHosted
+	// These safety APIs are wired for every database-backed deployment. They are
+	// explicit so a universal mobile binary can reject an incomplete instance.
+	capabilities.Moderation = true
+	capabilities.Reporting = true
+	capabilities.Blocking = true
+	capabilities.AccountDeletion = true
+	capabilities.LegalAcceptance = true
 
 	var workspace *WorkspaceRefDTO
 	if resolved.Workspace != nil {
@@ -901,6 +938,7 @@ func (s *Service) toDiscovery(
 
 	return DiscoveryDTO{
 		Version:       "1",
+		InstanceID:    instanceID,
 		Domain:        domain,
 		SetupRequired: capabilities.SelfHosted && resolved.Workspace != nil && !resolved.Workspace.HasOwner,
 		Workspace:     workspace,
@@ -920,7 +958,7 @@ func (s *Service) toDiscovery(
 			DatabaseMode: deploymentDatabaseMode(resolved.Deployment),
 			Status:       deploymentStatus(resolved.Deployment),
 		},
-	}
+	}, nil
 }
 
 func (s *Service) zoneHasReadyOIDCProvider(ctx context.Context, zone tenancydomain.Zone) bool {
@@ -966,15 +1004,18 @@ func (s *Service) runtime(domain string, deployment *tenancydomain.Deployment) R
 	}
 
 	return RuntimeDTO{
-		AppName:        s.options.AppName,
-		AppVersion:     s.options.AppVersion,
-		ReleaseChannel: s.options.ReleaseChannel,
-		Locale:         s.options.DefaultLocale,
-		WebBaseURL:     strings.TrimRight(webURL, "/"),
-		APIBaseURL:     strings.TrimRight(apiURL, "/"),
-		WSBaseURL:      strings.TrimRight(wsURL, "/"),
-		AdminBaseURL:   strings.TrimRight(adminURL, "/"),
-		RTCICEServers:  cloneJSONMapList(s.options.RTCICEServers),
+		APIContractVersion:            discoveryAPIContractVersion,
+		AppName:                       s.options.AppName,
+		ServerVersion:                 s.options.AppVersion,
+		AppVersion:                    s.options.AppVersion,
+		MinimumSupportedMobileVersion: strings.TrimSpace(s.options.MinimumMobileVersion),
+		ReleaseChannel:                s.options.ReleaseChannel,
+		Locale:                        s.options.DefaultLocale,
+		WebBaseURL:                    strings.TrimRight(webURL, "/"),
+		APIBaseURL:                    strings.TrimRight(apiURL, "/"),
+		WSBaseURL:                     strings.TrimRight(wsURL, "/"),
+		AdminBaseURL:                  strings.TrimRight(adminURL, "/"),
+		RTCICEServers:                 cloneJSONMapList(s.options.RTCICEServers),
 	}
 }
 

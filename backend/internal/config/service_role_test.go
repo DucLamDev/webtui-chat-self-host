@@ -15,7 +15,7 @@ func TestLoadAllowsProductionPushRelayAllowlist(t *testing.T) {
 	t.Setenv("PUSH_RELAY_SERVER_ENABLED", "true")
 	t.Setenv("PUSH_RELAY_HTTP_HOST", "0.0.0.0")
 	t.Setenv("PUSH_RELAY_HTTP_PORT", "8090")
-	t.Setenv("PUSH_RELAY_PUBLISHERS", "instance-a=publisher-token-with-at-least-thirty-two-random-characters")
+	t.Setenv("PUSH_RELAY_PUBLISHERS", testCanonicalInstanceID+"=publisher-token-with-at-least-thirty-two-random-characters")
 	t.Setenv("PUSH_RELAY_MAX_BODY_BYTES", "32768")
 	t.Setenv("PUSH_RELAY_RATE_LIMIT_PER_MINUTE", "240")
 	t.Setenv("PUSH_RELAY_RATE_LIMIT_BURST", "60")
@@ -97,9 +97,16 @@ func TestValidatePushRelayRejectsRequiredRoleGaps(t *testing.T) {
 		{
 			name: "publisher token weak in production",
 			change: func(cfg *Config) {
-				cfg.PushRelayServer.Publishers = map[string]string{"instance-a": "CHANGE_ME_RELAY_TOKEN"}
+				cfg.PushRelayServer.Publishers = map[string]string{testCanonicalInstanceID: "CHANGE_ME_RELAY_TOKEN"}
 			},
 			wantErrors: []string{"PUSH_RELAY_PUBLISHERS contains a weak token"},
+		},
+		{
+			name: "publisher identity is not a discovery UUID",
+			change: func(cfg *Config) {
+				cfg.PushRelayServer.Publishers = map[string]string{"instance-a": "publisher-token-with-at-least-thirty-two-random-characters"}
+			},
+			wantErrors: []string{"canonical lowercase discovery instance UUID"},
 		},
 		{
 			name: "listen and worker settings invalid",
@@ -214,7 +221,7 @@ func validPushRelayRoleConfig() *Config {
 			Enabled:            true,
 			Host:               "0.0.0.0",
 			Port:               8090,
-			Publishers:         map[string]string{"instance-a": "publisher-token-with-at-least-thirty-two-random-characters"},
+			Publishers:         map[string]string{testCanonicalInstanceID: "publisher-token-with-at-least-thirty-two-random-characters"},
 			MaxBodyBytes:       32768,
 			RateLimitPerMinute: 240,
 			RateLimitBurst:     60,

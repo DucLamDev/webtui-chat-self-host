@@ -23,9 +23,10 @@
 		respond "Not Found" 404
 	}
 
-	# Android App Links and Apple Universal Links must be returned directly from
-	# the app-link host. The publisher portal owns the signed association
-	# payloads, while this ingress keeps the public chat host and TLS identity.
+	# This route activates only when this deployment owns the publisher-controlled
+	# App/Universal Link host (or a custom-branded build's declared host). An
+	# ordinary customer domain is entered manually and must not impersonate the
+	# association files of the publisher-signed universal app.
 	@appAssociations {
 		host {$WEBTUI_APP_LINK_HOST}
 		path /.well-known/assetlinks.json /.well-known/apple-app-site-association

@@ -27,10 +27,12 @@ WITH target_message AS (
     JOIN files f
       ON f.id = $4::uuid
      AND f.workspace_id = m.workspace_id
+     AND f.owner_id = $5::uuid
      AND f.deleted_at IS NULL
     WHERE m.workspace_id = $1::uuid
       AND m.channel_id = $2::uuid
       AND m.id = $3::uuid
+      AND m.sender_id = $5::uuid
       AND m.deleted_at IS NULL
 ), attached AS (
     INSERT INTO message_attachments (workspace_id, message_id, file_id, sort_order)
@@ -51,6 +53,50 @@ SET metadata = jsonb_set(
 FROM attached
 WHERE m.workspace_id = attached.workspace_id
   AND m.id = attached.message_id
+`
+
+const lockAttachmentTargetQuery = `
+SELECT 1
+FROM messages m
+JOIN channel_members cm
+  ON cm.channel_id = m.channel_id
+ AND cm.user_id = $5::uuid
+ AND cm.status IN ('active', 'muted')
+JOIN files f
+  ON f.id = $4::uuid
+ AND f.workspace_id = m.workspace_id
+ AND f.owner_id = $5::uuid
+ AND f.deleted_at IS NULL
+WHERE m.workspace_id = $1::uuid
+  AND m.channel_id = $2::uuid
+  AND m.id = $3::uuid
+  AND m.sender_id = $5::uuid
+  AND m.deleted_at IS NULL
+FOR UPDATE OF m
+`
+
+const attachmentCapacityQuery = `
+SELECT EXISTS (
+           SELECT 1
+           FROM message_attachments existing
+           WHERE existing.workspace_id = $1::uuid
+             AND existing.message_id = $2::uuid
+             AND existing.file_id = $3::uuid
+       ),
+       COUNT(*)
+FROM message_attachments attachment
+WHERE attachment.workspace_id = $1::uuid
+  AND attachment.message_id = $2::uuid
+`
+
+const attachmentFileExistsQuery = `
+SELECT EXISTS (
+    SELECT 1
+    FROM files
+    WHERE workspace_id = $1::uuid
+      AND id = $2::uuid
+      AND deleted_at IS NULL
+)
 `
 
 func (r *Repository) RecordAudit(ctx context.Context, event filesapp.AuditEvent) error {
@@ -256,10 +302,63 @@ ORDER BY fv.version_number DESC
 }
 
 func (r *Repository) AttachFile(ctx context.Context, params filesapp.AttachFileParams) (filesdomain.Attachment, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return filesdomain.Attachment{}, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	// Serialize capacity checks on the message row. A second concurrent attach
+	// obtains a fresh READ COMMITTED snapshot only after the first transaction
+	// commits, so the per-message limit cannot be raced across API replicas.
+	var target int
+	err = tx.QueryRow(ctx, lockAttachmentTargetQuery,
+		params.WorkspaceID,
+		params.ChannelID,
+		params.MessageID,
+		params.FileID,
+		params.ActorUserID,
+	).Scan(&target)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var fileExists bool
+		if scanErr := tx.QueryRow(
+			ctx,
+			attachmentFileExistsQuery,
+			params.WorkspaceID,
+			params.FileID,
+		).Scan(&fileExists); scanErr != nil {
+			return filesdomain.Attachment{}, scanErr
+		}
+		if !fileExists {
+			return filesdomain.Attachment{}, filesdomain.ErrFileNotFound
+		}
+		return filesdomain.Attachment{}, filesdomain.ErrMessageNotFound
+	}
+	if err != nil {
+		return filesdomain.Attachment{}, err
+	}
+
+	var alreadyAttached bool
+	var attachmentCount int64
+	if err := tx.QueryRow(
+		ctx,
+		attachmentCapacityQuery,
+		params.WorkspaceID,
+		params.MessageID,
+		params.FileID,
+	).Scan(&alreadyAttached, &attachmentCount); err != nil {
+		return filesdomain.Attachment{}, err
+	}
+	if attachmentLimitExceeded(alreadyAttached, attachmentCount) {
+		return filesdomain.Attachment{}, filesdomain.ErrAttachmentLimit
+	}
+
 	// Keep the attachment row and its discoverability marker in one PostgreSQL
 	// statement. jsonb_set changes only has_attachments, preserving metadata such
 	// as message_type=voice and leaving the message kind untouched.
-	command, err := r.pool.Exec(ctx, attachFileQuery,
+	command, err := tx.Exec(ctx, attachFileQuery,
 		params.WorkspaceID,
 		params.ChannelID,
 		params.MessageID,
@@ -271,12 +370,16 @@ func (r *Repository) AttachFile(ctx context.Context, params filesapp.AttachFileP
 		return filesdomain.Attachment{}, err
 	}
 	if command.RowsAffected() == 0 {
-		if _, err := r.FindFile(ctx, params.WorkspaceID, params.FileID); err != nil {
-			return filesdomain.Attachment{}, err
-		}
 		return filesdomain.Attachment{}, filesdomain.ErrMessageNotFound
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return filesdomain.Attachment{}, err
+	}
 	return r.attachment(ctx, params.WorkspaceID, params.MessageID, params.FileID)
+}
+
+func attachmentLimitExceeded(alreadyAttached bool, attachmentCount int64) bool {
+	return !alreadyAttached && attachmentCount >= int64(filesapp.MaxAttachmentsPerMessage)
 }
 
 func (r *Repository) ListAttachments(ctx context.Context, params filesapp.ListAttachmentsParams) ([]filesdomain.Attachment, error) {

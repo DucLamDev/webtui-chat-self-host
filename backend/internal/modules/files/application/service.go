@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	maxUploadSize          = 100 << 20
-	maxResumableUploadSize = int64(2 << 30)
+	maxUploadSize            = 100 << 20
+	maxResumableUploadSize   = int64(2 << 30)
+	MaxAttachmentsPerMessage = 20
 )
 
 var ErrRangeUnsupported = errors.New("object store does not support byte ranges")
@@ -927,6 +928,12 @@ func mapFileError(err error) error {
 	}
 	if errors.Is(err, filesdomain.ErrAttachmentNotFound) {
 		return apperrors.NotFound("ATTACHMENT_NOT_FOUND", "Không tìm thấy attachment.")
+	}
+	if errors.Is(err, filesdomain.ErrAttachmentLimit) {
+		return apperrors.BadRequest(
+			"ATTACHMENT_LIMIT_EXCEEDED",
+			"Mỗi tin nhắn chỉ được đính kèm tối đa 20 tệp.",
+		)
 	}
 	return err
 }

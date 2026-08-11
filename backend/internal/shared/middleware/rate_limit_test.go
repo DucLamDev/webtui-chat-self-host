@@ -68,13 +68,13 @@ func TestRateLimitDoesNotBlockSessionRefreshOrProviderLogin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(RateLimit(1, 0, nil))
-	for _, path := range []string{"/api/v1/auth/refresh", "/api/v1/auth/google", "/api/v1/auth/oidc/complete"} {
+	for _, path := range []string{"/api/v1/auth/refresh", "/api/v1/auth/oidc/complete"} {
 		router.POST(path, func(c *gin.Context) {
 			c.Status(http.StatusNoContent)
 		})
 	}
 
-	for _, path := range []string{"/api/v1/auth/refresh", "/api/v1/auth/google", "/api/v1/auth/oidc/complete"} {
+	for _, path := range []string{"/api/v1/auth/refresh", "/api/v1/auth/oidc/complete"} {
 		for index := 0; index < 3; index++ {
 			writer := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, path, nil)

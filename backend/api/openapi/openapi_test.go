@@ -84,6 +84,38 @@ func TestOpenAPIParsesAndContainsMobileP0Paths(t *testing.T) {
 	if !ok {
 		t.Fatal("openapi.yaml thiếu component schemas")
 	}
+	assertRequired := func(schemaName string, expected ...string) map[string]any {
+		t.Helper()
+		schema, ok := schemas[schemaName].(map[string]any)
+		if !ok {
+			t.Fatalf("openapi.yaml is missing %s", schemaName)
+		}
+		values, ok := schema["required"].([]any)
+		if !ok {
+			t.Fatalf("%s.required must be an array", schemaName)
+		}
+		required := make(map[string]bool, len(values))
+		for _, value := range values {
+			required[value.(string)] = true
+		}
+		for _, field := range expected {
+			if !required[field] {
+				t.Fatalf("%s.required is missing %s", schemaName, field)
+			}
+		}
+		return schema
+	}
+	discoverySchema := assertRequired("ZoneDiscovery", "instance_id", "zone", "runtime", "capabilities")
+	discoveryProperties := discoverySchema["properties"].(map[string]any)
+	if discoveryProperties["instance_id"].(map[string]any)["format"] != "uuid" {
+		t.Fatal("ZoneDiscovery.instance_id must be a UUID")
+	}
+	runtimeSchema := assertRequired("ZoneRuntime", "api_contract_version", "server_version", "app_version", "minimum_supported_mobile_version")
+	runtimeProperties := runtimeSchema["properties"].(map[string]any)
+	if runtimeProperties["api_contract_version"].(map[string]any)["type"] != "integer" {
+		t.Fatal("ZoneRuntime.api_contract_version must be an integer")
+	}
+	assertRequired("ZoneCapabilities", "self_hosted", "chat", "moderation", "reporting", "blocking", "account_deletion", "legal_acceptance")
 	register, ok := schemas["RegisterRequest"].(map[string]any)
 	if !ok {
 		t.Fatal("openapi.yaml thiếu RegisterRequest")
@@ -148,7 +180,7 @@ func TestOpenAPIParsesAndContainsMobileP0Paths(t *testing.T) {
 	if !currentRequired["workspace_id"] {
 		t.Fatal("CurrentLegalAcceptance.workspace_id must be required")
 	}
-	for _, path := range []string{"/api/v1/auth/google", "/api/v1/auth/oidc/complete"} {
+	for _, path := range []string{"/api/v1/auth/oidc/complete"} {
 		operation := paths[path].(map[string]any)["post"].(map[string]any)
 		responses := operation["responses"].(map[string]any)
 		if responses["409"] == nil {

@@ -39,14 +39,28 @@ truy cập dữ liệu nhạy cảm; hãy mã hóa backup và giới hạn opera
 Trên mỗi instance khách hàng:
 
 ```dotenv
-PUSH_RELAY_URL=https://relay.publisher.example/v1/deliveries
+PUSH_RELAY_URL=https://relay.publisher.example/push-relay/v1/deliveries
 PUSH_RELAY_TOKEN=<token-ngau-nhien-rieng-cua-instance>
-PUSH_RELAY_INSTANCE_ID=<publisher-id>
+PUSH_RELAY_INSTANCE_ID=<discovery-zone-uuid>
 ```
 
 Ba giá trị phải được điền cùng nhau. Production chỉ nhận relay URL HTTPS không
 có credential trong URL. Không cấu hình relay client đồng thời với FCM/APNs
 trực tiếp; backend sẽ fail-fast để tránh gửi trùng hoặc route không rõ ràng.
+
+`PUSH_RELAY_INSTANCE_ID` **phải** bằng `data.discovery.zone.id` (UUID bất biến)
+từ instance, vì worker inject chính giá trị này vào body `instance_id`. Không
+dùng domain, zone slug hoặc customer alias. Lấy và lưu giá trị chính xác bằng:
+
+```sh
+INSTANCE_DOMAIN=chat.company.com
+curl -fsS "https://$INSTANCE_DOMAIN/api/v1/discovery?domain=$INSTANCE_DOMAIN" \
+  | jq -er '.data.discovery.zone.id'
+```
+
+URL trên là route public chuẩn khi relay chạy sau bundled Caddy. Chỉ dùng
+`https://relay.publisher.example/v1/deliveries` nếu publisher có một ingress
+dedicated chủ động map root path đó trực tiếp vào relay port `8090`.
 
 ### FCM/APNs trực tiếp cho app custom
 
@@ -74,15 +88,32 @@ này; customer không cần gửi dữ liệu chat tới dịch vụ SaaS của 
 Trên host relay, để trống `PUSH_RELAY_URL/TOKEN/INSTANCE_ID`, cấu hình ít nhất
 một provider trực tiếp và bật:
 
+Với official Android app hiện tại, dùng chính xác
+`FIREBASE_PROJECT_ID=webtui-chat`. Tải private service-account JSON tại Firebase
+Console > Project settings > Service accounts > Generate new private key, giữ
+file ngoài repository rồi chuyển toàn bộ bytes sang Base64 để điền
+`FIREBASE_SERVICE_ACCOUNT_JSON_BASE64`. File mẫu rút gọn nằm tại
+`deploy/self-hosted/firebase.publisher.env.example`. Sender ID
+`595077870179` và Android App ID
+`1:595077870179:android:a6f4ff5cc14a0d1485be56` là client identifiers, relay
+không đọc hai giá trị này. Web Push certificate trong Firebase Console cũng
+không thay thế service-account JSON và không phải cặp `WEB_PUSH_VAPID_*` của
+backend.
+
 ```dotenv
 PUSH_RELAY_SERVER_ENABLED=true
-PUSH_RELAY_PUBLISHERS=customer-a=<random-32+-chars>;customer-b=<random-32+-chars>
+PUSH_RELAY_PUBLISHERS=11111111-1111-4111-8111-111111111111=<random-32+-chars>;22222222-2222-4222-8222-222222222222=<random-32+-chars>
 PUSH_RELAY_MAX_BODY_BYTES=32768
 PUSH_RELAY_RATE_LIMIT_PER_MINUTE=240
 PUSH_RELAY_RATE_LIMIT_BURST=60
 PUSH_RELAY_WORKER_CONCURRENCY=4
 PUSH_RELAY_POLL_INTERVAL=1s
 ```
+
+Mỗi key trong `PUSH_RELAY_PUBLISHERS` phải giống byte-for-byte (sau lowercase)
+với `PUSH_RELAY_INSTANCE_ID`/`data.discovery.zone.id` của customer tương ứng;
+relay dùng chính `instance_id` trong request để chọn token, rate-limit bucket và
+partition job. Không cấp một customer slug tùy ý làm key.
 
 Compose dùng `.env` ở đây để **nội suy allowlist**, không inject toàn bộ file vào
 process relay. Container `push-relay` chỉ nhận app environment/logging/OTel,
@@ -108,8 +139,22 @@ docker compose --env-file .env -f compose.yml --profile push-relay exec -T \
 Caddy chỉ chuyển hai route publisher đã xác thực
 `/push-relay/v1/deliveries` và `/push-relay/v1/deliveries/*` tới relay. `/health`,
 `/ready` và `/metrics` của relay chỉ có trong backend network; không proxy chúng
-ra Internet. Chỉ cấp một token mạnh cho mỗi publisher ID; không dùng lại token giữa các customer. Khi xoay token, thêm token mới trên
-relay, cập nhật customer worker, restart worker rồi mới thu hồi token cũ.
+ra Internet. Chỉ cấp một token mạnh cho mỗi discovery instance UUID; không dùng
+lại token giữa các customer. Cấu hình hiện tại chỉ hỗ trợ **một token cho mỗi
+UUID** (không có giai đoạn chấp nhận song song token cũ và mới). Khi xoay token,
+chuẩn bị token mới ở cả hai đầu, chọn cửa sổ bảo trì ngắn, cập nhật
+`PUSH_RELAY_PUBLISHERS` và restart relay, ngay sau đó cập nhật ba biến relay client
+và restart customer worker. Delivery trong khoảng chuyển tiếp có thể retry; xác
+minh push end-to-end rồi hủy token cũ. Không ghi lặp cùng UUID để giả lập dual
+token vì parser chỉ giữ một giá trị.
+
+Probe route public (không gửi delivery và không lộ token):
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  https://relay.publisher.example/push-relay/v1/deliveries
+# Kỳ vọng 405 vì route tồn tại nhưng delivery chỉ nhận POST; 404 thường là sai prefix.
+```
 
 Relay thực hiện:
 
@@ -136,14 +181,21 @@ tiếp qua backend network. Endpoint chỉ xuất aggregate queue theo status,
 device token, payload hoặc provider error. Grafana và Alertmanager có panel/rule
 riêng cho queue stalled, dead-letter, delivery rate thấp và lỗi thu metrics.
 
+Giữ `PUSH_RELAY_HTTP_PORT=8090` trong bundled self-host vì Caddy, health check và
+Prometheus cùng dùng port nội bộ này. Nếu cần port khác, hãy tách relay, ingress
+và observability thành deployment riêng thay vì đổi riêng biến của stack bundled.
+
 `202 Accepted` nghĩa là relay đã lưu durable, không có nghĩa provider đã giao tới
 thiết bị. Theo dõi status bằng:
 
 ```http
 GET /v1/deliveries/{job_id}
 Authorization: Bearer <publisher-token>
-X-Push-Relay-Publisher: customer-a
+X-Push-Relay-Publisher: <discovery-zone-uuid>
 ```
+
+Qua bundled Caddy, public status path tương ứng là
+`/push-relay/v1/deliveries/{job_id}`; `/v1/...` là path nội bộ của relay.
 
 Không đưa raw token, `.env`, service account, `.p8` hoặc payload vào issue/log.
 
@@ -276,8 +328,12 @@ row này bằng một kế hoạch dữ liệu được phê duyệt rồi mới
 
 1. Chạy đầy đủ migration `000033`–`000037`; `000037` tạo index online bằng
    `CREATE INDEX CONCURRENTLY`. Sau đó kiểm tra `/ready` của API và relay (nếu bật).
-2. Android/iPhone thật: foreground, background, force-stop/lock screen, deep link,
-   refresh token, logout/revoke và cuộc gọi đến.
+2. Android/iPhone thật: foreground, background, process bị OS dọn/lock screen,
+   deep link, refresh token, logout/revoke và cuộc gọi đến. Kiểm tra force-stop
+   riêng: Android/iOS có thể chủ ý chặn push cho tới khi user mở lại app; không
+   ghi nhận đó là “delivery thành công”. Sau khi mở lại, sync/catch-up phải khôi
+   phục dữ liệu và token registration phải hoạt động trở lại mà không hiển thị
+   nhầm payload của instance cũ.
 3. Chrome, Edge, Firefox và Safari: opt-in, reload, đóng tab, click deep link,
    revoke, permission denied và subscription `404/410`.
 4. Gửi lại cùng idempotency key và xác nhận relay chỉ có một job.

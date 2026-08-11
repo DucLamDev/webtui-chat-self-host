@@ -111,6 +111,10 @@ jobs:
                       f"{service_name} environment differs from its allowlist: "
                       f"extra={sorted(actual - allowed)}, missing={sorted(allowed - actual)}"
                   )
+          if services["push-relay"]["environment"]["PUSH_RELAY_HTTP_PORT"] != "8090":
+              raise SystemExit("bundled push relay must listen on internal port 8090")
+          if services["push-relay"].get("expose") != ["8090"]:
+              raise SystemExit("bundled push relay must expose only internal port 8090")
           PY
 
       - name: Validate Caddy app-association routing
@@ -124,6 +128,15 @@ jobs:
             -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.10.2-alpine \
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm \
+            -e INSTANCE_DOMAIN=chat.example.com \
+            -e LETSENCRYPT_EMAIL=admin@example.com \
+            -e PORTAL_DOMAIN=download.vpsttt.com \
+            -e WEBTUI_APP_LINK_HOST=chat.example.com \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine \
+            caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --pretty | \
+            grep -F 'push-relay:8090'
 
       - name: Validate Prometheus alert rules
         working-directory: deploy/self-hosted

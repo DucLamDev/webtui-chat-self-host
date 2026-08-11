@@ -9,6 +9,7 @@ var (
 	ErrFileNotFound       = errors.New("không tìm thấy file")
 	ErrMessageNotFound    = errors.New("không tìm thấy tin nhắn")
 	ErrAttachmentNotFound = errors.New("không tìm thấy attachment")
+	ErrAttachmentLimit    = errors.New("tin nhắn đã đạt giới hạn attachment")
 )
 
 type File struct {

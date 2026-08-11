@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const testCanonicalInstanceID = "3f1e32b9-0a2f-4ca1-b0dc-04221a551c1c"
+
 func TestLoadIncludesLocalFrontendCORSOrigins(t *testing.T) {
 	t.Setenv("APP_ENV", "dev")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
@@ -265,6 +267,15 @@ func TestValidateAllowsLocalSelfHostedDevelopment(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidMobileMinimumVersion(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.Client.MobileMinimumVersion = "latest"
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MOBILE_MIN_VERSION") {
+		t.Fatalf("Validate() error = %v, want semantic mobile minimum version rejection", err)
+	}
+}
+
 func TestValidateRequiresCompletePushRelayConfiguration(t *testing.T) {
 	cfg := validConfigForTest()
 	cfg.PushRelay = PushRelayConfig{URL: "https://push.example.com/v1/deliver"}
@@ -273,6 +284,23 @@ func TestValidateRequiresCompletePushRelayConfiguration(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "PUSH_RELAY_TOKEN") ||
 		!strings.Contains(err.Error(), "PUSH_RELAY_INSTANCE_ID") {
 		t.Fatalf("Validate() error = %v, want incomplete push relay rejection", err)
+	}
+}
+
+func TestValidateRequiresCanonicalDiscoveryUUIDForPushRelay(t *testing.T) {
+	cfg := validConfigForTest()
+	cfg.PushRelay = PushRelayConfig{
+		URL:        "https://push.example.com/v1/deliveries",
+		Token:      strings.Repeat("a", 32),
+		InstanceID: strings.ToUpper(testCanonicalInstanceID),
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "PUSH_RELAY_INSTANCE_ID") {
+		t.Fatalf("Validate() error = %v, want non-canonical UUID rejection", err)
+	}
+
+	cfg.PushRelay.InstanceID = testCanonicalInstanceID
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected canonical discovery UUID: %v", err)
 	}
 }
 
@@ -311,7 +339,7 @@ func TestValidateRejectsRelayAndDirectPushTogether(t *testing.T) {
 	cfg.PushRelay = PushRelayConfig{
 		URL:        "https://push.example.com/v1/deliver",
 		Token:      "relay-token-for-development",
-		InstanceID: "instance-1",
+		InstanceID: testCanonicalInstanceID,
 	}
 	cfg.Firebase.ServiceAccountFile = "/run/secrets/firebase.json"
 

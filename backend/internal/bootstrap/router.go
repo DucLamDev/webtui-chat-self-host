@@ -152,6 +152,7 @@ func (a *API) registerAPIV1() {
 	tenancyService := tenancyapp.NewService(tenancyRepo, tenancyapp.Options{
 		AppName:               a.cfg.App.Name,
 		AppVersion:            a.cfg.App.Version,
+		MinimumMobileVersion:  a.cfg.Client.MobileMinimumVersion,
 		DefaultLocale:         "vi-VN",
 		ReleaseChannel:        a.cfg.App.Env,
 		DeploymentMode:        a.cfg.Deployment.Mode,
@@ -182,7 +183,7 @@ func (a *API) registerAPIV1() {
 	authService := authapp.NewService(authRepo, tokenManager)
 	authService.SetLegalDocumentVersions(a.cfg.Legal.TermsVersion, a.cfg.Legal.PrivacyPolicyVersion)
 	legalAcceptanceMiddleware := middleware.RequireCurrentLegalAcceptance(authService)
-	authHandler := authhttp.NewHandler(authService, a.cfg.Security.GoogleClientID)
+	authHandler := authhttp.NewHandler(authService)
 	if a.cfg.Deployment.IsSelfHosted() {
 		authHandler.SetInstanceDomain(a.cfg.Deployment.InstanceDomain)
 	}

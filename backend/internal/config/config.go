@@ -33,8 +33,8 @@ var defaultCORSAllowedOrigins = []string{
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var oidcSecretAliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var instanceDomainPattern = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
-var pushRelayInstancePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 var policyVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+var semanticVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 
 type Config struct {
 	App             AppConfig
@@ -158,7 +158,6 @@ type SecurityConfig struct {
 	WebhookSigningSecret  string
 	StorageCredentialsKey string
 	BotAISecretKey        string
-	GoogleClientID        string
 	CaddyAskSecret        string
 	OIDCStateSecret       string
 	OIDCClientSecrets     map[string]string
@@ -368,7 +367,6 @@ func Load() (*Config, error) {
 			WebhookSigningSecret:  getEnv("WEBHOOK_SIGNING_SECRET", ""),
 			StorageCredentialsKey: getEnv("STORAGE_CREDENTIALS_KEY", getEnv("WEBHOOK_SIGNING_SECRET", "")),
 			BotAISecretKey:        getEnv("BOT_AI_SECRET_KEY", ""),
-			GoogleClientID:        getEnv("GOOGLE_CLIENT_ID", ""),
 			CaddyAskSecret:        getEnv("CADDY_ASK_SECRET", ""),
 			OIDCStateSecret:       getEnv("OIDC_STATE_SECRET", ""),
 			OIDCClientSecrets:     getEnvMap("OIDC_CLIENT_SECRETS"),
@@ -484,6 +482,9 @@ func (c *Config) validateApplicationService() error {
 	if c.App.Name == "" {
 		problems = append(problems, "APP_NAME không được để trống")
 	}
+	if version := strings.TrimSpace(c.Client.MobileMinimumVersion); version != "" && !semanticVersionPattern.MatchString(version) {
+		problems = append(problems, "MOBILE_MIN_VERSION must be a semantic version such as 1.0.0")
+	}
 	if strings.TrimSpace(c.Client.DesktopUpdateURL) != "" {
 		parsed, err := url.Parse(strings.TrimSpace(c.Client.DesktopUpdateURL))
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -517,8 +518,8 @@ func (c *Config) validateApplicationService() error {
 		} else if c.App.Env == "production" && isWeakSecret(relayToken) {
 			problems = append(problems, "PUSH_RELAY_TOKEN is not safe for production")
 		}
-		if !pushRelayInstancePattern.MatchString(relayInstanceID) {
-			problems = append(problems, "PUSH_RELAY_INSTANCE_ID is required and must contain only letters, digits, dot, underscore, colon or dash")
+		if !isCanonicalUUID(relayInstanceID) {
+			problems = append(problems, "PUSH_RELAY_INSTANCE_ID is required and must be the canonical lowercase discovery instance UUID")
 		}
 	}
 	firebaseFile := strings.TrimSpace(c.Firebase.ServiceAccountFile)
@@ -581,8 +582,8 @@ func (c *Config) validateApplicationService() error {
 				problems = append(problems, "PUSH_RELAY_PUBLISHERS is required when the relay server is enabled")
 			}
 			for publisherID, token := range c.PushRelayServer.Publishers {
-				if !pushRelayInstancePattern.MatchString(publisherID) {
-					problems = append(problems, "PUSH_RELAY_PUBLISHERS contains an invalid publisher ID")
+				if !isCanonicalUUID(publisherID) {
+					problems = append(problems, "PUSH_RELAY_PUBLISHERS contains a publisher ID that is not a canonical lowercase discovery instance UUID")
 					break
 				}
 				if len(strings.TrimSpace(token)) < 32 || (c.App.Env == "production" && isWeakSecret(token)) {
@@ -859,8 +860,8 @@ func (c *Config) validatePushRelayService() error {
 	}
 	production := strings.EqualFold(strings.TrimSpace(c.App.Env), "production")
 	for publisherID, token := range c.PushRelayServer.Publishers {
-		if !pushRelayInstancePattern.MatchString(publisherID) {
-			problems = append(problems, "PUSH_RELAY_PUBLISHERS contains an invalid publisher ID")
+		if !isCanonicalUUID(publisherID) {
+			problems = append(problems, "PUSH_RELAY_PUBLISHERS contains a publisher ID that is not a canonical lowercase discovery instance UUID")
 			break
 		}
 		if len(strings.TrimSpace(token)) < 32 || (production && isWeakSecret(token)) {
@@ -930,6 +931,11 @@ func validationProblems(problems []string) error {
 		return nil
 	}
 	return errors.New(strings.Join(problems, "; "))
+}
+
+func isCanonicalUUID(value string) bool {
+	value = strings.TrimSpace(value)
+	return uuidPattern.MatchString(value) && value == strings.ToLower(value)
 }
 
 func isOperationalService(serviceName string) bool {

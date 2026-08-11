@@ -62,12 +62,21 @@ docker compose --env-file .env.example -f compose.yml config >/dev/null
 - [ ] Permission camera/micro/photo/notification có purpose string đúng chức năng.
 - [ ] Login, đăng ký, SSO, offline, file, call và deep link test trên device matrix.
 - [ ] Reviewer có tài khoản demo/hướng dẫn và backend review vẫn hoạt động.
+- [ ] Reference/reviewer instance do publisher vận hành chạy 24/7; reusable
+      primary/second-user/moderator accounts không OTP, geo gate hoặc dữ liệu thật.
 - [ ] Privacy policy, terms, support URL và contact là URL public ổn định.
 - [ ] Nếu app tạo account: có self-delete bằng `DELETE /api/v1/users/me`, xác nhận
       trong app và URL công khai `/account-deletion` cho yêu cầu ngoài app.
 - [ ] Chính sách deletion nói rõ ownership transfer, retention pháp lý và backup expiry.
-- [ ] Hai well-known URL App/Universal Links trả HTTP 200 trực tiếp, không redirect:
-      `/.well-known/assetlinks.json` và `/.well-known/apple-app-site-association`.
+- [ ] `/.well-known/assetlinks.json` trên publisher-controlled App Link host
+      (không phải từng customer domain) trả HTTP 200 trực tiếp, không redirect.
+- [ ] Với Play-only, `ENABLE_IOS_ASSOCIATION=false` và AASA trả 404/410; chỉ khi
+      phát hành iOS mới bật cờ và yêu cầu AASA trả 200 trực tiếp.
+- [ ] `assetlinks.json` dùng Play App Signing SHA-256, không dùng upload key;
+      customer domain được nhập thủ công và không giả association của official app.
+- [ ] Data Safety của một universal package bao phủ dữ liệu truyền tới selected
+      instance/relay/SDK; privacy policy phân biệt publisher và independent operator.
+- [ ] App Access, UGC, in-app deletion và external deletion URL đã điền/verify.
 - [ ] Đã test report message/user, block/unblock, blocked DM/call và hàng đợi moderator bằng hai tài khoản thật.
 - [ ] Owner/admin có `moderation.manage`; member thường không đọc hoặc xử lý được report.
 - [ ] Moderator xóa được nội dung vi phạm qua `message.manage`, đóng report với resolution note,

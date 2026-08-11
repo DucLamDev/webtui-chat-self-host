@@ -111,7 +111,7 @@ func (s fakeSender) Send(_ context.Context, _ string, payload map[string]any) er
 func TestDeliveryEndpointAuthenticatesAndDeduplicates(t *testing.T) {
 	store := &fakeStore{}
 	server := newTestServer(t, store, fakeSender{provider: "fcm"})
-	body := []byte(`{"provider":"fcm","device_token":"device-token-123","instance_id":"instance-1","payload":{"event_id":"event-1","event_type":"message","title":"Hello"}}`)
+	body := []byte(`{"provider":"fcm","device_token":"device-token-123","instance_id":"instance-1","payload":{"instance_id":"attacker-instance","event_id":"event-1","event_type":"message","title":"Hello"}}`)
 
 	first := performDelivery(server.Handler(), body, "publisher-token-that-is-at-least-32-characters", "delivery-key-0001")
 	if first.Code != http.StatusAccepted || !strings.Contains(first.Body.String(), `"deduplicated":false`) {
@@ -123,6 +123,13 @@ func TestDeliveryEndpointAuthenticatesAndDeduplicates(t *testing.T) {
 	}
 	if strings.Contains(first.Body.String(), "device-token-123") {
 		t.Fatalf("response leaked a device token: %s", first.Body.String())
+	}
+	var queuedPayload map[string]string
+	if err := json.Unmarshal(store.job.Payload, &queuedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if queuedPayload["instance_id"] != "instance-1" {
+		t.Fatalf("queued payload trusted nested instance_id: %#v", queuedPayload)
 	}
 
 	changed := bytes.Replace(body, []byte("event-1"), []byte("event-2"), 1)
@@ -274,7 +281,7 @@ func TestManualReplayMetadataIsAcceptedButNotForwardedToProvider(t *testing.T) {
 	store := &fakeStore{job: Job{
 		ID: "4d9b657a-3a54-45e1-a57e-ea8079ba87bd", PublisherID: "instance-1",
 		Provider: "fcm", DeviceToken: "device-token-secret",
-		Payload: []byte(`{"event_id":"event-1","event_type":"message","manual_replay_of":"2f08fbeb-c565-45b0-a1be-61798e55d2aa","manual_replay_at":"2026-08-03T00:00:00Z"}`),
+		Payload: []byte(`{"instance_id":"attacker-instance","event_id":"event-1","event_type":"message","manual_replay_of":"2f08fbeb-c565-45b0-a1be-61798e55d2aa","manual_replay_at":"2026-08-03T00:00:00Z"}`),
 		Status:  "processing", AttemptCount: 1, MaxAttempts: 8,
 	}}
 	server := newTestServer(t, store, fakeSender{provider: "fcm", received: received})
@@ -295,7 +302,8 @@ func TestManualReplayMetadataIsAcceptedButNotForwardedToProvider(t *testing.T) {
 	if !store.markSent {
 		t.Fatal("replayed relay job was not marked sent")
 	}
-	if received["event_id"] != "event-1" || received["manual_replay_of"] != nil || received["manual_replay_at"] != nil {
+	if received["event_id"] != "event-1" || received["instance_id"] != "instance-1" ||
+		received["manual_replay_of"] != nil || received["manual_replay_at"] != nil {
 		t.Fatalf("provider payload contains internal replay metadata: %#v", received)
 	}
 }

@@ -125,9 +125,18 @@ components:
           maxLength: 4096
         instance_id:
           type: string
+          format: uuid
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
           maxLength: 128
+          description: Publisher identity used for bearer authentication; for the universal app this is the discovery zone UUID.
         payload:
           type: object
+          properties:
+            instance_id:
+              type: string
+              format: uuid
+              maxLength: 128
+              description: Relay-controlled output field. Any submitted value is overwritten with the authenticated publisher identity before enqueue and provider delivery.
           additionalProperties:
             type: string
     DeliveryAccepted:

@@ -98,7 +98,8 @@ desktop app riêng.
 
 ## Luồng mobile
 
-Mobile là một app Flutter dùng chung trên store/APK:
+Mobile là một app Flutter dùng chung trên store/APK: publisher phát hành one
+universal AAB, không build binary theo customer.
 
 1. Người dùng nhập `chat.company.com`.
 2. App gọi discovery và xác minh:
@@ -166,21 +167,19 @@ riêng và chỉ lưu metadata vận hành, không dùng database chat của cus
 | Desktop server selector/discovery/runtime | Đã refactor để giữ UI local và dùng API/WS customer |
 | Mobile server selector/discovery/API/WS/secure storage | Đã refactor cho một server active |
 | Company registry, license, heartbeat, version inventory | Chưa triển khai; control plane giai đoạn kế tiếp |
-| Push nền cho một official mobile app | Chưa chốt chính sách relay/build riêng |
+| Push nền cho một official mobile app | Đã có relay publisher opt-in, allowlist theo discovery zone UUID và direct provider cho custom build |
 | Marketplace, backup từ portal, monitoring tập trung | Chưa triển khai |
 
 ## Push notification mobile
 
-WebSocket đủ khi app đang foreground. Khi app bị background/kill, một official
-app dùng chung cần một trong ba chính sách:
+WebSocket đủ khi app đang foreground. Khi app bị background/kill, official app
+dùng relay tối thiểu do publisher vận hành nếu cần push; customer có thể tắt push
+hoặc tự build/sign app custom với Firebase/APNs riêng.
 
-1. Không push relay: self-host thuần, nhưng notification nền bị giới hạn.
-2. WebTUI push relay tối thiểu: UX tốt hơn, cần công bố metadata/privacy rõ ràng.
-3. Customer tự build app với Firebase/APNs riêng: self-host tuyệt đối nhưng khó
-   vận hành cho doanh nghiệp nhỏ.
-
-Đây là quyết định sản phẩm độc lập với domain discovery; không phát service
-account Firebase của official app cho từng customer.
+Không phát service account Firebase của official app cho customer. Relay client
+dùng `PUSH_RELAY_INSTANCE_ID=data.discovery.zone.id`; publisher allowlist dùng
+đúng UUID đó làm key. Xem contract v1 và runbook push để cấu hình URL bundled
+Caddy `/push-relay/v1/deliveries`.
 
 ## Tiêu chí nghiệm thu
 

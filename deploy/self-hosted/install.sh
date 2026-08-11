@@ -13,6 +13,7 @@ INSTANCE_REGISTRATION_MODE="open"
 TURN_EXTERNAL_IP=""
 PORTAL_ORIGIN="https://download.vpsttt.com"
 PORTAL_DOMAIN="download.vpsttt.com"
+APP_LINK_HOST="chat.vpsttt.com"
 FORCE=0
 SKIP_DNS_CHECK=0
 
@@ -149,6 +150,7 @@ APP_ENV=production
 APP_NAME=$INSTANCE_NAME
 APP_URL=https://$DOMAIN
 APP_VERSION=self-hosted
+MOBILE_MIN_VERSION=1.0.0
 LOG_LEVEL=info
 LOG_FORMAT=json
 TERMS_VERSION=2026-08-07
@@ -162,7 +164,13 @@ API_HTTP_PORT=8080
 TRUSTED_PROXIES=172.16.0.0/12,127.0.0.1
 PORTAL_ORIGIN=$PORTAL_ORIGIN
 PORTAL_DOMAIN=$PORTAL_DOMAIN
-WEBTUI_APP_LINK_HOST=$DOMAIN
+# Static host declared by the publisher-signed universal app. Customer domains
+# are entered manually after discovery; they are not dynamic Android App Links.
+WEBTUI_APP_LINK_HOST=$APP_LINK_HOST
+# Set true only when operating a separately signed custom-branded mobile app.
+PRESERVE_CUSTOM_APP_LINK_HOST=false
+# Play-only default; enable only with the matching signed iOS app and portal AASA.
+ENABLE_IOS_ASSOCIATION=false
 DESKTOP_DOWNLOAD_URL=$PORTAL_ORIGIN/download/
 MOBILE_DOWNLOAD_URL=$PORTAL_ORIGIN/download/
 DOCUMENTATION_URL=$PORTAL_ORIGIN/#self-host
@@ -202,7 +210,6 @@ WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
 BOT_AI_SECRET_KEY=$BOT_AI_SECRET_KEY
 OIDC_STATE_SECRET=$OIDC_STATE_SECRET
 OIDC_CLIENT_SECRETS=
-GOOGLE_CLIENT_ID=
 FIREBASE_PROJECT_ID=
 FIREBASE_SERVICE_ACCOUNT_FILE=
 FIREBASE_SERVICE_ACCOUNT_JSON_BASE64=
@@ -212,6 +219,8 @@ APNS_BUNDLE_ID=com.vpsttt.webtuiChat
 APNS_PRIVATE_KEY_FILE=
 APNS_PRIVATE_KEY_BASE64=
 APNS_SANDBOX=false
+# Must equal data.discovery.instance_id from GET /api/v1/discovery and use the
+# canonical lowercase UUID. The worker refuses to start on a mismatch.
 PUSH_RELAY_URL=
 PUSH_RELAY_TOKEN=
 PUSH_RELAY_INSTANCE_ID=

@@ -125,10 +125,7 @@ Password registration and Google registration accept these fields:
 The Terms version includes the Acceptable Use Policy. Accepted versions,
 timestamp, IP address, user agent, workspace, and source are persisted in
 `user_legal_acceptances`. `POST /auth/register` requires both acceptances and
-the current versions. `POST /auth/google` permits an existing user to log in
-without consent fields, but a Google identity that would create a new account
-receives HTTP 409 with `LEGAL_ACCEPTANCE_REQUIRED`; the client must show both
-documents and retry with the same credential plus all four fields.
+the current versions.
 
 `TERMS_VERSION` and `PRIVACY_POLICY_VERSION` configure the advertised and
 accepted versions. Production startup fails when either is blank, unsafe, or a

@@ -45,6 +45,7 @@ var (
 
 var allowedPayloadKeys = map[string]int{
 	"event_id": 256, "event_type": 64, "target_type": 64,
+	"instance_id":  128,
 	"workspace_id": 128, "channel_id": 128, "message_id": 128, "sender_id": 128,
 	"title": 160, "body": 512, "deep_link": 1024, "tag": 128,
 	"call_id": 128, "initiator_user_id": 128, "target_user_id": 128,
@@ -257,6 +258,11 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
 	request.DeviceToken = strings.TrimSpace(request.DeviceToken)
 	request.InstanceID = publisherID
+	if request.Payload != nil {
+		// Never trust a nested instance identity from the publisher request. The
+		// authenticated publisher ID is the only identity forwarded to devices.
+		request.Payload["instance_id"] = publisherID
+	}
 	if err := s.validateRequest(request); err != nil {
 		writeProblem(w, http.StatusUnprocessableEntity, "INVALID_DELIVERY", err.Error())
 		return
@@ -403,11 +409,20 @@ func (s *Server) ProcessOne(ctx context.Context) error {
 	)
 	defer span.End()
 	var payload map[string]any
-	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+	if err := json.Unmarshal(job.Payload, &payload); err != nil || payload == nil {
 		span.SetStatus(codes.Error, "stored payload is invalid")
 		span.SetAttributes(attribute.String("push.outcome", "dead"))
 		return s.store.MarkFailed(ctx, job, true, "invalid stored payload", time.Time{})
 	}
+	publisherID := strings.ToLower(strings.TrimSpace(job.PublisherID))
+	if !publisherIDPattern.MatchString(publisherID) {
+		span.SetStatus(codes.Error, "stored publisher identity is invalid")
+		span.SetAttributes(attribute.String("push.outcome", "dead"))
+		return s.store.MarkFailed(ctx, job, true, "invalid stored publisher identity", time.Time{})
+	}
+	// Re-derive the field at the provider boundary so old queued jobs and a
+	// tampered stored payload cannot choose another instance identity.
+	payload["instance_id"] = publisherID
 	// These fields make a manually replayed application job a distinct relay
 	// request, but they are internal audit metadata and must not reach FCM/APNs.
 	delete(payload, "manual_replay_of")

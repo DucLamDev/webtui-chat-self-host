@@ -259,51 +259,36 @@ func buildMessage(token string, payload map[string]any) map[string]any {
 			}
 		}
 	}
-	title := strings.TrimSpace(data["title"])
-	body := strings.TrimSpace(data["body"])
 	tag := strings.TrimSpace(data["tag"])
 	eventType := strings.TrimSpace(data["event_type"])
 	isCallEvent := strings.HasPrefix(eventType, "call_")
-	category := "WEBTUI_MESSAGE"
-	if isCallEvent {
-		category = "WEBTUI_CALL"
-	}
-	androidNotification := map[string]any{
-		"default_sound":           true,
-		"default_vibrate_timings": true,
-		"notification_priority":   "PRIORITY_MAX",
-		"visibility":              "PUBLIC",
-	}
-	if tag != "" {
-		androidNotification["tag"] = tag
-	}
 	androidConfig := map[string]any{
 		"priority": "high",
 		"ttl":      "35s",
 	}
-	if !isCallEvent {
-		androidConfig["notification"] = androidNotification
-	}
 	if tag != "" {
 		androidConfig["collapse_key"] = tag
+	}
+	apnsHeaders := map[string]string{"apns-priority": "5"}
+	aps := map[string]any{"content-available": 1}
+	if isCallEvent {
+		// CallKit/PushKit remains the visible call surface. This FCM fallback is
+		// still data-only, but high priority helps the background handler close
+		// or synchronize an existing native call promptly.
+		apnsHeaders["apns-priority"] = "10"
+		aps["sound"] = "default"
+		aps["category"] = "WEBTUI_CALL"
 	}
 	message := map[string]any{
 		"token":   token,
 		"data":    data,
 		"android": androidConfig,
 		"apns": map[string]any{
-			"headers": map[string]string{"apns-priority": "10"},
+			"headers": apnsHeaders,
 			"payload": map[string]any{
-				"aps": map[string]any{
-					"sound":             "default",
-					"category":          category,
-					"content-available": 1,
-				},
+				"aps": aps,
 			},
 		},
-	}
-	if !isCallEvent && (title != "" || body != "") {
-		message["notification"] = map[string]string{"title": title, "body": body}
 	}
 	return message
 }

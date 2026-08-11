@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	filesdomain "github.com/duclamdev/application-chat/backend/internal/modules/files/domain"
 	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 )
 
@@ -21,6 +22,17 @@ type blockCheckerFunc func(ctx context.Context, workspaceID string, channelID st
 
 func (fn blockCheckerFunc) IsDirectChannelBlocked(ctx context.Context, workspaceID string, channelID string, actorUserID string) (bool, error) {
 	return fn(ctx, workspaceID, channelID, actorUserID)
+}
+
+func TestMapFileErrorReturnsStableAttachmentLimitCode(t *testing.T) {
+	err := mapFileError(filesdomain.ErrAttachmentLimit)
+	appErr, ok := err.(*apperrors.AppError)
+	if !ok {
+		t.Fatalf("error = %T, want *AppError", err)
+	}
+	if appErr.Code != "ATTACHMENT_LIMIT_EXCEEDED" {
+		t.Fatalf("code = %q", appErr.Code)
+	}
 }
 
 func TestValidateUploadRejectsDangerousMimeType(t *testing.T) {

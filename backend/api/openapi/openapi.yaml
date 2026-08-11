@@ -925,34 +925,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
-  /api/v1/auth/google:
-    post:
-      security: []
-      summary: Đăng nhập hoặc đăng ký bằng Google Identity Services
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GoogleLoginRequest"
-      responses:
-        "200":
-          description: Xác thực Google thành công
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthResponse"
-        "409":
-          description: Google identity hợp lệ nhưng sẽ tạo tài khoản mới và cần consent; giữ credential rồi retry với bốn field legal
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiResponse"
-              example:
-                success: false
-                error:
-                  code: LEGAL_ACCEPTANCE_REQUIRED
-                  message: Accept the current Terms, Acceptable Use Policy, and Privacy Policy before creating an account.
   /api/v1/auth/oidc/providers:
     get:
       security: []
@@ -2143,6 +2115,7 @@ paths:
           description: Danh sách attachment
     post:
       summary: Gắn file vào tin nhắn
+      description: Tối đa 20 attachment cho mỗi tin nhắn; gắn lại cùng file là idempotent.
       parameters:
         - $ref: "#/components/parameters/WorkspaceID"
         - $ref: "#/components/parameters/ChannelID"
@@ -2163,6 +2136,8 @@ paths:
       responses:
         "201":
           description: File đã được gắn vào tin nhắn
+        "400":
+          description: Dữ liệu không hợp lệ hoặc đã đạt ATTACHMENT_LIMIT_EXCEEDED
   /api/v1/workspaces/{workspace_id}/channels/{channel_id}/media:
     get:
       summary: Danh sách ảnh đã gửi trong cuộc trò chuyện
@@ -3584,9 +3559,15 @@ components:
   schemas:
     ZoneDiscovery:
       type: object
+      required: [version, instance_id, domain, setup_required, zone, runtime, capabilities, deployment]
       properties:
         version:
           type: string
+          description: Legacy discovery envelope version. Use runtime.api_contract_version for mobile compatibility.
+        instance_id:
+          type: string
+          format: uuid
+          description: Immutable deployment identity. It is the persisted zone UUID and equals zone.id.
         domain:
           type: string
         setup_required:
@@ -3635,13 +3616,27 @@ components:
           type: string
     ZoneRuntime:
       type: object
+      required: [api_contract_version, app_name, server_version, app_version, minimum_supported_mobile_version, release_channel, locale, web_base_url, api_base_url, ws_base_url]
       properties:
+        api_contract_version:
+          type: integer
+          minimum: 1
+          description: Mobile/backend compatibility contract version. Unknown versions must be rejected.
         app_name:
           type: string
         logo_url:
           type: string
         app_version:
           type: string
+          description: Legacy alias of server_version.
+        server_version:
+          type: string
+          description: Informational server release identifier; existing self-hosted installs may use a non-semver value.
+        minimum_supported_mobile_version:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+          example: 1.0.0
+          description: Lowest mobile semantic version allowed to connect to this instance.
         release_channel:
           type: string
         locale:
@@ -3675,6 +3670,7 @@ components:
                 type: string
     ZoneCapabilities:
       type: object
+      required: [chat, self_hosted, moderation, reporting, blocking, account_deletion, legal_acceptance]
       properties:
         chat:
           type: boolean
@@ -3703,6 +3699,21 @@ components:
         self_hosted:
           type: boolean
           description: Instance này do customer tự vận hành trên hạ tầng riêng.
+        moderation:
+          type: boolean
+          description: Moderation safety APIs are available.
+        reporting:
+          type: boolean
+          description: Authenticated users can report user-generated content.
+        blocking:
+          type: boolean
+          description: Authenticated users can block and unblock other users.
+        account_deletion:
+          type: boolean
+          description: Authenticated users can permanently delete their own account.
+        legal_acceptance:
+          type: boolean
+          description: Versioned terms/privacy discovery and acceptance APIs are available.
     ZoneDeployment:
       type: object
       properties:
@@ -5603,32 +5614,6 @@ components:
         password:
           type: string
           format: password
-        domain:
-          type: string
-          description: Tùy chọn cho control plane dùng chung; instance self-hosted dùng INSTANCE_DOMAIN.
-          example: chat.customer.example
-        device_name:
-          type: string
-          description: Tùy chọn. Nếu không gửi, backend tự suy ra từ User-Agent.
-    GoogleLoginRequest:
-      type: object
-      required: [credential]
-      properties:
-        terms_accepted:
-          type: boolean
-          description: Required and true only when this Google identity would create a new account; optional for an existing user login.
-        terms_version:
-          type: string
-          example: "2026-08-07"
-        privacy_accepted:
-          type: boolean
-          description: Required and true only when this Google identity would create a new account; optional for an existing user login.
-        privacy_version:
-          type: string
-          example: "2026-08-07"
-        credential:
-          type: string
-          description: Google ID token do Google Identity Services trả về.
         domain:
           type: string
           description: Tùy chọn cho control plane dùng chung; instance self-hosted dùng INSTANCE_DOMAIN.

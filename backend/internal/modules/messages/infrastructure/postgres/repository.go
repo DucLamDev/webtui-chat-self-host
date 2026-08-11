@@ -662,11 +662,15 @@ RETURNING id::text, workspace_id::text, channel_id::text, sender_id::text, paren
 	if err := touchDirectConversationLastMessage(ctx, tx, message); err != nil {
 		return messagesdomain.Message{}, fmt.Errorf("message forward touch direct conversation: %w", err)
 	}
+	// Older instances may contain messages created before the attachment cap;
+	// forwarding must never recreate an unbounded eager-render payload.
 	if _, err := tx.Exec(ctx, `
 INSERT INTO message_attachments (workspace_id, message_id, file_id, sort_order)
 SELECT workspace_id, $3::uuid, file_id, sort_order
 FROM message_attachments
 WHERE workspace_id = $1::uuid AND message_id = $2::uuid
+ORDER BY sort_order ASC, created_at ASC
+LIMIT 20
 `, params.WorkspaceID, params.MessageID, message.ID); err != nil {
 		return messagesdomain.Message{}, err
 	}

@@ -51,16 +51,6 @@ export type LoginInput = {
   device_name?: string;
 };
 
-export type GoogleLoginInput = {
-  credential: string;
-  domain?: string;
-  device_name?: string;
-  terms_accepted?: true;
-  terms_version?: string;
-  privacy_accepted?: true;
-  privacy_version?: string;
-};
-
 export type OIDCProviderSummary = {
   id: Id;
   name: string;

@@ -79,6 +79,64 @@ if [ -z "$INSTANCE_DOMAIN" ]; then
   echo "INSTANCE_DOMAIN is missing from $ENV_FILE." >&2
   exit 1
 fi
+OFFICIAL_APP_LINK_HOST=chat.vpsttt.com
+CURRENT_APP_LINK_HOST=$(read_env_value WEBTUI_APP_LINK_HOST)
+PRESERVE_CUSTOM_APP_LINK_HOST=$(read_env_value PRESERVE_CUSTOM_APP_LINK_HOST)
+PRESERVE_CUSTOM_APP_LINK_HOST=$(printf '%s' "$PRESERVE_CUSTOM_APP_LINK_HOST" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+case "$PRESERVE_CUSTOM_APP_LINK_HOST" in
+  1|true|yes|on)
+    if [ -z "$CURRENT_APP_LINK_HOST" ]; then
+      echo "PRESERVE_CUSTOM_APP_LINK_HOST=true requires WEBTUI_APP_LINK_HOST." >&2
+      exit 1
+    fi
+    echo "Preserving custom-branded WEBTUI_APP_LINK_HOST=$CURRENT_APP_LINK_HOST."
+    ;;
+  ""|0|false|no|off)
+    case "$CURRENT_APP_LINK_HOST" in
+      ""|"$INSTANCE_DOMAIN")
+        if [ "$CURRENT_APP_LINK_HOST" != "$OFFICIAL_APP_LINK_HOST" ]; then
+          echo "Migrating WEBTUI_APP_LINK_HOST to publisher host $OFFICIAL_APP_LINK_HOST for the official universal app."
+          write_env_value WEBTUI_APP_LINK_HOST "$OFFICIAL_APP_LINK_HOST"
+        fi
+        ;;
+      *)
+        echo "Preserving custom WEBTUI_APP_LINK_HOST=$CURRENT_APP_LINK_HOST (custom-branded app override)."
+        ;;
+    esac
+    ;;
+  *)
+    echo "PRESERVE_CUSTOM_APP_LINK_HOST in $ENV_FILE must be true or false." >&2
+    exit 1
+    ;;
+esac
+if [ -z "$(read_env_value MOBILE_MIN_VERSION)" ]; then
+  # Compatibility contract added after the first self-host releases. Backfill
+  # it before recreating API containers while preserving operator overrides.
+  write_env_value MOBILE_MIN_VERSION "1.0.0"
+fi
+if [ -z "$(read_env_value ENABLE_IOS_ASSOCIATION)" ]; then
+  # Older installs probed AASA unconditionally. The official first release is
+  # Play-only, so preserve a fail-closed 404 until iOS is explicitly provisioned.
+  write_env_value ENABLE_IOS_ASSOCIATION "false"
+fi
+PUSH_RELAY_ENABLED=$(read_env_value PUSH_RELAY_SERVER_ENABLED)
+PUSH_RELAY_ENABLED=$(printf '%s' "$PUSH_RELAY_ENABLED" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+case "$PUSH_RELAY_ENABLED" in
+  1|true|yes|on) PUSH_RELAY_ENABLED=true ;;
+  ""|0|false|no|off) PUSH_RELAY_ENABLED=false ;;
+  *)
+    echo "PUSH_RELAY_SERVER_ENABLED in $ENV_FILE must be true or false." >&2
+    exit 1
+    ;;
+esac
+PUSH_RELAY_PORT=$(read_env_value PUSH_RELAY_HTTP_PORT)
+if [ -z "$PUSH_RELAY_PORT" ]; then
+  PUSH_RELAY_PORT=8090
+fi
+if [ "$PUSH_RELAY_PORT" != "8090" ]; then
+  echo "Bundled self-host Caddy/Prometheus require PUSH_RELAY_HTTP_PORT=8090; use a dedicated relay deployment for another port." >&2
+  exit 1
+fi
 MEETING_URL=$(read_env_value JITSI_BASE_URL)
 if [ -z "$MEETING_URL" ]; then
   MEETING_URL=$(read_env_value NEXT_PUBLIC_JITSI_BASE_URL)
@@ -112,6 +170,9 @@ fi
 # block updates to the chat application.
 docker compose --env-file .env -f compose.yml pull caddy jitsi-prosody jitsi-jicofo jitsi-jvb jitsi-web
 docker compose --env-file .env -f compose.yml build --pull api worker web admin
+if [ "$PUSH_RELAY_ENABLED" = "true" ]; then
+  docker compose --env-file .env -f compose.yml --profile push-relay build --pull push-relay
+fi
 if ! docker compose --env-file .env -f compose.yml run --rm migrate; then
   echo "" >&2
   echo "Update stopped before replacing containers because database migration failed." >&2
@@ -128,4 +189,19 @@ docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-prosody
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-jicofo jitsi-jvb
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-web
 docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate caddy
+if [ "$PUSH_RELAY_ENABLED" = "true" ]; then
+  docker compose --env-file .env -f compose.yml --profile push-relay up -d --no-deps --force-recreate push-relay
+  relay_attempt=0
+  until docker compose --env-file .env -f compose.yml --profile push-relay exec -T push-relay \
+    wget -qO- "http://localhost:$PUSH_RELAY_PORT/ready" >/dev/null 2>&1; do
+    relay_attempt=$((relay_attempt + 1))
+    if [ "$relay_attempt" -ge 30 ]; then
+      echo "Updated push-relay did not become ready within 60 seconds." >&2
+      docker compose --env-file .env -f compose.yml --profile push-relay logs --tail=100 push-relay >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  echo "Updated push-relay: ready"
+fi
 sh "$SCRIPT_DIR/check.sh"
