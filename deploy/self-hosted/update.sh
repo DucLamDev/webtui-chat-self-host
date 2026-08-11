@@ -114,6 +114,33 @@ if [ -z "$(read_env_value MOBILE_MIN_VERSION)" ]; then
   # it before recreating API containers while preserving operator overrides.
   write_env_value MOBILE_MIN_VERSION "1.0.0"
 fi
+PORTAL_ORIGIN=$(read_env_value PORTAL_ORIGIN)
+if [ -z "$PORTAL_ORIGIN" ]; then
+  PORTAL_ORIGIN="https://download.vpsttt.com"
+  write_env_value PORTAL_ORIGIN "$PORTAL_ORIGIN"
+fi
+TERMS_VERSION=$(read_env_value TERMS_VERSION)
+if [ -z "$TERMS_VERSION" ]; then
+  TERMS_VERSION="2026-08-07"
+  write_env_value TERMS_VERSION "$TERMS_VERSION"
+fi
+PRIVACY_POLICY_VERSION=$(read_env_value PRIVACY_POLICY_VERSION)
+if [ -z "$PRIVACY_POLICY_VERSION" ]; then
+  PRIVACY_POLICY_VERSION="2026-08-07"
+  write_env_value PRIVACY_POLICY_VERSION "$PRIVACY_POLICY_VERSION"
+fi
+if [ -z "$(read_env_value NEXT_PUBLIC_TERMS_URL)" ]; then
+  write_env_value NEXT_PUBLIC_TERMS_URL "$PORTAL_ORIGIN/terms"
+fi
+if [ -z "$(read_env_value NEXT_PUBLIC_PRIVACY_URL)" ]; then
+  write_env_value NEXT_PUBLIC_PRIVACY_URL "$PORTAL_ORIGIN/privacy"
+fi
+if [ -z "$(read_env_value NEXT_PUBLIC_TERMS_VERSION)" ]; then
+  write_env_value NEXT_PUBLIC_TERMS_VERSION "$TERMS_VERSION"
+fi
+if [ -z "$(read_env_value NEXT_PUBLIC_PRIVACY_VERSION)" ]; then
+  write_env_value NEXT_PUBLIC_PRIVACY_VERSION "$PRIVACY_POLICY_VERSION"
+fi
 if [ -z "$(read_env_value ENABLE_IOS_ASSOCIATION)" ]; then
   # Older installs probed AASA unconditionally. The official first release is
   # Play-only, so preserve a fail-closed 404 until iOS is explicitly provisioned.
