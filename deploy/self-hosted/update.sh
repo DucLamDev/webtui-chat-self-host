@@ -119,6 +119,25 @@ if [ -z "$PORTAL_ORIGIN" ]; then
   PORTAL_ORIGIN="https://download.vpsttt.com"
   write_env_value PORTAL_ORIGIN "$PORTAL_ORIGIN"
 fi
+PORTAL_DOMAIN=$(read_env_value PORTAL_DOMAIN)
+if [ -z "$PORTAL_DOMAIN" ]; then
+  case "$PORTAL_ORIGIN" in
+    https://*/*)
+      echo "PORTAL_ORIGIN must be an HTTPS origin without a path before deriving PORTAL_DOMAIN." >&2
+      exit 1
+      ;;
+  esac
+  PORTAL_DOMAIN=${PORTAL_ORIGIN#https://}
+  if [ "$PORTAL_DOMAIN" = "$PORTAL_ORIGIN" ] || [ -z "$PORTAL_DOMAIN" ]; then
+    echo "PORTAL_ORIGIN must start with https:// before deriving PORTAL_DOMAIN." >&2
+    exit 1
+  fi
+  if printf '%s' "$PORTAL_DOMAIN" | grep -q ':'; then
+    echo "PORTAL_ORIGIN must use the standard HTTPS port so PORTAL_DOMAIN can be used for SNI." >&2
+    exit 1
+  fi
+  write_env_value PORTAL_DOMAIN "$PORTAL_DOMAIN"
+fi
 TERMS_VERSION=$(read_env_value TERMS_VERSION)
 if [ -z "$TERMS_VERSION" ]; then
   TERMS_VERSION="2026-08-07"
