@@ -11,14 +11,14 @@ INSTANCE_NAME="Team Chat"
 INSTANCE_LOGO_URL=""
 INSTANCE_REGISTRATION_MODE="open"
 TURN_EXTERNAL_IP=""
-PORTAL_ORIGIN="https://download.vpsttt.com"
-PORTAL_DOMAIN="download.vpsttt.com"
+PORTAL_ORIGIN="https://download.webtui.vn"
+PORTAL_DOMAIN="download.webtui.vn"
 APP_LINK_HOST="chat.vpsttt.com"
 FORCE=0
 SKIP_DNS_CHECK=0
 
 usage() {
-  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--portal-origin https://download.vpsttt.com] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
+  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--portal-origin https://download.webtui.vn] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
 }
 
 while [ "$#" -gt 0 ]; do

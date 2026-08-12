@@ -6,7 +6,7 @@ EMAIL=""
 INSTANCE_NAME="Team Chat"
 INSTANCE_LOGO_URL=""
 INSTANCE_REGISTRATION_MODE="open"
-PORTAL_ORIGIN="https://download.vpsttt.com"
+PORTAL_ORIGIN="https://download.webtui.vn"
 EXTERNAL_IP=""
 REPO_URL=""
 INSTALL_DIR=""
@@ -14,7 +14,7 @@ SKIP_DNS_CHECK=0
 FORCE=0
 
 usage() {
-  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--repo-url https://github.com/org/repo.git] [--install-dir /opt/vpsttt-chat] [--portal-origin https://download.vpsttt.com] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
+  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--repo-url https://github.com/org/repo.git] [--install-dir /opt/vpsttt-chat] [--portal-origin https://download.webtui.vn] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
 }
 
 while [ "$#" -gt 0 ]; do

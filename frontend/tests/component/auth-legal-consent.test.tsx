@@ -11,9 +11,9 @@ describe("registration legal consent", () => {
         onModeChange={vi.fn()}
         onRegister={vi.fn()}
         registrationLegal={{
-          privacyUrl: "https://download.vpsttt.com/privacy",
+          privacyUrl: "https://download.webtui.vn/privacy",
           privacyVersion: "2026-08-07",
-          termsUrl: "https://download.vpsttt.com/terms",
+          termsUrl: "https://download.webtui.vn/terms",
           termsVersion: "2026-08-07"
         }}
       />

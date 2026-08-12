@@ -116,7 +116,7 @@ if [ -z "$(read_env_value MOBILE_MIN_VERSION)" ]; then
 fi
 PORTAL_ORIGIN=$(read_env_value PORTAL_ORIGIN)
 if [ -z "$PORTAL_ORIGIN" ]; then
-  PORTAL_ORIGIN="https://download.vpsttt.com"
+  PORTAL_ORIGIN="https://download.webtui.vn"
   write_env_value PORTAL_ORIGIN "$PORTAL_ORIGIN"
 fi
 PORTAL_DOMAIN=$(read_env_value PORTAL_DOMAIN)

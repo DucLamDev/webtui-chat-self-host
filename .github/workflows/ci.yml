@@ -123,7 +123,7 @@ jobs:
           docker run --rm \
             -e INSTANCE_DOMAIN=chat.example.com \
             -e LETSENCRYPT_EMAIL=admin@example.com \
-            -e PORTAL_DOMAIN=download.vpsttt.com \
+            -e PORTAL_DOMAIN=download.webtui.vn \
             -e WEBTUI_APP_LINK_HOST=chat.example.com \
             -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.10.2-alpine \
@@ -131,7 +131,7 @@ jobs:
           docker run --rm \
             -e INSTANCE_DOMAIN=chat.example.com \
             -e LETSENCRYPT_EMAIL=admin@example.com \
-            -e PORTAL_DOMAIN=download.vpsttt.com \
+            -e PORTAL_DOMAIN=download.webtui.vn \
             -e WEBTUI_APP_LINK_HOST=chat.example.com \
             -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.10.2-alpine \
@@ -193,9 +193,9 @@ jobs:
     name: Frontend
     runs-on: ubuntu-latest
     env:
-      NEXT_PUBLIC_PRIVACY_URL: https://download.vpsttt.com/privacy
+      NEXT_PUBLIC_PRIVACY_URL: https://download.webtui.vn/privacy
       NEXT_PUBLIC_PRIVACY_VERSION: "2026-08-07"
-      NEXT_PUBLIC_TERMS_URL: https://download.vpsttt.com/terms
+      NEXT_PUBLIC_TERMS_URL: https://download.webtui.vn/terms
       NEXT_PUBLIC_TERMS_VERSION: "2026-08-07"
     steps:
       - name: Checkout

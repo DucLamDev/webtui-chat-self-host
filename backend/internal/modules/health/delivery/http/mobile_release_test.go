@@ -17,7 +17,7 @@ func TestMobileReleaseReturnsFallbackMetadata(t *testing.T) {
 	NewHandler(BuildInfo{
 		MobileMinimumVersion:     "1.0.0",
 		MobileRecommendedVersion: "1.1.0",
-		MobileDownloadURL:        "https://download.vpsttt.com/mobile/webtui-chat.apk",
+		MobileDownloadURL:        "https://download.webtui.vn/mobile/webtui-chat.apk",
 		MobileStoreURL:           "https://play.google.com/store/apps/details?id=com.vpsttt.webtui",
 	}).Register(router)
 

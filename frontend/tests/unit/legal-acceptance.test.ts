@@ -23,9 +23,9 @@ import {
 } from "../../apps/web/src/features/auth/legal-acceptance-gate";
 
 const policyConfig = createLegalPolicyConfig({
-  NEXT_PUBLIC_PRIVACY_URL: "https://download.vpsttt.com/privacy",
+  NEXT_PUBLIC_PRIVACY_URL: "https://download.webtui.vn/privacy",
   NEXT_PUBLIC_PRIVACY_VERSION: "2026-08-07",
-  NEXT_PUBLIC_TERMS_URL: "https://download.vpsttt.com/terms",
+  NEXT_PUBLIC_TERMS_URL: "https://download.webtui.vn/terms",
   NEXT_PUBLIC_TERMS_VERSION: "2026-08-07",
 });
 const documentList: LegalDocumentVersion[] = [
