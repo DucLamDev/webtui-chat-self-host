@@ -157,7 +157,13 @@ export function createFilesClient(http: HttpClient) {
       return itemFrom<FileObject>(data, "file");
     },
     download(workspaceId: string, fileId: string) {
-      return http.blob(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(fileId)}/download`);
+      return http.blob(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(fileId)}/download`,
+        {
+          cache: "no-store",
+          query: { _fresh: Date.now() }
+        }
+      );
     },
     async versions(workspaceId: string, fileId: string) {
       const data = await http.get<unknown>(

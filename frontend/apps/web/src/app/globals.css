@@ -12549,6 +12549,24 @@ textarea {
   display: inline-flex;
 }
 
+.chat-app-shell--zalo .message-actions--open > .ui-tooltip:first-child .ui-tooltip__content {
+  display: none;
+}
+
+.chat-app-shell--zalo .message-actions__menu .ui-tooltip__content {
+  bottom: calc(100% + 10px);
+  left: 50%;
+  max-width: none;
+  right: auto;
+  transform: translateX(-50%) translateY(4px);
+  z-index: 180;
+}
+
+.chat-app-shell--zalo .message-actions__menu .ui-tooltip:hover .ui-tooltip__content,
+.chat-app-shell--zalo .message-actions__menu .ui-tooltip:focus-within .ui-tooltip__content {
+  transform: translateX(-50%) translateY(0);
+}
+
 @media (min-width: 768px) {
   .chat-app-shell--zalo .message-row__content,
   .chat-app-shell--zalo .message-row--local .message-row__content {

@@ -277,7 +277,7 @@ func (h *Handler) Download(c *gin.Context) {
 	}
 	headers := map[string]string{
 		"Accept-Ranges": "bytes",
-		"Cache-Control": "private, max-age=3600",
+		"Cache-Control": "private, no-cache",
 		"Content-Disposition": mime.FormatMediaType(disposition, map[string]string{
 			"filename": download.File.OriginalName,
 		}),
