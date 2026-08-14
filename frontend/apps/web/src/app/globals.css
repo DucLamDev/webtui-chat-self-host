@@ -16784,6 +16784,166 @@ button.message-reply-preview:hover {
   border-color: #334155;
 }
 
+/* Settings full-width correction: reset legacy grid placement from the old all-in-one layout. */
+.chat-app-shell--zalo .settings-shell,
+.chat-app-shell--zalo .settings-content,
+.chat-app-shell--zalo .settings-shell .settings-grid,
+.chat-app-shell--zalo .settings-shell .settings-desktop-grid,
+.chat-app-shell--zalo .settings-shell .settings-card,
+.chat-app-shell--zalo .settings-shell .settings-card > *,
+.chat-app-shell--zalo .settings-shell form {
+  min-width: 0;
+}
+
+.chat-app-shell--zalo .settings-content {
+  overflow: auto;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-grid > .settings-card,
+.chat-app-shell--zalo .settings-shell .settings-grid > .settings-desktop-grid {
+  grid-area: auto !important;
+  grid-column: 1 / -1 !important;
+  justify-self: stretch;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-desktop-grid > .settings-card {
+  grid-area: auto !important;
+  grid-column: 1 / -1 !important;
+  justify-self: stretch;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card {
+  align-content: start;
+  align-items: stretch;
+  justify-items: stretch;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card__heading,
+.chat-app-shell--zalo .settings-shell .settings-card > div:first-child {
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--profile .profile-form {
+  display: grid;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--profile .profile-form__row {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 240px) minmax(220px, 1fr) minmax(180px, .8fr) auto;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--profile .avatar-upload-field {
+  grid-column: auto !important;
+  grid-row: auto !important;
+  justify-self: start;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--appearance,
+.chat-app-shell--zalo .settings-shell .settings-card--desktop-version,
+.chat-app-shell--zalo .settings-shell .settings-card--notifications,
+.chat-app-shell--zalo .settings-shell .settings-card--app-lock,
+.chat-app-shell--zalo .settings-shell .settings-card--admin-link {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--appearance > div:first-child,
+.chat-app-shell--zalo .settings-shell .settings-card--desktop-version > div:first-child,
+.chat-app-shell--zalo .settings-shell .settings-card--notifications > div:first-child,
+.chat-app-shell--zalo .settings-shell .settings-card--admin-link > div:first-child,
+.chat-app-shell--zalo .settings-shell .settings-card--app-lock > div:first-child {
+  justify-content: flex-start;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--notifications .ui-segmented {
+  max-width: 520px;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--notifications .web-push-settings,
+.chat-app-shell--zalo .settings-shell .settings-card--notifications .settings-toggle-row,
+.chat-app-shell--zalo .settings-shell .settings-card--notifications .settings-time-row,
+.chat-app-shell--zalo .settings-shell .settings-card--app-lock form,
+.chat-app-shell--zalo .settings-shell .settings-card--danger form {
+  max-width: none;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-time-row {
+  grid-template-columns: repeat(2, minmax(180px, 260px));
+  justify-content: start;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--branding,
+.chat-app-shell--zalo .settings-shell .settings-card--storage {
+  justify-items: stretch;
+}
+
+.chat-app-shell--zalo .settings-shell .organization-branding-form,
+.chat-app-shell--zalo .settings-shell .zone-storage-form {
+  max-width: none;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .organization-branding-form {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+}
+
+.chat-app-shell--zalo .settings-shell .organization-branding-form__preview,
+.chat-app-shell--zalo .settings-shell .organization-branding-form__upload,
+.chat-app-shell--zalo .settings-shell .organization-branding-form__feedback,
+.chat-app-shell--zalo .settings-shell .organization-branding-form > .ui-button {
+  grid-column: 1 / -1;
+}
+
+.chat-app-shell--zalo .settings-shell .zone-storage-form__grid {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--sessions {
+  overflow: visible;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--sessions .workspace-data-table-shell {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-app-shell--zalo .settings-shell .sessions-data-table {
+  min-width: 760px;
+}
+
+.chat-app-shell--zalo .settings-shell .sessions-heading {
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-danger-details > summary {
+  width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .chat-app-shell--zalo .settings-shell .settings-card--profile .profile-form__row,
+  .chat-app-shell--zalo .settings-shell .organization-branding-form,
+  .chat-app-shell--zalo .settings-shell .zone-storage-form__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-app-shell--zalo .settings-shell .settings-card--profile .profile-form__row > .ui-button,
+  .chat-app-shell--zalo .settings-shell .organization-branding-form__preview,
+  .chat-app-shell--zalo .settings-shell .organization-branding-form__upload,
+  .chat-app-shell--zalo .settings-shell .organization-branding-form__feedback,
+  .chat-app-shell--zalo .settings-shell .organization-branding-form > .ui-button,
+  .chat-app-shell--zalo .settings-shell .zone-storage-form__wide {
+    grid-column: auto !important;
+  }
+}
+
 .chat-entry-loading {
   background: var(--zalo-canvas, #f3f6fa);
   display: grid;
