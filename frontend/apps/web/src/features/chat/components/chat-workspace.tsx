@@ -5355,6 +5355,16 @@ function FilesPage({
   );
 }
 
+type SettingsSectionId =
+  | "profile"
+  | "appearance"
+  | "notifications"
+  | "security"
+  | "sessions"
+  | "storage"
+  | "organization"
+  | "account";
+
 function SettingsPage({
   canOpenAdmin,
   currentUser,
@@ -5404,6 +5414,8 @@ function SettingsPage({
   const [avatarUploadFile, setAvatarUploadFile] = useState<File | null>(null);
   const [isAvatarUploading, setIsAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionId>("security");
+  const [settingsSearch, setSettingsSearch] = useState("");
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
   const [brandName, setBrandName] = useState(zoneRuntime?.app_name ?? "");
   const [brandLogoURL, setBrandLogoURL] = useState(zoneRuntime?.logo_url ?? "");
@@ -5680,17 +5692,135 @@ function SettingsPage({
     void getPlatformServices().links.openExternal(adminPanelUrl());
   }
 
+  const settingsSections: Array<{
+    description: string;
+    heading: string;
+    icon: ReactNode;
+    id: SettingsSectionId;
+    label: string;
+  }> = [
+    {
+      description: "Thông tin đồng nghiệp sẽ nhìn thấy khi trò chuyện với bạn.",
+      heading: "Hồ sơ cá nhân",
+      icon: <Users size={18} />,
+      id: "profile",
+      label: "Hồ sơ"
+    },
+    {
+      description: "Chọn chế độ hiển thị và kiểm tra phiên bản ứng dụng desktop.",
+      heading: "Giao diện & ứng dụng",
+      icon: theme === "dark" ? <Moon size={18} /> : <Sun size={18} />,
+      id: "appearance",
+      label: "Giao diện"
+    },
+    {
+      description: "Tinh chỉnh thông báo, xem trước nội dung và khung giờ không làm phiền.",
+      heading: "Thông báo",
+      icon: <Bell size={18} />,
+      id: "notifications",
+      label: "Thông báo"
+    },
+    {
+      description: "Quản lý khóa ứng dụng, Web Push, phiên đăng nhập và vùng thao tác nhạy cảm.",
+      heading: "Bảo mật & phiên đăng nhập",
+      icon: <ShieldCheck size={18} />,
+      id: "security",
+      label: "Bảo mật"
+    },
+    {
+      description: "Theo dõi thiết bị đang đăng nhập và thu hồi phiên không còn dùng.",
+      heading: "Phiên đăng nhập",
+      icon: <Monitor size={18} />,
+      id: "sessions",
+      label: "Phiên đăng nhập"
+    },
+    ...(canOpenAdmin
+      ? [
+          {
+            description: "Cấu hình nơi lưu ảnh, video và file cho host hiện tại.",
+            heading: "Lưu trữ",
+            icon: <Database size={18} />,
+            id: "storage" as const,
+            label: "Lưu trữ"
+          },
+          {
+            description: "Cập nhật thương hiệu, chính sách đăng ký và mở trang quản lý.",
+            heading: "Tổ chức",
+            icon: <Monitor size={18} />,
+            id: "organization" as const,
+            label: "Tổ chức"
+          }
+        ]
+      : []),
+    {
+      description: "Các thao tác cuối cùng liên quan đến tài khoản cá nhân.",
+      heading: "Tài khoản",
+      icon: <KeyRound size={18} />,
+      id: "account",
+      label: "Tài khoản"
+    }
+  ];
+  const normalizedSettingsSearch = settingsSearch.trim().toLowerCase();
+  const visibleSettingsSections = normalizedSettingsSearch
+    ? settingsSections.filter((section) =>
+        `${section.label} ${section.heading} ${section.description}`.toLowerCase().includes(normalizedSettingsSearch)
+      )
+    : settingsSections;
+  const selectedSettingsSection =
+    visibleSettingsSections.find((section) => section.id === activeSettingsSection) ??
+    visibleSettingsSections[0] ??
+    settingsSections.find((section) => section.id === activeSettingsSection) ??
+    settingsSections[0];
+
   return (
     <div className="workspace-page settings-page">
       <header className="settings-page__intro">
-        <div>
-          <span className="settings-page__eyebrow">Tài khoản của bạn</span>
-          <h1>Cài đặt</h1>
-          <p>Quản lý thông tin cá nhân, cách nhận thông báo và các thiết bị đã đăng nhập.</p>
-        </div>
-        <span className="settings-page__status"><ShieldCheck size={16} /> Tài khoản đang được bảo vệ</span>
+        <h1>Cài đặt</h1>
+        <label className="settings-search" aria-label="Tìm trong cài đặt">
+          <Search size={18} />
+          <input
+            onChange={(event) => setSettingsSearch(event.target.value)}
+            placeholder="Tìm trong cài đặt"
+            type="search"
+            value={settingsSearch}
+          />
+          <kbd>Ctrl + F</kbd>
+        </label>
+        <span className="settings-page__status">
+          <ShieldCheck size={18} />
+          <span>
+            <strong>Tài khoản được bảo vệ</strong>
+            <small>Không phát hiện rủi ro</small>
+          </span>
+        </span>
       </header>
-      <div className="settings-grid">
+      <div className="settings-shell">
+        <nav className="settings-section-nav" aria-label="Mục cài đặt">
+          {visibleSettingsSections.length ? (
+            visibleSettingsSections.map((section) => (
+              <button
+                aria-current={section.id === selectedSettingsSection.id ? "page" : undefined}
+                className={section.id === selectedSettingsSection.id ? "settings-section-nav__item settings-section-nav__item--active" : "settings-section-nav__item"}
+                key={section.id}
+                onClick={() => setActiveSettingsSection(section.id)}
+                type="button"
+              >
+                <span>{section.icon}</span>
+                <strong>{section.label}</strong>
+              </button>
+            ))
+          ) : (
+            <p className="settings-section-nav__empty">Không tìm thấy mục phù hợp.</p>
+          )}
+        </nav>
+        <main className="settings-content">
+          <header className="settings-content__heading">
+            <div>
+              <h2>{selectedSettingsSection.heading}</h2>
+              <p>{selectedSettingsSection.description}</p>
+            </div>
+          </header>
+          <div className="settings-grid" data-active-section={selectedSettingsSection.id}>
         <section className="settings-card settings-card--profile">
           <div className="settings-card__heading">
             <div>
@@ -6135,7 +6265,6 @@ function SettingsPage({
                     <th scope="col">Thiết bị</th>
                     <th scope="col">Mạng truy cập</th>
                     <th scope="col">Hoạt động</th>
-                    <th scope="col">Hết hạn</th>
                     <th scope="col">Trạng thái</th>
                     <th className="workspace-data-table__actions-heading" scope="col">Thao tác</th>
                   </tr>
@@ -6160,7 +6289,6 @@ function SettingsPage({
                         </td>
                         <td data-label="Mạng truy cập">{session.ip_address || "Không xác định"}</td>
                         <td data-label="Hoạt động">{formatRelativeSessionDate(session.last_seen_at || session.created_at)}</td>
-                        <td data-label="Hết hạn">{session.expires_at ? formatSessionDate(session.expires_at) : "Không xác định"}</td>
                         <td data-label="Trạng thái">
                           <Badge tone={isCurrent ? "green" : isRevoked ? "slate" : "blue"}>
                             {isCurrent ? "Thiết bị này" : isRevoked ? "Đã thu hồi" : "Đang hoạt động"}
@@ -6194,16 +6322,15 @@ function SettingsPage({
           {sessionActionError ? <p className="session-action-error" role="alert">{sessionActionError}</p> : null}
         </section>
         <section className="settings-card settings-card--danger" aria-labelledby="delete-account-title">
-          <div className="settings-card__heading">
-            <div>
-              <h2 id="delete-account-title" tabIndex={-1}>Xóa tài khoản</h2>
-              <p>
-                Xóa vĩnh viễn hồ sơ, phiên đăng nhập, thiết bị và tùy chọn cá nhân của bạn trên
-                instance này. Tin nhắn thuộc hồ sơ của tổ chức có thể được giữ lại nhưng không còn
-                liên kết tới tài khoản.
-              </p>
-            </div>
-          </div>
+          <details className="settings-danger-details">
+            <summary>
+              <span className="settings-danger-details__icon"><Trash2 size={18} /></span>
+              <div>
+                <h2 id="delete-account-title" tabIndex={-1}>Vùng nguy hiểm</h2>
+                <p>Các thao tác dưới đây có thể ảnh hưởng đến tài khoản của bạn.</p>
+              </div>
+              <span className="settings-danger-details__action">Mở rộng</span>
+            </summary>
           <form
             aria-busy={deleteAccountMutation.isPending}
             onSubmit={(event) => {
@@ -6265,7 +6392,10 @@ function SettingsPage({
             <small id="delete-account-help">Hành động này không thể hoàn tác.</small>
             {accountDeletionError ? <p className="settings-danger-error" role="alert">{accountDeletionError}</p> : null}
           </form>
+          </details>
         </section>
+          </div>
+        </main>
       </div>
     </div>
   );

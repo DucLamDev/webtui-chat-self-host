@@ -16353,6 +16353,437 @@ button.message-reply-preview:hover {
   }
 }
 
+/* Settings redesign: category navigation + one active settings panel. */
+.chat-app-shell--zalo .settings-page {
+  background: var(--zalo-canvas, #f4f7fb);
+  overflow: auto;
+  padding: 18px;
+}
+
+.chat-app-shell--zalo .settings-page__intro {
+  align-items: center;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: 180px minmax(260px, 430px) minmax(240px, 1fr);
+  margin: 0 0 16px;
+  max-width: none;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-page__intro h1 {
+  color: var(--zalo-text);
+  font-size: 24px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.chat-app-shell--zalo .settings-search {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8e2f0;
+  border-radius: 8px;
+  color: var(--zalo-muted);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.chat-app-shell--zalo .settings-search input {
+  background: transparent;
+  border: 0;
+  color: var(--zalo-text);
+  font: inherit;
+  min-width: 0;
+  outline: 0;
+}
+
+.chat-app-shell--zalo .settings-search kbd {
+  background: #eef3fb;
+  border: 1px solid #d9e3f0;
+  border-radius: 5px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+}
+
+.chat-app-shell--zalo .settings-page__status {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--zalo-text);
+  display: inline-grid;
+  gap: 10px;
+  grid-template-columns: auto auto;
+  justify-self: end;
+  padding: 0;
+}
+
+.chat-app-shell--zalo .settings-page__status > svg {
+  background: #e8f8ef;
+  border-radius: 8px;
+  color: #20a464;
+  height: 30px;
+  padding: 6px;
+  width: 30px;
+}
+
+.chat-app-shell--zalo .settings-page__status > span {
+  display: grid;
+  gap: 2px;
+}
+
+.chat-app-shell--zalo .settings-page__status strong {
+  color: var(--zalo-text);
+  font-size: 13px;
+}
+
+.chat-app-shell--zalo .settings-page__status small {
+  color: var(--zalo-muted);
+  font-size: 12px;
+}
+
+.chat-app-shell--zalo .settings-shell {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 0;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-section-nav {
+  align-self: start;
+  background: #ffffff;
+  border: 1px solid #d8e2f0;
+  border-radius: 8px;
+  overflow: hidden;
+  position: sticky;
+  top: 14px;
+}
+
+.chat-app-shell--zalo .settings-section-nav__item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #edf2f7;
+  color: #26334a;
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  min-height: 56px;
+  padding: 0 16px;
+  position: relative;
+  text-align: left;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-section-nav__item:last-child {
+  border-bottom: 0;
+}
+
+.chat-app-shell--zalo .settings-section-nav__item > span {
+  align-items: center;
+  color: #667085;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.chat-app-shell--zalo .settings-section-nav__item strong {
+  color: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-app-shell--zalo .settings-section-nav__item:hover {
+  background: #f7faff;
+  color: var(--zalo-blue);
+}
+
+.chat-app-shell--zalo .settings-section-nav__item--active {
+  background: #eaf3ff;
+  color: var(--zalo-blue);
+}
+
+.chat-app-shell--zalo .settings-section-nav__item--active::before {
+  background: var(--zalo-blue);
+  bottom: 0;
+  content: "";
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 4px;
+}
+
+.chat-app-shell--zalo .settings-section-nav__item--active > span {
+  color: var(--zalo-blue);
+}
+
+.chat-app-shell--zalo .settings-section-nav__empty {
+  color: var(--zalo-muted);
+  font-size: 13px;
+  margin: 0;
+  padding: 18px;
+}
+
+.chat-app-shell--zalo .settings-content {
+  background: #ffffff;
+  border: 1px solid #d8e2f0;
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-app-shell--zalo .settings-content__heading {
+  border-bottom: 1px solid #edf2f7;
+  display: block;
+  padding: 22px 24px 14px;
+}
+
+.chat-app-shell--zalo .settings-content__heading h2 {
+  color: var(--zalo-text);
+  font-size: 20px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.chat-app-shell--zalo .settings-content__heading p {
+  color: var(--zalo-muted);
+  font-size: 13px;
+  margin: 5px 0 0;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-grid,
+.chat-app-shell--zalo .settings-shell .settings-grid:not(:has(.settings-card--admin-link)) {
+  display: grid;
+  gap: 0;
+  grid-template-areas: none;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  max-width: none;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-grid > .settings-card,
+.chat-app-shell--zalo .settings-shell .settings-grid > .settings-desktop-grid {
+  display: none;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card,
+.chat-app-shell--zalo .settings-shell .settings-desktop-grid > .settings-card {
+  background: #ffffff;
+  border: 0;
+  border-bottom: 1px solid #edf2f7;
+  border-radius: 0;
+  box-shadow: none;
+  gap: 12px;
+  padding: 20px 24px;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-desktop-grid {
+  gap: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-app-shell--zalo .settings-grid[data-active-section="profile"] > .settings-card--profile,
+.chat-app-shell--zalo .settings-grid[data-active-section="storage"] > .settings-card--storage,
+.chat-app-shell--zalo .settings-grid[data-active-section="sessions"] > .settings-card--sessions,
+.chat-app-shell--zalo .settings-grid[data-active-section="account"] > .settings-card--danger,
+.chat-app-shell--zalo .settings-grid[data-active-section="organization"] > .settings-card--branding,
+.chat-app-shell--zalo .settings-grid[data-active-section="organization"] > .settings-card--admin-link,
+.chat-app-shell--zalo .settings-grid[data-active-section="appearance"] > .settings-card--appearance,
+.chat-app-shell--zalo .settings-grid[data-active-section="appearance"] > .settings-desktop-grid,
+.chat-app-shell--zalo .settings-grid[data-active-section="notifications"] > .settings-desktop-grid,
+.chat-app-shell--zalo .settings-grid[data-active-section="security"] > .settings-card--app-lock,
+.chat-app-shell--zalo .settings-grid[data-active-section="security"] > .settings-desktop-grid,
+.chat-app-shell--zalo .settings-grid[data-active-section="security"] > .settings-card--sessions,
+.chat-app-shell--zalo .settings-grid[data-active-section="security"] > .settings-card--danger {
+  display: grid;
+}
+
+.chat-app-shell--zalo .settings-grid[data-active-section="appearance"] > .settings-desktop-grid > .settings-card--notifications,
+.chat-app-shell--zalo .settings-grid[data-active-section="notifications"] > .settings-desktop-grid > .settings-card--desktop-version,
+.chat-app-shell--zalo .settings-grid[data-active-section="security"] > .settings-desktop-grid > .settings-card--desktop-version {
+  display: none;
+}
+
+.chat-app-shell--zalo .settings-grid[data-active-section="appearance"] > .settings-desktop-grid > .settings-card--desktop-version,
+.chat-app-shell--zalo .settings-grid[data-active-section="notifications"] > .settings-desktop-grid > .settings-card--notifications,
+.chat-app-shell--zalo .settings-grid[data-active-section="security"] > .settings-desktop-grid > .settings-card--notifications {
+  display: grid;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card h2 {
+  color: var(--zalo-text);
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card p,
+.chat-app-shell--zalo .settings-shell .settings-card small {
+  color: var(--zalo-muted);
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--sessions .workspace-data-table-shell {
+  border: 1px solid #d8e2f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.chat-app-shell--zalo .settings-shell .sessions-heading {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+}
+
+.chat-app-shell--zalo .settings-danger-details {
+  display: grid;
+  gap: 14px;
+}
+
+.chat-app-shell--zalo .settings-danger-details > summary {
+  align-items: center;
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  list-style: none;
+}
+
+.chat-app-shell--zalo .settings-danger-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-app-shell--zalo .settings-danger-details__icon {
+  align-items: center;
+  background: #fff1f2;
+  border-radius: 8px;
+  color: #dc2626;
+  display: inline-flex;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.chat-app-shell--zalo .settings-danger-details__action {
+  border: 1px solid #f4a6a6;
+  border-radius: 6px;
+  color: #d92d20;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 18px;
+}
+
+.chat-app-shell--zalo .settings-danger-details[open] .settings-danger-details__action {
+  color: transparent;
+  position: relative;
+}
+
+.chat-app-shell--zalo .settings-danger-details[open] .settings-danger-details__action::after {
+  color: #d92d20;
+  content: "Thu gọn";
+  inset: 8px 18px;
+  position: absolute;
+}
+
+.chat-app-shell--zalo .settings-danger-details form {
+  border-top: 1px solid #fee2e2;
+  padding-top: 14px;
+}
+
+@media (max-width: 980px) {
+  .chat-app-shell--zalo .settings-page__intro {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-app-shell--zalo .settings-page__status {
+    justify-self: start;
+  }
+
+  .chat-app-shell--zalo .settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-app-shell--zalo .settings-section-nav {
+    display: flex;
+    overflow-x: auto;
+    position: static;
+  }
+
+  .chat-app-shell--zalo .settings-section-nav__item {
+    border-bottom: 0;
+    border-right: 1px solid #edf2f7;
+    flex: 0 0 auto;
+    min-width: 160px;
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-app-shell--zalo .settings-page {
+    padding: 12px 10px 90px;
+  }
+
+  .chat-app-shell--zalo .settings-search kbd {
+    display: none;
+  }
+
+  .chat-app-shell--zalo .settings-shell .sessions-heading,
+  .chat-app-shell--zalo .settings-danger-details > summary {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .chat-app-shell--zalo .settings-danger-details__action,
+  .chat-app-shell--zalo .settings-shell .sessions-count,
+  .chat-app-shell--zalo .settings-shell .sessions-logout-all {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+[data-theme="dark"] .chat-app-shell--zalo .settings-page {
+  background: #0f172a;
+}
+
+[data-theme="dark"] .chat-app-shell--zalo .settings-search,
+[data-theme="dark"] .chat-app-shell--zalo .settings-section-nav,
+[data-theme="dark"] .chat-app-shell--zalo .settings-content,
+[data-theme="dark"] .chat-app-shell--zalo .settings-shell .settings-card,
+[data-theme="dark"] .chat-app-shell--zalo .settings-shell .settings-desktop-grid > .settings-card {
+  background: #111827;
+  border-color: #334155;
+}
+
+[data-theme="dark"] .chat-app-shell--zalo .settings-search input,
+[data-theme="dark"] .chat-app-shell--zalo .settings-page__intro h1,
+[data-theme="dark"] .chat-app-shell--zalo .settings-page__status strong,
+[data-theme="dark"] .chat-app-shell--zalo .settings-content__heading h2,
+[data-theme="dark"] .chat-app-shell--zalo .settings-shell .settings-card h2,
+[data-theme="dark"] .chat-app-shell--zalo .settings-section-nav__item {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .chat-app-shell--zalo .settings-search kbd,
+[data-theme="dark"] .chat-app-shell--zalo .settings-section-nav__item:hover,
+[data-theme="dark"] .chat-app-shell--zalo .settings-section-nav__item--active {
+  background: #10284a;
+  border-color: #315582;
+}
+
+[data-theme="dark"] .chat-app-shell--zalo .settings-content__heading,
+[data-theme="dark"] .chat-app-shell--zalo .settings-section-nav__item,
+[data-theme="dark"] .chat-app-shell--zalo .settings-shell .settings-card,
+[data-theme="dark"] .chat-app-shell--zalo .settings-shell .settings-desktop-grid > .settings-card {
+  border-color: #334155;
+}
+
 .chat-entry-loading {
   background: var(--zalo-canvas, #f3f6fa);
   display: grid;
