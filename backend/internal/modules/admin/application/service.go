@@ -261,6 +261,10 @@ func (s *Service) PushQueue(ctx context.Context, actorUserID string, workspaceID
 			UpdatedAt: item.UpdatedAt.UTC().Format(time.RFC3339),
 		})
 	}
+	providerDeliveries := make([]PushProviderDelivery, 0, len(overview.ProviderDeliveries))
+	providerDeliveries = append(providerDeliveries, overview.ProviderDeliveries...)
+	hourlyActivity := make([]PushHourlyActivity, 0, len(overview.HourlyActivity))
+	hourlyActivity = append(hourlyActivity, overview.HourlyActivity...)
 	return PushQueueDTO{
 		WorkspaceID:            workspaceID,
 		QueueDepth:             overview.Pending + overview.Processing + overview.Failed,
@@ -273,8 +277,8 @@ func (s *Service) PushQueue(ctx context.Context, actorUserID string, workspaceID
 		DeliveryRatePercent24H: deliveryRate,
 		OldestQueuedAt:         oldestQueuedAt,
 		OldestQueueAgeSeconds:  oldestQueueAgeSeconds,
-		ProviderDeliveries24H:  overview.ProviderDeliveries,
-		HourlyActivity:         overview.HourlyActivity,
+		ProviderDeliveries24H:  providerDeliveries,
+		HourlyActivity:         hourlyActivity,
 		DeadLetters:            deadLetters,
 		GeneratedAt:            now.Format(time.RFC3339),
 	}, nil

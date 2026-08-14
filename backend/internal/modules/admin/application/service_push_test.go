@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -63,6 +64,29 @@ func TestAdminPermissionCheckFailsClosedWithoutChecker(t *testing.T) {
 	}
 }
 
+func TestPushQueueSerializesEmptyCollectionsAsArrays(t *testing.T) {
+	repo := &pushTestRepository{}
+	service := NewService(repo, pushTestPermissionChecker{permissions: map[string]bool{PermissionViewAdmin: true}})
+
+	result, err := service.PushQueue(context.Background(), "user", "workspace", 50)
+	if err != nil {
+		t.Fatalf("PushQueue() error = %v", err)
+	}
+	if result.ProviderDeliveries24H == nil || result.HourlyActivity == nil || result.DeadLetters == nil {
+		t.Fatalf("empty push collections must be non-nil arrays: %#v", result)
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if string(payload) == "" ||
+		containsJSONNull(payload, "provider_deliveries_24h") ||
+		containsJSONNull(payload, "hourly_activity") ||
+		containsJSONNull(payload, "dead_letters") {
+		t.Fatalf("push queue must serialize empty collections as arrays: %s", payload)
+	}
+}
+
 func TestPushQueueMapsOperationalSummary(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	oldest := now.Add(-90 * time.Second)
@@ -98,6 +122,14 @@ func TestPushQueueMapsOperationalSummary(t *testing.T) {
 	if len(result.DeadLetters) != 1 || result.DeadLetters[0].ID != "job-dead" {
 		t.Fatalf("dead letters = %#v", result.DeadLetters)
 	}
+}
+
+func containsJSONNull(payload []byte, field string) bool {
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return false
+	}
+	return string(decoded[field]) == "null"
 }
 
 func TestReplayDeadPushJobRequiresNotificationManage(t *testing.T) {

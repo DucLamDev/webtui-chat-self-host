@@ -1,12 +1,12 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import {
   createHealthClient,
-  createRuntimeEnvironment,
   HttpClient,
   type HealthStatus
 } from "@webtui/api-client";
+import { resolveAdminApiBaseUrl } from "@/lib/api";
 
 type ApiStatusState =
   | { status: "checking"; label: string; detail?: string }
@@ -21,19 +21,14 @@ export function useApiStatus(): ApiStatusState {
 
   useEffect(() => {
     let active = true;
-    const env = createRuntimeEnvironment({
-      NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL,
-      NEXT_PUBLIC_WS_BASE_URL: process.env.NEXT_PUBLIC_WS_BASE_URL,
-      NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
-      NEXT_PUBLIC_DEFAULT_LOCALE: process.env.NEXT_PUBLIC_DEFAULT_LOCALE
-    });
     const client = createHealthClient(
       new HttpClient({
-        baseUrl: env.apiBaseUrl
+        baseUrl: resolveAdminApiBaseUrl
       })
     );
 
     const checkApi = async () => {
+      const baseUrl = resolveAdminApiBaseUrl();
       try {
         const payload = await client.ready();
         if (!active) {
@@ -43,7 +38,7 @@ export function useApiStatus(): ApiStatusState {
         const isOnline = payload.status === "ready" || payload.status === "ok";
 
         setState({
-          detail: env.apiBaseUrl,
+          detail: baseUrl,
           label: isOnline ? "API sẵn sàng" : "API chưa sẵn sàng",
           payload,
           status: isOnline ? "online" : "offline"
@@ -54,7 +49,7 @@ export function useApiStatus(): ApiStatusState {
         }
 
         setState({
-          detail: env.apiBaseUrl,
+          detail: baseUrl,
           label: "Không kết nối được API",
           status: "offline"
         });

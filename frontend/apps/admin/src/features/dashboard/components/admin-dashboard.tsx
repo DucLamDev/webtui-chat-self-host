@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -75,6 +75,7 @@ import {
   adminPageMeta,
   adminSectionGroup,
   canAccessAdminSection,
+  isAdminSectionEnabled,
   type AdminNavId,
   resolveAdminSection
 } from "../model/navigation";
@@ -271,7 +272,7 @@ export function AdminDashboard() {
       <AdminSidebar
         activeId={activeNavItem}
         collapsed={sidebarCollapsed}
-        isItemVisible={(section) => canAccessAdminSection(section, data.can)}
+        isItemVisible={(section) => isAdminSectionEnabled(section) && canAccessAdminSection(section, data.can)}
         mobileOpen={mobileNavOpen}
         onCloseMobile={() => setMobileNavOpen(false)}
         onPrefetch={data.prefetchSection}
@@ -2399,38 +2400,50 @@ function PushQueueSection({
     return <EmptyState description="Backend chưa trả dữ liệu push queue." title="Chưa có số liệu" />;
   }
 
-  const deliveryRate = overview.delivery_rate_percent_24h;
+  const pending = numericValue(overview.pending);
+  const processing = numericValue(overview.processing);
+  const failed = numericValue(overview.failed);
+  const sent24h = numericValue(overview.sent_24h);
+  const skipped24h = numericValue(overview.skipped_24h);
+  const dead24h = numericValue(overview.dead_24h);
+  const queueDepth = numericValue(overview.queue_depth, pending + processing + failed);
+  const deliveryRate = numericValueOrNull(overview.delivery_rate_percent_24h);
+  const hourlyActivity = Array.isArray(overview.hourly_activity) ? overview.hourly_activity : [];
+  const providerDeliveries = Array.isArray(overview.provider_deliveries_24h)
+    ? overview.provider_deliveries_24h
+    : [];
+  const deadLetters = Array.isArray(overview.dead_letters) ? overview.dead_letters : [];
   const maxHourly = Math.max(
     1,
-    ...overview.hourly_activity.map((point) => point.sent + point.dead)
+    ...hourlyActivity.map((point) => numericValue(point.sent) + numericValue(point.dead))
   );
 
   return (
     <section className="admin-content-stack">
       <section className="metric-grid" aria-label="Chỉ số push notification">
         <MetricCard
-          delta={`${formatNumber(overview.pending)} chờ · ${formatNumber(overview.processing)} đang xử lý`}
+          delta={`${formatNumber(pending)} chờ · ${formatNumber(processing)} đang xử lý`}
           label="Độ sâu hàng đợi"
-          tone={overview.queue_depth > 0 ? "orange" : "green"}
-          value={formatNumber(overview.queue_depth)}
+          tone={queueDepth > 0 ? "orange" : "green"}
+          value={formatNumber(queueDepth)}
         />
         <MetricCard
-          delta={`${formatNumber(overview.skipped_24h)} bỏ qua vì không có đích nhận`}
+          delta={`${formatNumber(skipped24h)} bỏ qua vì không có đích nhận`}
           label="Đã giao"
           tone="blue"
-          value={formatNumber(overview.sent_24h)}
+          value={formatNumber(sent24h)}
         />
         <MetricCard
-          delta={deliveryRate == null ? "Chưa có mẫu hoàn tất" : `${formatNumber(overview.sent_24h + overview.dead_24h)} job hoàn tất`}
+          delta={deliveryRate == null ? "Chưa có mẫu hoàn tất" : `${formatNumber(sent24h + dead24h)} job hoàn tất`}
           label="Tỷ lệ giao"
           tone={deliveryRate != null && deliveryRate >= 99 ? "green" : "orange"}
           value={deliveryRate == null ? "—" : `${deliveryRate.toFixed(1)}%`}
         />
         <MetricCard
-          delta={`${formatNumber(overview.failed)} job đang chờ retry`}
+          delta={`${formatNumber(failed)} job đang chờ retry`}
           label="Dead-letter 24h"
-          tone={overview.dead_24h > 0 ? "orange" : "green"}
-          value={formatNumber(overview.dead_24h)}
+          tone={dead24h > 0 ? "orange" : "green"}
+          value={formatNumber(dead24h)}
         />
       </section>
 
@@ -2441,26 +2454,30 @@ function PushQueueSection({
               <h2>Delivery theo giờ</h2>
               <p>24 giờ gần nhất; màu xanh là thành công, màu cam là dead-letter.</p>
             </div>
-            <Badge tone={overview.dead_24h > 0 ? "orange" : "green"}>
-              {overview.dead_24h > 0 ? "Cần kiểm tra" : "Ổn định"}
+            <Badge tone={dead24h > 0 ? "orange" : "green"}>
+              {dead24h > 0 ? "Cần kiểm tra" : "Ổn định"}
             </Badge>
           </header>
           <div className="push-hourly-chart" role="img" aria-label="Biểu đồ delivery push trong 24 giờ">
-            {overview.hourly_activity.map((point) => (
-              <span
-                key={point.hour}
-                title={`${formatDateTime(point.hour)}: ${point.sent} thành công, ${point.dead} dead-letter`}
-              >
-                <i
-                  className="push-hourly-chart__sent"
-                  style={{ height: `${Math.max(point.sent ? 3 : 0, (point.sent / maxHourly) * 100)}%` }}
-                />
-                <i
-                  className="push-hourly-chart__dead"
-                  style={{ height: `${Math.max(point.dead ? 3 : 0, (point.dead / maxHourly) * 100)}%` }}
-                />
-              </span>
-            ))}
+            {hourlyActivity.length ? hourlyActivity.map((point, index) => {
+              const sent = numericValue(point.sent);
+              const dead = numericValue(point.dead);
+              return (
+                <span
+                  key={point.hour || index}
+                  title={`${formatDateTime(point.hour)}: ${sent} thành công, ${dead} dead-letter`}
+                >
+                  <i
+                    className="push-hourly-chart__sent"
+                    style={{ height: `${Math.max(sent ? 3 : 0, (sent / maxHourly) * 100)}%` }}
+                  />
+                  <i
+                    className="push-hourly-chart__dead"
+                    style={{ height: `${Math.max(dead ? 3 : 0, (dead / maxHourly) * 100)}%` }}
+                  />
+                </span>
+              );
+            }) : <p>Chưa có dữ liệu delivery theo giờ.</p>}
           </div>
         </article>
 
@@ -2473,10 +2490,10 @@ function PushQueueSection({
             <Send size={20} />
           </header>
           <div className="push-provider-list">
-            {overview.provider_deliveries_24h.length ? overview.provider_deliveries_24h.map((provider) => (
+            {providerDeliveries.length ? providerDeliveries.map((provider) => (
               <div key={provider.provider}>
-                <span>{provider.provider}</span>
-                <strong>{formatNumber(provider.count)}</strong>
+                <span>{provider.provider || "unknown"}</span>
+                <strong>{formatNumber(numericValue(provider.count))}</strong>
               </div>
             )) : <p>Chưa có destination được giao trong cửa sổ hiện tại.</p>}
             <div>
@@ -2495,7 +2512,7 @@ function PushQueueSection({
           </div>
           {!data.canManageNotifications ? <Badge tone="slate">Chỉ xem</Badge> : null}
         </header>
-        {overview.dead_letters.length ? (
+        {deadLetters.length ? (
           <div className="admin-table-wrap">
             <table className="admin-table admin-table--push" aria-label="Danh sách push dead-letter">
               <thead>
@@ -2508,11 +2525,11 @@ function PushQueueSection({
                 </tr>
               </thead>
               <tbody>
-                {overview.dead_letters.map((job) => (
+                {deadLetters.map((job) => (
                   <tr key={job.id}>
                     <td><strong>{shortId(job.id)}</strong><small>{formatDateTime(job.created_at)}</small></td>
-                    <td>{formatNumber(job.attempt_count)}</td>
-                    <td><span className="admin-message-preview" title={job.error}>{job.error}</span></td>
+                    <td>{formatNumber(numericValue(job.attempt_count))}</td>
+                    <td><span className="admin-message-preview" title={job.error}>{job.error || "Không có chi tiết lỗi"}</span></td>
                     <td>{formatDateTime(job.updated_at)}</td>
                     <td>
                       <Button
@@ -4233,6 +4250,14 @@ function displayName(user: Pick<AuthUser, "display_name" | "email" | "username">
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function numericValue(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function numericValueOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function formatNumber(value: number): string {

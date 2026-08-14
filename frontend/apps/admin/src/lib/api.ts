@@ -1,4 +1,4 @@
-import {
+﻿import {
   createRuntimeEnvironment,
   createWebTuiApiClient
 } from "@webtui/api-client";
@@ -17,7 +17,7 @@ export const runtimeEnvironment = createRuntimeEnvironment({
 let refreshRequest: Promise<string | null> | null = null;
 
 export const api = createWebTuiApiClient({
-  baseUrl: apiBaseUrl,
+  baseUrl: resolveAdminApiBaseUrl,
   getAccessToken: () => useAuthStore.getState().accessToken,
   onUnauthorized: () => useAuthStore.getState().clearSession(),
   refreshAccessToken: () => {
@@ -53,7 +53,7 @@ export const api = createWebTuiApiClient({
   }
 });
 
-function apiBaseUrl() {
+export function resolveAdminApiBaseUrl() {
   if (typeof window === "undefined") {
     return runtimeEnvironment.apiBaseUrl;
   }

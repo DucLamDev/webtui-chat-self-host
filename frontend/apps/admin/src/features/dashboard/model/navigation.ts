@@ -1,4 +1,4 @@
-export const adminPageMeta = {
+﻿export const adminPageMeta = {
   overview: {
     description: "Theo dõi sức khỏe, hoạt động và các chỉ số quan trọng của workspace.",
     label: "Tổng quan",
@@ -68,6 +68,19 @@ export const adminPageMeta = {
 
 export type AdminNavId = keyof typeof adminPageMeta;
 
+export const enabledAdminSections = [
+  "overview",
+  "push",
+  "moderation",
+  "messages",
+  "channels",
+  "users",
+  "roles",
+  "cronjobs",
+  "backups",
+  "settings"
+] as const satisfies readonly AdminNavId[];
+
 export const adminNavigationGroups: ReadonlyArray<{
   id: string;
   label: string;
@@ -75,7 +88,6 @@ export const adminNavigationGroups: ReadonlyArray<{
 }> = [
   { id: "monitoring", label: "Giám sát", items: ["overview", "push"] },
   { id: "workspace", label: "Workspace", items: ["moderation", "messages", "channels", "users", "roles"] },
-  { id: "extensions", label: "Mở rộng", items: ["integrations", "automations", "bots"] },
   { id: "operations", label: "Vận hành", items: ["cronjobs", "backups", "settings"] }
 ];
 
@@ -91,8 +103,16 @@ export function canAccessAdminSection(
   return !permission || hasPermission(permission);
 }
 
+export function isAdminSectionEnabled(section: AdminNavId): boolean {
+  return (enabledAdminSections as readonly AdminNavId[]).includes(section);
+}
+
 export function resolveAdminSection(value: string | null | undefined): AdminNavId {
-  return value && Object.hasOwn(adminPageMeta, value) ? (value as AdminNavId) : "overview";
+  if (!value || !Object.hasOwn(adminPageMeta, value)) {
+    return "overview";
+  }
+  const section = value as AdminNavId;
+  return isAdminSectionEnabled(section) ? section : "overview";
 }
 
 export function adminSectionGroup(section: AdminNavId): string {

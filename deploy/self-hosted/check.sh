@@ -13,7 +13,13 @@ fi
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config >/dev/null
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T api wget -qO- http://localhost:8080/ready
+if ! READY_BODY=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T api wget -qO- http://localhost:8080/ready 2>&1); then
+  echo "API /ready failed:" >&2
+  printf '%s\n' "$READY_BODY" >&2
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" logs --tail=200 api postgres redis rabbitmq >&2 || true
+  exit 1
+fi
+printf '%s\n' "$READY_BODY"
 echo
 
 RUNNING_SERVICES=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps --status running --services)
