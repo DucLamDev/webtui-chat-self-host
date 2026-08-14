@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createJitsiMeetingController,
+  ensureJitsiIframePermissions,
   JITSI_LEAVE_EVENTS,
   type JitsiExternalAPIInstance
 } from "../../apps/web/src/features/chat/components/jitsi-meeting-controller";
@@ -47,5 +48,31 @@ describe("Jitsi meeting controller", () => {
 
     expect(api.removeListener).toHaveBeenCalledTimes(JITSI_LEAVE_EVENTS.length);
     expect(api.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("grants iframe permissions needed by Jitsi media controls", () => {
+    const iframe = {
+      allowFullscreen: false,
+      setAttribute: vi.fn()
+    } as unknown as HTMLIFrameElement;
+    const parentNode = {
+      querySelector: vi.fn(() => iframe)
+    } as unknown as HTMLElement;
+
+    ensureJitsiIframePermissions(parentNode);
+
+    expect(iframe.setAttribute).toHaveBeenCalledWith(
+      "allow",
+      expect.stringContaining("microphone")
+    );
+    expect(iframe.setAttribute).toHaveBeenCalledWith(
+      "allow",
+      expect.stringContaining("camera")
+    );
+    expect(iframe.setAttribute).toHaveBeenCalledWith(
+      "allow",
+      expect.stringContaining("display-capture")
+    );
+    expect(iframe.allowFullscreen).toBe(true);
   });
 });

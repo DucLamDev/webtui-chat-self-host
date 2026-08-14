@@ -15,6 +15,7 @@ export {
   CircleHelp,
   Clock3,
   Cloud,
+  Copy,
   Database,
   Download,
   Edit3,

@@ -26,7 +26,12 @@ export type FileVersion = {
   id: Id;
   file_id: Id;
   version?: number;
+  version_number?: number;
+  mime_type?: string;
+  byte_size?: number;
   size?: number;
+  checksum_sha256?: string | null;
+  created_by?: Id | null;
   created_at?: ISODateTime;
 };
 

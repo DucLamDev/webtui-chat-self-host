@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   createJitsiMeetingController,
+  ensureJitsiIframePermissions,
   type JitsiExternalAPIInstance,
   type JitsiMeetingController
 } from "./jitsi-meeting-controller";
@@ -97,13 +98,17 @@ export const JitsiMeeting = forwardRef<JitsiMeetingHandle, {
           height: "100%",
           interfaceConfigOverwrite: { TILE_VIEW_MAX_COLUMNS: 5 },
           onload: () => {
-            if (!cancelled) setStatus("ready");
+            if (!cancelled) {
+              ensureJitsiIframePermissions(parentNode);
+              setStatus("ready");
+            }
           },
           parentNode,
           roomName: roomKey,
           userInfo: { displayName },
           width: "100%"
         });
+        ensureJitsiIframePermissions(parentNode, api);
         controller = createJitsiMeetingController(api, () => onCloseRef.current());
         controllerRef.current = controller;
       })

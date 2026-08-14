@@ -529,6 +529,7 @@ export function TalkCollaborationHub({
             rolesQuery.data?.find((role) => role.user_id === currentUser.id)?.role
               ?? settings.default_participant_role
           }
+          roomMode={settings.room_mode}
           roomKey={meetingRoomKey}
           videoEnabled={settings.guest_camera_enabled || settings.room_mode === "internal"}
         />
@@ -1577,6 +1578,7 @@ function JitsiMeetingOverlay({
   microphoneEnabled,
   onClose,
   participantRole,
+  roomMode,
   roomKey,
   videoEnabled
 }: {
@@ -1586,11 +1588,12 @@ function JitsiMeetingOverlay({
   microphoneEnabled: boolean;
   onClose: () => void;
   participantRole: CollaborationParticipantRole;
+  roomMode: CollaborationRoomMode;
   roomKey: string;
   videoEnabled: boolean;
 }) {
   const baseUrl = meetingBaseUrl?.trim() || jitsiBaseUrl();
-  const canPresent = participantRole !== "listener";
+  const canPresent = roomMode === "internal" || participantRole !== "listener";
   const meetingRef = useRef<JitsiMeetingHandle>(null);
   const toolbarButtons = useMemo(
     () => jitsiToolbarButtons(canPresent, !chatLocked),
@@ -1665,6 +1668,7 @@ function jitsiToolbarButtons(canPresent: boolean, chatEnabled: boolean) {
   return [
     ...(canPresent ? ["microphone", "camera", "desktop", "select-background"] : []),
     ...(chatEnabled ? ["chat"] : []),
+    ...(chatEnabled ? ["participants-pane"] : []),
     "raisehand",
     "tileview",
     "fullscreen",

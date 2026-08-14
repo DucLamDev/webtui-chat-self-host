@@ -165,7 +165,7 @@ export function createFilesClient(http: HttpClient) {
       );
       return collectionFrom<FileVersion>(data, "versions");
     },
-    createVersion(workspaceId: string, fileId: string, input: UploadFileInput) {
+    async createVersion(workspaceId: string, fileId: string, input: UploadFileInput) {
       const form = new FormData();
       form.append("file", input.file);
 
@@ -173,10 +173,11 @@ export function createFilesClient(http: HttpClient) {
         form.append("metadata", JSON.stringify(input.metadata));
       }
 
-      return http.post<FileVersion>(
+      const data = await http.post<unknown>(
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(fileId)}/versions`,
         form
       );
+      return itemFrom<FileVersion>(data, "version") ?? (data as FileVersion);
     },
     async attachments(workspaceId: string, channelId: string, messageId: string) {
       const data = await http.get<unknown>(

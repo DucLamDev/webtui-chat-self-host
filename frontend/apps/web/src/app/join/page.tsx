@@ -323,6 +323,7 @@ function PublicMeetingRoom({
     () => [
         ...(roomMode === "webinar" ? [] : ["microphone", "camera", "select-background"]),
         ...(!chatLocked ? ["chat"] : []),
+        ...(!chatLocked ? ["participants-pane"] : []),
         "raisehand",
         "tileview",
         "fullscreen",

@@ -31,7 +31,9 @@ import {
   ClipboardCheck,
   Clock3,
   Cloud,
+  Copy,
   Database,
+  Download,
   Edit3,
   FileText,
   Frown,
@@ -332,6 +334,63 @@ const uploadAcceptList = [
   "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 ];
 const imageUploadAcceptList = ["image/*"];
+const maxLiveEditableFileBytes = 2 * 1024 * 1024;
+const liveEditableMimeTypes = new Set([
+  "application/json",
+  "application/javascript",
+  "application/typescript",
+  "application/xml",
+  "application/x-httpd-php",
+  "application/x-sh",
+  "application/yaml",
+  "text/csv",
+  "text/html",
+  "text/javascript",
+  "text/markdown",
+  "text/plain",
+  "text/xml",
+  "text/x-dart",
+  "text/x-go",
+  "text/x-java-source",
+  "text/x-python",
+  "text/x-shellscript",
+  "text/yaml"
+]);
+const liveEditableExtensions = new Set([
+  "c",
+  "conf",
+  "cpp",
+  "cs",
+  "css",
+  "csv",
+  "dart",
+  "env",
+  "go",
+  "h",
+  "html",
+  "java",
+  "js",
+  "json",
+  "jsx",
+  "kt",
+  "log",
+  "md",
+  "php",
+  "properties",
+  "py",
+  "rb",
+  "rs",
+  "sh",
+  "sql",
+  "svg",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "xml",
+  "yaml",
+  "yml"
+]);
 
 type NotificationMode = "all" | "mentions" | "muted";
 
@@ -611,6 +670,7 @@ export function ChatWorkspace() {
   const [isRecordingPaused, setIsRecordingPaused] = useState(false);
   const [isComposerDragActive, setIsComposerDragActive] = useState(false);
   const [previewedImage, setPreviewedImage] = useState<{ attachment: MessageAttachmentItem; source: string } | null>(null);
+  const [liveEditingFile, setLiveEditingFile] = useState<FileItem | null>(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorderHandle | null>(null);
   const recordingCancelledRef = useRef(false);
@@ -2348,6 +2408,63 @@ export function ChatWorkspace() {
     setPreviewedImage({ attachment, source: resolvedSource });
   }
 
+  async function handleCopyMessage(message: ChatMessage) {
+    const text = messageCopyText(message);
+    if (!text) {
+      setToast("Tin nhắn này không có nội dung để copy.");
+      return;
+    }
+
+    try {
+      await getPlatformServices().clipboard.writeText(text);
+      setToast("Đã copy tin nhắn.", "success");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Không copy được tin nhắn.");
+    }
+  }
+
+  function handleEditFile(file: FileItem) {
+    if (!data.workspaceId) {
+      setToast("Chưa có workspace để sửa file.");
+      return;
+    }
+    if (!isLiveEditableFile(file)) {
+      setToast("Chỉ hỗ trợ sửa trực tiếp file text, markdown, JSON, CSV và mã nguồn.");
+      return;
+    }
+    setLiveEditingFile(file);
+  }
+
+  function handleEditAttachment(attachment: MessageAttachmentItem) {
+    handleEditFile(fileItemFromAttachment(attachment));
+  }
+
+  async function handleSaveLiveFile(file: FileItem, content: string) {
+    if (!data.workspaceId) {
+      throw new Error("Chưa có workspace để lưu file.");
+    }
+    const mimeType = liveEditableMimeType(file);
+    const editedFile = new File([content], file.name, {
+      lastModified: Date.now(),
+      type: mimeType
+    });
+    await api.files.createVersion(data.workspaceId, file.id, {
+      file: editedFile,
+      metadata: { edited_from: "web_live_editor" }
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.files.all(data.workspaceId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.files.detail(data.workspaceId, file.id) }),
+      data.selectedChannelId
+        ? queryClient.invalidateQueries({ queryKey: queryKeys.files.channelMedia(data.workspaceId, data.selectedChannelId) })
+        : Promise.resolve(),
+      data.selectedChannelId
+        ? queryClient.invalidateQueries({ queryKey: queryKeys.messages.channel(data.workspaceId, data.selectedChannelId) })
+        : Promise.resolve()
+    ]);
+    setToast("Đã lưu version mới của file.", "success");
+  }
+
   function handlePreviewMediaItem(item: MediaItem, source?: string) {
     handlePreviewAttachment(item.attachment, source);
   }
@@ -3048,6 +3165,7 @@ export function ChatWorkspace() {
               })
             }
             onDownloadFile={handleDownload}
+            onEditFile={handleEditFile}
             onInviteChannelMember={(channelId, userId) =>
               data.inviteChannelMemberMutation.mutate({ channelId, userId }, {
                 onError: (error) => setToast(error instanceof Error ? error.message : "Không mời được thành viên."),
@@ -3237,8 +3355,10 @@ export function ChatWorkspace() {
                   setEditingMessageId(null);
                 }}
                 onChangeEditingBody={setEditingBody}
+                onCopyMessage={(message) => void handleCopyMessage(message)}
                 onDeleteMessage={handleDeleteMessage}
                 onDownloadAttachment={handleDownloadAttachment}
+                onEditAttachment={handleEditAttachment}
                 onForwardMessage={setForwardingMessageId}
                 onPreviewAttachment={handlePreviewAttachment}
                 onResolveAttachment={data.downloadAttachment}
@@ -3692,6 +3812,16 @@ export function ChatWorkspace() {
         />
       ) : null}
 
+      {liveEditingFile && data.workspaceId ? (
+        <LiveFileEditorDialog
+          file={liveEditingFile}
+          onClose={() => setLiveEditingFile(null)}
+          onDownload={() => handleDownload(liveEditingFile)}
+          onSave={handleSaveLiveFile}
+          workspaceId={data.workspaceId}
+        />
+      ) : null}
+
       {messageNotice ? (
         <MessageNotificationToast
           notification={messageNotice}
@@ -3831,6 +3961,7 @@ function WorkspaceSectionPage({
   onCreateDepartment,
   onDesktopUpdateInstall,
   onDownloadFile,
+  onEditFile,
   onInviteChannelMember,
   onRejectChannelJoin,
   onRequestChannelJoin,
@@ -3881,6 +4012,7 @@ function WorkspaceSectionPage({
   onCreateDepartment: (input: CreateDepartmentPayload) => void;
   onDesktopUpdateInstall: () => void;
   onDownloadFile: (file: FileItem) => void;
+  onEditFile: (file: FileItem) => void;
   onInviteChannelMember: (channelId: string, userId: string) => void;
   onRejectChannelJoin: (channelId: string, userId: string) => void;
   onRequestChannelJoin: (channelId: string) => void;
@@ -3947,7 +4079,7 @@ function WorkspaceSectionPage({
   }
 
   if (activeRailItem === "files") {
-    return <FilesPage files={files} isLoading={isLoadingFiles} onDownloadFile={onDownloadFile} />;
+    return <FilesPage files={files} isLoading={isLoadingFiles} onDownloadFile={onDownloadFile} onEditFile={onEditFile} />;
   }
 
   if (activeRailItem === "tickets") {
@@ -5141,11 +5273,13 @@ function cleanTicketDate(value?: string | null) {
 function FilesPage({
   files,
   isLoading,
-  onDownloadFile
+  onDownloadFile,
+  onEditFile
 }: {
   files: FileItem[];
   isLoading: boolean;
   onDownloadFile: (file: FileItem) => void;
+  onEditFile: (file: FileItem) => void;
 }) {
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase("vi");
@@ -5197,8 +5331,13 @@ function FilesPage({
                   <td className="file-table__updated-cell" data-label="Cập nhật">{file.updatedAt}</td>
                   <td className="file-table__actions-cell" data-label="Thao tác">
                     <div className="workspace-data-table__actions">
+                      {isLiveEditableFile(file) ? (
+                        <Button onClick={() => onEditFile(file)} size="sm" variant="secondary">
+                          <Edit3 size={14} /> Sửa live
+                        </Button>
+                      ) : null}
                       <Button onClick={() => onDownloadFile(file)} size="sm" variant="secondary">
-                        Tải xuống
+                        <Download size={14} /> Tải xuống
                       </Button>
                     </div>
                   </td>
@@ -8251,6 +8390,145 @@ function ImagePreviewDialog({
   );
 }
 
+function LiveFileEditorDialog({
+  file,
+  onClose,
+  onDownload,
+  onSave,
+  workspaceId
+}: {
+  file: FileItem;
+  onClose: () => void;
+  onDownload: () => void;
+  onSave: (file: FileItem, content: string) => Promise<void>;
+  workspaceId: string;
+}) {
+  const [content, setContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [versions, setVersions] = useState<Array<{ created_at?: string; id: string; version?: number; version_number?: number }>>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const hasChanges = content !== savedContent;
+  const saveMutation = useMutation({
+    mutationFn: () => onSave(file, content),
+    onSuccess: async () => {
+      setSavedContent(content);
+      setVersions(await api.files.versions(workspaceId, file.id).catch(() => []));
+    }
+  });
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  useEffect(() => {
+    let disposed = false;
+    setIsLoading(true);
+    setError(null);
+    setContent("");
+    setSavedContent("");
+    void Promise.all([
+      api.files.download(workspaceId, file.id),
+      api.files.versions(workspaceId, file.id).catch(() => [])
+    ])
+      .then(async ([blob, fileVersions]) => {
+        if (disposed) {
+          return;
+        }
+        if (blob.size > maxLiveEditableFileBytes) {
+          throw new Error(`File lớn hơn ${formatFileSize(maxLiveEditableFileBytes)}, vui lòng tải xuống để sửa bằng ứng dụng chuyên dụng.`);
+        }
+        const text = await blob.text();
+        if (disposed) {
+          return;
+        }
+        setContent(text);
+        setSavedContent(text);
+        setVersions(fileVersions);
+      })
+      .catch((loadError) => {
+        if (!disposed) {
+          setError(loadError instanceof Error ? loadError.message : "Không mở được file để sửa.");
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [file.id, workspaceId]);
+
+  return (
+    <div className="live-file-editor-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} role="presentation">
+      <section aria-label={`Sửa live ${file.name}`} aria-modal="true" className="live-file-editor-dialog" role="dialog">
+        <header>
+          <div>
+            <small>Sửa file live</small>
+            <strong>{file.name}</strong>
+            <span>{file.mimeType || "text/plain"} · {file.size}</span>
+          </div>
+          <div>
+            <Button onClick={onDownload} size="sm" type="button" variant="secondary">
+              <Download size={15} /> Tải xuống
+            </Button>
+            <Button disabled={isLoading || !hasChanges || saveMutation.isPending} onClick={() => saveMutation.mutate()} size="sm" type="button">
+              <Cloud size={15} /> {saveMutation.isPending ? "Đang lưu..." : "Lưu version"}
+            </Button>
+            <Button aria-label="Đóng sửa file live" onClick={onClose} type="button" variant="icon">
+              <X size={19} />
+            </Button>
+          </div>
+        </header>
+        <div className="live-file-editor-dialog__body">
+          <aside>
+            <strong>Versions</strong>
+            {versions.length ? (
+              <ul>
+                {versions.slice(0, 6).map((version) => (
+                  <li key={version.id}>
+                    <span>v{version.version_number ?? version.version ?? "?"}</span>
+                    <small>{formatLiveFileVersionTime(version.created_at)}</small>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <small>Chưa có version trước đó.</small>
+            )}
+            {hasChanges ? <small className="live-file-editor-dialog__dirty">Có thay đổi chưa lưu.</small> : <small>Đã đồng bộ.</small>}
+          </aside>
+          <div className="live-file-editor-dialog__editor">
+            {isLoading ? (
+              <PanelSkeleton />
+            ) : error ? (
+              <ErrorState description={error} title="Không mở được file" />
+            ) : (
+              <textarea
+                aria-label={`Nội dung ${file.name}`}
+                autoFocus
+                onChange={(event) => setContent(event.target.value)}
+                spellCheck={false}
+                value={content}
+              />
+            )}
+            {saveMutation.isError ? (
+              <p role="alert">{saveMutation.error instanceof Error ? saveMutation.error.message : "Không lưu được file."}</p>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function MessageTimeline({
   currentUserId,
   editingBody,
@@ -8263,8 +8541,10 @@ function MessageTimeline({
   onCancelEdit,
   onChangeEditingBody,
   onConvertMessageToTask,
+  onCopyMessage,
   onDeleteMessage,
   onDownloadAttachment,
+  onEditAttachment,
   onForwardMessage,
   onPreviewAttachment,
   onResolveAttachment,
@@ -8301,8 +8581,10 @@ function MessageTimeline({
   onCancelEdit: () => void;
   onChangeEditingBody: (value: string) => void;
   onConvertMessageToTask: (message: ChatMessage) => void;
+  onCopyMessage: (message: ChatMessage) => void;
   onDeleteMessage: (message: ChatMessage) => void;
   onDownloadAttachment: (attachment: MessageAttachmentItem) => void;
+  onEditAttachment: (attachment: MessageAttachmentItem) => void;
   onForwardMessage: (messageId: string) => void;
   onPreviewAttachment: (attachment: MessageAttachmentItem, source?: string) => void;
   onResolveAttachment: (fileId: string) => Promise<Blob>;
@@ -8618,6 +8900,21 @@ function MessageTimeline({
                 {actionMenuMessageId === message.id ? (
                   <div aria-label="Các thao tác với tin nhắn" className="message-actions__menu" role="menu">
                     {!message.isDeleted ? (
+                      <Tooltip label="Copy tin nhắn">
+                        <button
+                          aria-label="Copy tin nhắn"
+                          onClick={() => {
+                            setActionMenuMessageId(null);
+                            onCopyMessage(message);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          <Copy size={15} />
+                        </button>
+                      </Tooltip>
+                    ) : null}
+                    {!message.isDeleted ? (
                       <Tooltip label={pinnedMessageIds.has(message.id) ? "Bỏ ghim tin nhắn" : "Ghim tin nhắn"}>
                         <button
                           aria-label={pinnedMessageIds.has(message.id) ? "Bỏ ghim tin nhắn" : "Ghim tin nhắn"}
@@ -8827,6 +9124,7 @@ function MessageTimeline({
                       attachment={attachment}
                       key={attachment.id}
                       onDownload={onDownloadAttachment}
+                      onEdit={onEditAttachment}
                     />
                   )
                 )}
@@ -9617,6 +9915,21 @@ function replyPreviewBody(message: ChatMessage): string {
   return "Tin nhắn";
 }
 
+function messageCopyText(message: ChatMessage): string {
+  if (message.isDeleted) {
+    return "";
+  }
+  const lines = [stripDisplayedQRURL(message.body).trim()].filter(Boolean);
+  const attachments = message.attachments ?? [];
+  if (attachments.length) {
+    lines.push(...attachments.map((attachment) => attachment.name));
+  }
+  if (!lines.length && message.callEvent) {
+    lines.push(callMessageTitle(message.callEvent));
+  }
+  return lines.join("\n");
+}
+
 function ReactionGlyph({ emoji, size = 15 }: { emoji: string; size?: number }) {
   const reaction = quickReactions.find((item) => item.emoji === emoji);
   if (!reaction) {
@@ -9651,7 +9964,7 @@ function MessageBody({ body }: { body: string }) {
 }
 
 function renderInlineMarkdown(value: string): ReactNode[] {
-  const pattern = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/gi;
+  const pattern = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<]+)/gi;
   const nodes: ReactNode[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
@@ -9667,7 +9980,15 @@ function renderInlineMarkdown(value: string): ReactNode[] {
       nodes.push(<code key={`${match.index}-${token}`}>{token.slice(1, -1)}</code>);
     } else {
       const link = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/i.exec(token);
-      nodes.push(link ? <a href={link[2]} key={`${match.index}-${token}`} rel="noreferrer noopener" target="_blank">{link[1]}</a> : token);
+      if (link) {
+        nodes.push(<a href={link[2]} key={`${match.index}-${token}`} rel="noreferrer noopener" target="_blank">{link[1]}</a>);
+      } else {
+        const [url, trailing] = splitTrailingLinkPunctuation(token);
+        nodes.push(<a href={url} key={`${match.index}-${token}`} rel="noreferrer noopener" target="_blank">{url}</a>);
+        if (trailing) {
+          nodes.push(trailing);
+        }
+      }
     }
     cursor = match.index + token.length;
   }
@@ -9675,6 +9996,80 @@ function renderInlineMarkdown(value: string): ReactNode[] {
     nodes.push(value.slice(cursor));
   }
   return nodes;
+}
+
+function splitTrailingLinkPunctuation(value: string): [string, string] {
+  let url = value;
+  let trailing = "";
+  while (/[.,!?;:]$/.test(url)) {
+    trailing = url.slice(-1) + trailing;
+    url = url.slice(0, -1);
+  }
+  return [url, trailing];
+}
+
+function fileItemFromAttachment(attachment: MessageAttachmentItem): FileItem {
+  return {
+    checksumSha256: attachment.checksumSha256,
+    id: attachment.fileId,
+    mimeType: attachment.mimeType,
+    name: attachment.name,
+    size: attachment.size ?? "",
+    status: attachment.status,
+    tone: attachment.tone,
+    updatedAt: ""
+  };
+}
+
+function isLiveEditableFile(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): boolean {
+  const mimeType = file.mimeType?.trim().toLowerCase() ?? "";
+  if (mimeType.startsWith("text/") || liveEditableMimeTypes.has(mimeType)) {
+    return true;
+  }
+  const extension = fileExtension(file.name);
+  return extension ? liveEditableExtensions.has(extension) : false;
+}
+
+function liveEditableMimeType(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): string {
+  const mimeType = file.mimeType?.trim();
+  if (mimeType) {
+    return mimeType;
+  }
+  const extension = fileExtension(file.name);
+  switch (extension) {
+    case "json":
+      return "application/json";
+    case "csv":
+      return "text/csv";
+    case "html":
+      return "text/html";
+    case "md":
+      return "text/markdown";
+    case "xml":
+    case "svg":
+      return "text/xml";
+    case "yaml":
+    case "yml":
+      return "text/yaml";
+    default:
+      return "text/plain";
+  }
+}
+
+function formatLiveFileVersionTime(value?: string): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" });
+}
+
+function fileExtension(name: string): string {
+  const extension = name.trim().split(".").pop()?.toLowerCase() ?? "";
+  return extension && extension !== name.trim().toLowerCase() ? extension : "";
 }
 
 function stripCodeLanguage(block: string) {
@@ -9688,18 +10083,18 @@ function stripCodeLanguage(block: string) {
 
 function AttachmentFileCard({
   attachment,
-  onDownload
+  onDownload,
+  onEdit
 }: {
   attachment: MessageAttachmentItem;
   onDownload: (attachment: MessageAttachmentItem) => void;
+  onEdit: (attachment: MessageAttachmentItem) => void;
 }) {
+  const canEditLive = isLiveEditableFile(attachment);
   return (
-    <button
-      aria-label={`Tải xuống ${attachment.name}`}
+    <div
       className={`attachment-card attachment-file-card attachment-file-card--${attachment.tone}`}
-      onClick={() => onDownload(attachment)}
       title={attachment.name}
-      type="button"
     >
       <span className="attachment-file-card__preview" aria-hidden="true">
         <FileText size={28} />
@@ -9707,7 +10102,17 @@ function AttachmentFileCard({
       <span className="attachment-file-card__content">
         <strong className="attachment-file-card__name">{attachment.name}</strong>
       </span>
-    </button>
+      <span className="attachment-file-card__actions">
+        {canEditLive ? (
+          <button aria-label={`Sửa live ${attachment.name}`} onClick={() => onEdit(attachment)} type="button">
+            <Edit3 size={13} /> Sửa
+          </button>
+        ) : null}
+        <button aria-label={`Tải xuống ${attachment.name}`} onClick={() => onDownload(attachment)} type="button">
+          <Download size={13} /> Tải
+        </button>
+      </span>
+    </div>
   );
 }
 
