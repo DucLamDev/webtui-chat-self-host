@@ -137,6 +137,8 @@ OIDC_STATE_SECRET=$(openssl rand -hex 48)
 TURN_SHARED_SECRET=$(openssl rand -hex 48)
 JICOFO_AUTH_PASSWORD=$(openssl rand -hex 32)
 JVB_AUTH_PASSWORD=$(openssl rand -hex 32)
+ONLYOFFICE_JWT_SECRET=$(openssl rand -hex 48)
+ONLYOFFICE_SESSION_SECRET=$(openssl rand -hex 48)
 GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 24)
 
 umask 077
@@ -256,6 +258,13 @@ NEXT_PUBLIC_JITSI_BASE_URL=https://$DOMAIN:8443
 JITSI_BASE_URL=https://$DOMAIN:8443
 JICOFO_AUTH_PASSWORD=$JICOFO_AUTH_PASSWORD
 JVB_AUTH_PASSWORD=$JVB_AUTH_PASSWORD
+ONLYOFFICE_ENABLED=true
+ONLYOFFICE_PUBLIC_URL=https://$DOMAIN:8444
+ONLYOFFICE_INTERNAL_URL=http://onlyoffice-document-server
+ONLYOFFICE_API_INTERNAL_URL=http://api:8080
+ONLYOFFICE_JWT_SECRET=$ONLYOFFICE_JWT_SECRET
+ONLYOFFICE_SESSION_SECRET=$ONLYOFFICE_SESSION_SECRET
+ONLYOFFICE_IMAGE_VERSION=latest
 LETSENCRYPT_EMAIL=$EMAIL
 WORKER_CONCURRENCY=4
 MODERATION_EVIDENCE_RETENTION_DAYS=365
@@ -321,9 +330,21 @@ until curl -fsS --max-time 10 "https://$DOMAIN:8443/" >/dev/null 2>&1; do
   sleep 5
 done
 
+echo "Waiting for https://$DOMAIN:8444/healthcheck ..."
+attempt=0
+until curl -fsS --max-time 10 "https://$DOMAIN:8444/healthcheck" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 36 ]; then
+    echo "ONLYOFFICE service did not become ready. Inspect onlyoffice-document-server logs in $COMPOSE_FILE." >&2
+    exit 1
+  fi
+  sleep 5
+done
+
 echo "VPSTTT Chat is ready at https://$DOMAIN"
 echo "The bundled meeting service is ready at https://$DOMAIN:8443"
-echo "Make sure TCP 8443 and UDP 10000 are allowed by the VPS firewall for group video."
+echo "The bundled ONLYOFFICE service is ready at https://$DOMAIN:8444"
+echo "Make sure TCP 8443, TCP 8444 and UDP 10000 are allowed by the VPS firewall."
 echo "Download portal is ready at $PORTAL_ORIGIN"
 echo "Register or sign in through $PORTAL_ORIGIN with domain $DOMAIN"
 echo "The first account registered on this domain becomes workspace owner."

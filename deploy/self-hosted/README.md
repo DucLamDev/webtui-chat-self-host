@@ -31,7 +31,7 @@ theo `INSTANCE_DOMAIN` và `INSTANCE_NAME`.
 - Docker Engine và Docker Compose v2.
 - Domain/subdomain riêng, ví dụ `chat.company.com`.
 - DNS `A` của domain trỏ vào IPv4 public của VPS trước khi cài.
-- Firewall mở TCP `80`, `443`, `3478`, `8443`; UDP `443`, `3478`, `10000`, `49160-49200`.
+- Firewall mở TCP `80`, `443`, `3478`, `8443`, `8444`; UDP `443`, `3478`, `10000`, `49160-49200`.
 - Không có Nginx/Apache/Caddy khác chiếm cổng `80` hoặc `443` nếu dùng compose mặc định.
 
 ## Luồng triển khai cho customer
@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/DucLamDev/webtui-chat-self-host/mas
 Khi có release ổn định, nên thay `master` trong URL raw bằng tag release để
 bootstrap luôn dùng đúng phiên bản đã kiểm thử.
 Bootstrap sẽ mở các port cần thiết: `22`, `80`, `443`, `3478/tcp`,
-`8443/tcp`, `3478/udp`, `443/udp`, `10000/udp` và `49160-49200/udp`.
+`8443/tcp`, `8444/tcp`, `3478/udp`, `443/udp`, `10000/udp` và `49160-49200/udp`.
 
 Ví dụ trên VPS:
 
@@ -325,6 +325,7 @@ Stack mặc định đã gồm Jitsi Web, Prosody, Jicofo và Jitsi Videobridge.
 tự tạo mật khẩu nội bộ và phục vụ cuộc họp tại cùng domain qua cổng
 `https://chat.company.com:8443`; không cần thêm DNS hay tự điền URL. Firewall VPS
 cần cho phép TCP `8443` và UDP `10000` để media nhiều người đi qua Videobridge.
+Sửa Word/Excel bằng ONLYOFFICE cần thêm TCP `8444`.
 
 Nếu tổ chức chủ động dùng một cụm Jitsi khác, có thể ghi đè trong `.env`:
 
@@ -341,6 +342,33 @@ lobby; xoay/thu hồi link cũng xoay room key.
 Room key ngẫu nhiên của ứng dụng không được trả cho khách trước khi qua mật khẩu
 và phòng chờ. Ghi hình/livestream vẫn cần thêm Jibri và chính sách
 consent/retention riêng.
+
+## Sửa Word/Excel nội bộ bằng ONLYOFFICE Community
+
+Stack có sẵn `onlyoffice/documentserver` để mở và sửa trực tiếp file Word/Excel
+trong chat. Mặc định tính năng tắt để tránh khởi động với secret mẫu; bật trong
+`.env` như sau:
+
+```dotenv
+ONLYOFFICE_ENABLED=true
+ONLYOFFICE_PUBLIC_URL=https://chat.company.com:8444
+ONLYOFFICE_INTERNAL_URL=http://onlyoffice-document-server
+ONLYOFFICE_API_INTERNAL_URL=http://api:8080
+ONLYOFFICE_JWT_SECRET=replace-with-at-least-32-random-characters
+ONLYOFFICE_SESSION_SECRET=replace-with-at-least-32-random-characters
+```
+
+Sau đó mở firewall TCP `8444` và restart stack:
+
+```sh
+cd deploy/self-hosted
+docker compose --env-file .env -f compose.yml up -d onlyoffice-document-server api web caddy
+```
+
+Web client sẽ ưu tiên ONLYOFFICE cho `.doc`, `.docx`, `.xls`, `.xlsx`; nếu tính
+năng chưa bật thì quay về editor text/CSV/MD hiện có. API ký URL tải file và
+callback bằng token ngắn hạn, còn Document Server xác thực cấu hình editor bằng
+JWT chung `ONLYOFFICE_JWT_SECRET`.
 
 ## Vận hành hằng ngày
 

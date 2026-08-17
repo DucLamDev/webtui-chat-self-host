@@ -175,6 +175,27 @@ services:
       jitsi-jvb:
         condition: service_started
 
+  onlyoffice-document-server:
+    image: onlyoffice/documentserver:${ONLYOFFICE_IMAGE_VERSION:-latest}
+    restart: unless-stopped
+    expose: ["80"]
+    environment:
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-local_only_onlyoffice_secret_do_not_use_in_production}
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_logs:/var/log/onlyoffice
+      - onlyoffice_lib:/var/lib/onlyoffice
+      - onlyoffice_db:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/healthcheck || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+
   ollama:
     image: ollama/ollama:latest
     profiles: ["ai"]
@@ -352,6 +373,12 @@ services:
       PUSH_RELAY_TOKEN: ""
       PUSH_RELAY_INSTANCE_ID: ""
       PUSH_RELAY_PUBLISHERS: ""
+      ONLYOFFICE_ENABLED: ${ONLYOFFICE_ENABLED:-false}
+      ONLYOFFICE_PUBLIC_URL: ${ONLYOFFICE_PUBLIC_URL:-}
+      ONLYOFFICE_INTERNAL_URL: ${ONLYOFFICE_INTERNAL_URL:-http://onlyoffice-document-server}
+      ONLYOFFICE_API_INTERNAL_URL: ${ONLYOFFICE_API_INTERNAL_URL:-http://api:8080}
+      ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-}
+      ONLYOFFICE_SESSION_SECRET: ${ONLYOFFICE_SESSION_SECRET:-}
     volumes:
       - storage_data:/var/lib/vpsttt-chat/storage
       - backup_data:/var/lib/vpsttt-chat/backups
@@ -590,6 +617,7 @@ services:
       - "443:443"
       - "443:443/udp"
       - "8443:8443"
+      - "8444:8444"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - storage_data:/srv/vpsttt-storage:ro
@@ -605,6 +633,8 @@ services:
         condition: service_started
       jitsi-web:
         condition: service_started
+      onlyoffice-document-server:
+        condition: service_healthy
 
   coturn:
     image: coturn/coturn:4.14.0-alpine
@@ -681,3 +711,11 @@ volumes:
     name: vpsttt_chat_jitsi_jicofo_config
   jitsi_jvb_config:
     name: vpsttt_chat_jitsi_jvb_config
+  onlyoffice_data:
+    name: vpsttt_chat_onlyoffice_data
+  onlyoffice_logs:
+    name: vpsttt_chat_onlyoffice_logs
+  onlyoffice_lib:
+    name: vpsttt_chat_onlyoffice_lib
+  onlyoffice_db:
+    name: vpsttt_chat_onlyoffice_db

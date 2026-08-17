@@ -86,6 +86,15 @@ export type ResumableUploadSession = {
   updated_at: ISODateTime;
 };
 
+export type OnlyOfficeEditorSession = {
+  enabled: boolean;
+  session_id: string;
+  document_server_url: string;
+  script_url: string;
+  config: JsonObject;
+  expires_at: ISODateTime;
+};
+
 export type CreateResumableUploadInput = {
   channel_id?: Id;
   message_id?: Id;

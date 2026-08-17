@@ -373,6 +373,14 @@ func (a *API) registerAPIV1() {
 		filesStore := filesstorage.NewStore(a.resources.Storage)
 		filesService := filesapp.NewService(filesRepo, filesStore, rbacService, a.cfg.Storage.Provider, a.cfg.Storage.Bucket)
 		filesService.SetBlockChecker(moderationService)
+		filesService.SetOnlyOfficeOptions(filesapp.OnlyOfficeOptions{
+			Enabled:       a.cfg.Office.OnlyOfficeEnabled,
+			PublicURL:     a.cfg.Office.OnlyOfficePublicURL,
+			InternalURL:   a.cfg.Office.OnlyOfficeInternalURL,
+			APIBaseURL:    a.cfg.Office.OnlyOfficeAPIInternalURL,
+			JWTSecret:     a.cfg.Office.OnlyOfficeJWTSecret,
+			SessionSecret: a.cfg.Office.OnlyOfficeSessionSecret,
+		})
 		if a.resources.TenantStorage != nil {
 			filesService.SetStorageResolver(filesstorage.NewResolver(a.resources.TenantStorage))
 		}

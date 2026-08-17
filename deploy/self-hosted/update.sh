@@ -196,8 +196,25 @@ fi
 if [ -z "$(read_env_value NEXT_PUBLIC_JITSI_BASE_URL)" ]; then
   write_env_value NEXT_PUBLIC_JITSI_BASE_URL "$MEETING_URL"
 fi
+if [ -z "$(read_env_value ONLYOFFICE_ENABLED)" ]; then
+  write_env_value ONLYOFFICE_ENABLED "false"
+fi
+if [ -z "$(read_env_value ONLYOFFICE_PUBLIC_URL)" ]; then
+  write_env_value ONLYOFFICE_PUBLIC_URL "https://$INSTANCE_DOMAIN:8444"
+fi
+if [ -z "$(read_env_value ONLYOFFICE_INTERNAL_URL)" ]; then
+  write_env_value ONLYOFFICE_INTERNAL_URL "http://onlyoffice-document-server"
+fi
+if [ -z "$(read_env_value ONLYOFFICE_API_INTERNAL_URL)" ]; then
+  write_env_value ONLYOFFICE_API_INTERNAL_URL "http://api:8080"
+fi
+if [ -z "$(read_env_value ONLYOFFICE_IMAGE_VERSION)" ]; then
+  write_env_value ONLYOFFICE_IMAGE_VERSION "latest"
+fi
 ensure_secret JICOFO_AUTH_PASSWORD
 ensure_secret JVB_AUTH_PASSWORD
+ensure_secret ONLYOFFICE_JWT_SECRET
+ensure_secret ONLYOFFICE_SESSION_SECRET
 # Older installations may predate this key or still contain the documented
 # placeholder. Generate it before migrations so a hidden, unused Bot module
 # cannot prevent the rest of the application from being updated.
@@ -205,16 +222,17 @@ ensure_secret BOT_AI_SECRET_KEY
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   if [ "$(id -u)" -eq 0 ]; then
     ufw allow 8443/tcp >/dev/null
+    ufw allow 8444/tcp >/dev/null
     ufw allow 10000/udp >/dev/null
   else
-    echo "Warning: allow TCP 8443 and UDP 10000 in the VPS firewall for group video." >&2
+    echo "Warning: allow TCP 8443, TCP 8444 and UDP 10000 in the VPS firewall." >&2
   fi
 fi
 
 # The customer VPS may only contain this self-host repository. Build the
 # deployable services explicitly so an optional sibling portal source does not
 # block updates to the chat application.
-docker compose --env-file .env -f compose.yml pull caddy jitsi-prosody jitsi-jicofo jitsi-jvb jitsi-web
+docker compose --env-file .env -f compose.yml pull caddy jitsi-prosody jitsi-jicofo jitsi-jvb jitsi-web onlyoffice-document-server
 docker compose --env-file .env -f compose.yml build --pull api worker web admin
 if [ "$PUSH_RELAY_ENABLED" = "true" ]; then
   docker compose --env-file .env -f compose.yml --profile push-relay build --pull push-relay
@@ -234,6 +252,7 @@ docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate a
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-prosody
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-jicofo jitsi-jvb
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-web
+docker compose --env-file .env -f compose.yml up -d --no-deps onlyoffice-document-server
 docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate caddy
 if [ "$PUSH_RELAY_ENABLED" = "true" ]; then
   docker compose --env-file .env -f compose.yml --profile push-relay up -d --no-deps --force-recreate push-relay

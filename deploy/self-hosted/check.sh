@@ -36,6 +36,7 @@ PORTAL_DOMAIN=$(sed -n 's/^PORTAL_DOMAIN=//p' "$ENV_FILE" | tail -n 1)
 PORTAL_ORIGIN=$(sed -n 's/^PORTAL_ORIGIN=//p' "$ENV_FILE" | tail -n 1)
 WEBTUI_APP_LINK_HOST=$(sed -n 's/^WEBTUI_APP_LINK_HOST=//p' "$ENV_FILE" | tail -n 1)
 ENABLE_IOS_ASSOCIATION=$(sed -n 's/^ENABLE_IOS_ASSOCIATION=//p' "$ENV_FILE" | tail -n 1)
+ONLYOFFICE_ENABLED=$(sed -n 's/^ONLYOFFICE_ENABLED=//p' "$ENV_FILE" | tail -n 1)
 TERMS_VERSION=$(sed -n 's/^TERMS_VERSION=//p' "$ENV_FILE" | tail -n 1)
 PRIVACY_POLICY_VERSION=$(sed -n 's/^PRIVACY_POLICY_VERSION=//p' "$ENV_FILE" | tail -n 1)
 NEXT_PUBLIC_TERMS_URL=$(sed -n 's/^NEXT_PUBLIC_TERMS_URL=//p' "$ENV_FILE" | tail -n 1)
@@ -59,11 +60,30 @@ case "$ENABLE_IOS_ASSOCIATION" in
     exit 1
     ;;
 esac
+ONLYOFFICE_ENABLED=$(printf '%s' "${ONLYOFFICE_ENABLED:-false}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+case "$ONLYOFFICE_ENABLED" in
+  1|true|yes|on) ONLYOFFICE_ENABLED=true ;;
+  ""|0|false|no|off) ONLYOFFICE_ENABLED=false ;;
+  *)
+    echo "ONLYOFFICE_ENABLED must be true or false." >&2
+    exit 1
+    ;;
+esac
 if [ -n "$INSTANCE_DOMAIN" ] && command -v curl >/dev/null 2>&1; then
   curl -fsS --max-time 15 "https://$INSTANCE_DOMAIN/ready" >/dev/null
   echo "Public HTTPS: OK (https://$INSTANCE_DOMAIN/ready)"
   curl -fsS --max-time 15 "https://$INSTANCE_DOMAIN:8443/" >/dev/null
   echo "Group meetings: OK (https://$INSTANCE_DOMAIN:8443/)"
+  if [ "$ONLYOFFICE_ENABLED" = "true" ]; then
+    if ! printf '%s\n' "$RUNNING_SERVICES" | grep -qx onlyoffice-document-server; then
+      echo "ONLYOFFICE is enabled but onlyoffice-document-server is not running." >&2
+      exit 1
+    fi
+    curl -fsS --max-time 15 "https://$INSTANCE_DOMAIN:8444/healthcheck" >/dev/null
+    echo "ONLYOFFICE: OK (https://$INSTANCE_DOMAIN:8444/healthcheck)"
+  else
+    echo "ONLYOFFICE: disabled"
+  fi
 fi
 
 if [ "$INSTANCE_DOMAIN" = "$WEBTUI_APP_LINK_HOST" ] && command -v curl >/dev/null 2>&1; then

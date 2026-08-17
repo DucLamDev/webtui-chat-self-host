@@ -5753,6 +5753,19 @@
   color: #b45309;
 }
 
+.live-file-editor-dialog__office-badge {
+  align-items: center;
+  background: #eaf3ff;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  color: #075dc8;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  height: 34px;
+  padding: 0 12px;
+}
+
 .live-file-editor-dialog__editor {
   display: grid;
   gap: 8px;
@@ -5783,6 +5796,26 @@
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
   font-size: 14px !important;
   line-height: 1.7 !important;
+}
+
+.onlyoffice-editor-shell {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.onlyoffice-editor-frame {
+  background: var(--surface-muted);
+  min-height: 0;
+}
+
+.onlyoffice-editor-frame,
+.onlyoffice-editor-frame iframe {
+  height: 100%;
+  width: 100%;
 }
 
 .live-excel-editor {

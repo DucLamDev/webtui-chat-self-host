@@ -61,6 +61,7 @@ type Config struct {
 	Legal           LegalConfig
 	Moderation      ModerationConfig
 	Order           OrderConfig
+	Office          OfficeConfig
 }
 
 type AppConfig struct {
@@ -256,6 +257,15 @@ type OrderConfig struct {
 	Timeout        time.Duration
 }
 
+type OfficeConfig struct {
+	OnlyOfficeEnabled        bool
+	OnlyOfficePublicURL      string
+	OnlyOfficeInternalURL    string
+	OnlyOfficeAPIInternalURL string
+	OnlyOfficeJWTSecret      string
+	OnlyOfficeSessionSecret  string
+}
+
 func Load() (*Config, error) {
 	appEnv := strings.ToLower(strings.TrimSpace(getEnv("APP_ENV", "dev")))
 	serviceName := getEnv("SERVICE_NAME", "api")
@@ -446,6 +456,14 @@ func Load() (*Config, error) {
 			InternalAPIKey: getEnv("ORDER_INTERNAL_API_KEY", ""),
 			QuickOrderKey:  getEnv("ORDER_QUICK_ORDER_KEY", ""),
 			Timeout:        getEnvDuration("ORDER_API_TIMEOUT", 10*time.Second),
+		},
+		Office: OfficeConfig{
+			OnlyOfficeEnabled:        getEnvBool("ONLYOFFICE_ENABLED", false),
+			OnlyOfficePublicURL:      strings.TrimRight(getEnv("ONLYOFFICE_PUBLIC_URL", ""), "/"),
+			OnlyOfficeInternalURL:    strings.TrimRight(getEnv("ONLYOFFICE_INTERNAL_URL", ""), "/"),
+			OnlyOfficeAPIInternalURL: strings.TrimRight(getEnv("ONLYOFFICE_API_INTERNAL_URL", getEnv("APP_URL", "http://localhost:8080")), "/"),
+			OnlyOfficeJWTSecret:      getEnv("ONLYOFFICE_JWT_SECRET", ""),
+			OnlyOfficeSessionSecret:  getEnv("ONLYOFFICE_SESSION_SECRET", getEnv("WEBHOOK_SIGNING_SECRET", getEnv("JWT_ACCESS_SECRET", ""))),
 		},
 	}
 
@@ -749,6 +767,33 @@ func (c *Config) validateApplicationService() error {
 		parsed, err := url.Parse(strings.TrimSpace(c.Order.BaseURL))
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			problems = append(problems, "ORDER_API_BASE_URL must be a valid http/https URL")
+		}
+	}
+	if c.Office.OnlyOfficeEnabled {
+		for name, value := range map[string]string{
+			"ONLYOFFICE_PUBLIC_URL":       c.Office.OnlyOfficePublicURL,
+			"ONLYOFFICE_API_INTERNAL_URL": c.Office.OnlyOfficeAPIInternalURL,
+		} {
+			parsed, err := url.Parse(strings.TrimSpace(value))
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				problems = append(problems, name+" must be a valid http/https base URL without credentials, query or fragment")
+			}
+		}
+		if strings.TrimSpace(c.Office.OnlyOfficeInternalURL) != "" {
+			parsed, err := url.Parse(strings.TrimSpace(c.Office.OnlyOfficeInternalURL))
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				problems = append(problems, "ONLYOFFICE_INTERNAL_URL must be a valid http/https base URL without credentials, query or fragment")
+			}
+		}
+		if strings.TrimSpace(c.Office.OnlyOfficeJWTSecret) == "" {
+			problems = append(problems, "ONLYOFFICE_JWT_SECRET is required when ONLYOFFICE_ENABLED=true")
+		} else if production && isWeakSecret(c.Office.OnlyOfficeJWTSecret) {
+			problems = append(problems, "ONLYOFFICE_JWT_SECRET is not safe for production")
+		}
+		if strings.TrimSpace(c.Office.OnlyOfficeSessionSecret) == "" {
+			problems = append(problems, "ONLYOFFICE_SESSION_SECRET or WEBHOOK_SIGNING_SECRET is required when ONLYOFFICE_ENABLED=true")
+		} else if production && isWeakSecret(c.Office.OnlyOfficeSessionSecret) {
+			problems = append(problems, "ONLYOFFICE_SESSION_SECRET is not safe for production")
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Storage.Provider)) {

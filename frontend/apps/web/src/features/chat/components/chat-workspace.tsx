@@ -145,6 +145,7 @@ import type {
   OrderPaymentQRData,
   OrderWalletBalanceData,
   OrderWalletDepositQRData,
+  OnlyOfficeEditorSession,
   Ticket as SupportTicket,
   TicketPriority,
   TicketStatus,
@@ -355,6 +356,8 @@ const maxLiveEditableFileBytes = 2 * 1024 * 1024;
 const maxLiveEditableOfficeFileBytes = 25 * 1024 * 1024;
 const maxLiveExcelRows = 500;
 const maxLiveExcelColumns = 50;
+const legacyWordDocumentMimeType = "application/msword";
+const legacyExcelWorkbookMimeType = "application/vnd.ms-excel";
 const wordDocumentMimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const excelWorkbookMimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const liveEditableMimeTypes = new Set([
@@ -362,7 +365,9 @@ const liveEditableMimeTypes = new Set([
   "application/javascript",
   "application/typescript",
   "application/xml",
+  legacyExcelWorkbookMimeType,
   excelWorkbookMimeType,
+  legacyWordDocumentMimeType,
   wordDocumentMimeType,
   "application/x-httpd-php",
   "application/x-sh",
@@ -388,6 +393,7 @@ const liveEditableExtensions = new Set([
   "css",
   "csv",
   "dart",
+  "doc",
   "docx",
   "env",
   "go",
@@ -413,6 +419,7 @@ const liveEditableExtensions = new Set([
   "tsx",
   "txt",
   "xml",
+  "xls",
   "xlsx",
   "yaml",
   "yml"
@@ -425,6 +432,20 @@ type LiveExcelSheet = {
   rows: string[][];
 };
 type LiveFileSaveMetadata = Record<string, string>;
+type OnlyOfficeDocumentEditorInstance = {
+  destroyEditor?: () => void;
+};
+type OnlyOfficeDocumentEditorConstructor = new (
+  placeholderId: string,
+  config: Record<string, unknown>
+) => OnlyOfficeDocumentEditorInstance;
+type OnlyOfficeWindow = Window & {
+  DocsAPI?: {
+    DocEditor?: OnlyOfficeDocumentEditorConstructor;
+  };
+};
+
+const onlyOfficeScriptLoaders = new Map<string, Promise<void>>();
 
 type NotificationMode = "all" | "mentions" | "muted";
 
@@ -2463,7 +2484,7 @@ export function ChatWorkspace() {
       return;
     }
     if (!isLiveEditableFile(file)) {
-      setToast("Chỉ hỗ trợ sửa live file text, markdown, JSON, CSV, mã nguồn, Word .docx và Excel .xlsx.");
+      setToast("Chỉ hỗ trợ sửa live file text, markdown, JSON, CSV, mã nguồn, Word .doc/.docx và Excel .xlsx.");
       return;
     }
     setLiveEditingFile(file);
@@ -8596,11 +8617,16 @@ function LiveFileEditorDialogV2({
   const [error, setError] = useState<string | null>(null);
   const [versions, setVersions] = useState<Array<{ created_at?: string; id: string; version?: number; version_number?: number }>>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [onlyOfficeSession, setOnlyOfficeSession] = useState<OnlyOfficeEditorSession | null>(null);
   const excelWorkbookRef = useRef<import("exceljs").Workbook | null>(null);
   const excelSnapshot = useMemo(() => liveExcelSnapshot(excelSheets), [excelSheets]);
-  const hasChanges = editorKind === "excel" ? excelSnapshot !== savedExcelSnapshot : content !== savedContent;
+  const isOnlyOfficeEditor = Boolean(onlyOfficeSession);
+  const hasChanges = isOnlyOfficeEditor ? false : editorKind === "excel" ? excelSnapshot !== savedExcelSnapshot : content !== savedContent;
   const saveMutation = useMutation({
     mutationFn: async () => {
+      if (onlyOfficeSession) {
+        return;
+      }
       const editedFile = await createLiveEditedFile(file, editorKind, {
         content,
         excelSheets,
@@ -8642,12 +8668,30 @@ function LiveFileEditorDialogV2({
     setExcelSheets([]);
     setSavedExcelSnapshot("");
     setActiveExcelSheetIndex(0);
+    setOnlyOfficeSession(null);
     excelWorkbookRef.current = null;
-    void Promise.all([
-      api.files.download(workspaceId, file.id),
-      api.files.versions(workspaceId, file.id).catch(() => [])
-    ])
-      .then(async ([blob, fileVersions]) => {
+    void (async () => {
+      const fileVersions = await api.files.versions(workspaceId, file.id).catch(() => []);
+      if (editorKind === "word" || editorKind === "excel") {
+        try {
+          const session = await api.files.onlyOfficeSession(workspaceId, file.id);
+          if (disposed) return;
+          setOnlyOfficeSession(session);
+          setVersions(fileVersions);
+          return;
+        } catch (officeError) {
+          if (!shouldFallbackToLocalLiveEditor(officeError)) {
+            throw officeError;
+          }
+        }
+      }
+      const blob = await api.files.download(workspaceId, file.id);
+      if (disposed) return;
+      return { blob, fileVersions };
+    })()
+      .then(async (payload) => {
+        if (!payload) return;
+        const { blob, fileVersions } = payload;
         if (disposed) return;
         const sizeLimit = liveEditableSizeLimit(editorKind);
         if (blob.size > sizeLimit) {
@@ -8663,7 +8707,7 @@ function LiveFileEditorDialogV2({
           return;
         }
         const text = editorKind === "word"
-          ? await loadWordDocumentText(blob)
+          ? await loadWordDocumentText(blob, file)
           : await blob.text();
         if (disposed) return;
         setContent(text);
@@ -8740,9 +8784,13 @@ function LiveFileEditorDialogV2({
             <Button onClick={onDownload} size="sm" type="button" variant="secondary">
               <Download size={15} /> Tải xuống
             </Button>
-            <Button disabled={isLoading || !hasChanges || saveMutation.isPending} onClick={() => saveMutation.mutate()} size="sm" type="button">
-              <Cloud size={15} /> {saveMutation.isPending ? "Đang lưu..." : "Lưu version"}
-            </Button>
+            {onlyOfficeSession ? (
+              <span className="live-file-editor-dialog__office-badge">ONLYOFFICE</span>
+            ) : (
+              <Button disabled={isLoading || !hasChanges || saveMutation.isPending} onClick={() => saveMutation.mutate()} size="sm" type="button">
+                <Cloud size={15} /> {saveMutation.isPending ? "Đang lưu..." : "Lưu version"}
+              </Button>
+            )}
             <Button aria-label="Đóng sửa file live" onClick={onClose} type="button" variant="icon">
               <X size={19} />
             </Button>
@@ -8763,15 +8811,23 @@ function LiveFileEditorDialogV2({
             ) : (
               <small>Chưa có version trước đó.</small>
             )}
-            {hasChanges ? <small className="live-file-editor-dialog__dirty">Có thay đổi chưa lưu.</small> : <small>Đã đồng bộ.</small>}
-            {editorKind === "word" ? <small>Word .docx được lưu thành version mới từ nội dung đang chỉnh.</small> : null}
-            {editorKind === "excel" ? <small>Excel .xlsx giữ workbook gốc và cập nhật các ô đã thay đổi.</small> : null}
+            {onlyOfficeSession ? (
+              <small>ONLYOFFICE tự đồng bộ version khi bạn lưu hoặc đóng tài liệu.</small>
+            ) : hasChanges ? (
+              <small className="live-file-editor-dialog__dirty">Có thay đổi chưa lưu.</small>
+            ) : (
+              <small>Đã đồng bộ.</small>
+            )}
+            {!onlyOfficeSession && editorKind === "word" ? <small>Word .doc/.docx được lưu thành version mới từ nội dung đang chỉnh.</small> : null}
+            {!onlyOfficeSession && editorKind === "excel" ? <small>Excel .xlsx giữ workbook gốc và cập nhật các ô đã thay đổi.</small> : null}
           </aside>
           <div className="live-file-editor-dialog__editor">
             {isLoading ? (
               <PanelSkeleton />
             ) : error ? (
               <ErrorState description={error} title="Không mở được file" />
+            ) : onlyOfficeSession ? (
+              <OnlyOfficeEditorFrame session={onlyOfficeSession} />
             ) : editorKind === "excel" ? (
               <LiveExcelEditor
                 activeSheetIndex={activeExcelSheetIndex}
@@ -8797,6 +8853,47 @@ function LiveFileEditorDialogV2({
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function OnlyOfficeEditorFrame({ session }: { session: OnlyOfficeEditorSession }) {
+  const placeholderId = useMemo(
+    () => `onlyoffice-editor-${session.session_id.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    [session.session_id]
+  );
+  const editorRef = useRef<OnlyOfficeDocumentEditorInstance | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    setError(null);
+    void loadOnlyOfficeScript(session.script_url)
+      .then(() => {
+        if (disposed) return;
+        const docEditor = (window as OnlyOfficeWindow).DocsAPI?.DocEditor;
+        if (!docEditor) {
+          throw new Error("ONLYOFFICE chưa sẵn sàng.");
+        }
+        editorRef.current?.destroyEditor?.();
+        editorRef.current = new docEditor(placeholderId, session.config as Record<string, unknown>);
+      })
+      .catch((loadError) => {
+        if (!disposed) {
+          setError(loadError instanceof Error ? loadError.message : "Không tải được ONLYOFFICE.");
+        }
+      });
+    return () => {
+      disposed = true;
+      editorRef.current?.destroyEditor?.();
+      editorRef.current = null;
+    };
+  }, [placeholderId, session]);
+
+  return (
+    <div className="onlyoffice-editor-shell">
+      {error ? <ErrorState description={error} title="Không mở được ONLYOFFICE" /> : null}
+      <div className="onlyoffice-editor-frame" id={placeholderId} />
     </div>
   );
 }
@@ -10499,6 +10596,43 @@ function splitTrailingLinkPunctuation(value: string): [string, string] {
   return [url, trailing];
 }
 
+function shouldFallbackToLocalLiveEditor(error: unknown): boolean {
+  const status = typeof error === "object" && error && "status" in error ? Number((error as { status?: unknown }).status) : 0;
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : "";
+  return status === 503 || code === "ONLYOFFICE_DISABLED" || code === "ONLYOFFICE_NOT_CONFIGURED";
+}
+
+function loadOnlyOfficeScript(scriptURL: string): Promise<void> {
+  const normalizedURL = scriptURL.trim();
+  if (!normalizedURL) {
+    return Promise.reject(new Error("Thiếu URL ONLYOFFICE."));
+  }
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return Promise.reject(new Error("ONLYOFFICE chỉ chạy trên trình duyệt."));
+  }
+  const existingLoader = onlyOfficeScriptLoaders.get(normalizedURL);
+  if (existingLoader) {
+    return existingLoader;
+  }
+  if ((window as OnlyOfficeWindow).DocsAPI?.DocEditor) {
+    return Promise.resolve();
+  }
+  const loader = new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.async = true;
+    script.dataset.onlyofficeApi = "true";
+    script.src = normalizedURL;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      onlyOfficeScriptLoaders.delete(normalizedURL);
+      reject(new Error("Không tải được script ONLYOFFICE."));
+    };
+    document.head.append(script);
+  });
+  onlyOfficeScriptLoaders.set(normalizedURL, loader);
+  return loader;
+}
+
 function fileItemFromAttachment(attachment: MessageAttachmentItem): FileItem {
   return {
     checksumSha256: attachment.checksumSha256,
@@ -10527,6 +10661,8 @@ function liveEditableMimeType(file: Pick<FileItem | MessageAttachmentItem, "mime
       return "application/json";
     case "csv":
       return "text/csv";
+    case "doc":
+      return legacyWordDocumentMimeType;
     case "docx":
       return wordDocumentMimeType;
     case "html":
@@ -10536,6 +10672,8 @@ function liveEditableMimeType(file: Pick<FileItem | MessageAttachmentItem, "mime
     case "xml":
     case "svg":
       return "text/xml";
+    case "xls":
+      return legacyExcelWorkbookMimeType;
     case "xlsx":
       return excelWorkbookMimeType;
     case "yaml":
@@ -10549,10 +10687,10 @@ function liveEditableMimeType(file: Pick<FileItem | MessageAttachmentItem, "mime
 function liveFileEditorKind(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): LiveFileEditorKind | null {
   const mimeType = file.mimeType?.trim().toLowerCase().split(";")[0] ?? "";
   const extension = fileExtension(file.name);
-  if (extension === "docx" || mimeType === wordDocumentMimeType) {
+  if (extension === "doc" || extension === "docx" || mimeType === legacyWordDocumentMimeType || mimeType === wordDocumentMimeType) {
     return "word";
   }
-  if (extension === "xlsx" || mimeType === excelWorkbookMimeType) {
+  if (extension === "xls" || extension === "xlsx" || mimeType === legacyExcelWorkbookMimeType || mimeType === excelWorkbookMimeType) {
     return "excel";
   }
   if (mimeType.startsWith("text/") || liveEditableMimeTypes.has(mimeType)) {
@@ -10598,13 +10736,50 @@ async function createLiveEditedFile(
   });
 }
 
-async function loadWordDocumentText(blob: Blob): Promise<string> {
+async function loadWordDocumentText(blob: Blob, file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): Promise<string> {
+  const header = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
+  if (fileExtension(file.name) === "doc" || file.mimeType?.toLowerCase().includes("msword")) {
+    if (header[0] === 0xd0 && header[1] === 0xcf) {
+      return loadLegacyWordDocumentText(blob);
+    }
+    if (header[0] === 0x50 && header[1] === 0x4b) {
+      return loadDocxDocumentText(blob);
+    }
+    const text = await blob.text();
+    return stripWordCompatibleHtml(text);
+  }
+  return loadDocxDocumentText(blob);
+}
+
+async function loadDocxDocumentText(blob: Blob): Promise<string> {
   const mammoth = await import("mammoth");
   const result = await mammoth.extractRawText({ arrayBuffer: await blob.arrayBuffer() });
   return result.value ?? "";
 }
 
+async function loadLegacyWordDocumentText(blob: Blob): Promise<string> {
+  const { Buffer } = await import("buffer");
+  ensureBrowserBuffer(Buffer);
+  const [WordOleExtractorModule, BufferReaderModule] = await Promise.all([
+    import("word-extractor/lib/word-ole-extractor"),
+    import("word-extractor/lib/buffer-reader")
+  ]);
+  const WordOleExtractor = WordOleExtractorModule.default ?? WordOleExtractorModule;
+  const BufferReader = BufferReaderModule.default ?? BufferReaderModule;
+  const buffer = Buffer.from(await blob.arrayBuffer());
+  const document = await new WordOleExtractor().extract(new BufferReader(buffer));
+  return document.getBody();
+}
+
+function ensureBrowserBuffer(BufferConstructor: typeof import("buffer").Buffer): void {
+  const target = globalThis as typeof globalThis & { Buffer?: typeof BufferConstructor };
+  target.Buffer ??= BufferConstructor;
+}
+
 async function createWordDocumentFile(name: string, content: string): Promise<File> {
+  if (fileExtension(name) === "doc") {
+    return createLegacyWordDocumentFile(name, content);
+  }
   const { Document, Packer, Paragraph, TextRun } = await import("docx");
   const lines = content.split(/\r?\n/);
   const paragraphs = (lines.length ? lines : [""]).map((line) =>
@@ -10620,6 +10795,42 @@ async function createWordDocumentFile(name: string, content: string): Promise<Fi
     lastModified: Date.now(),
     type: wordDocumentMimeType
   });
+}
+
+function createLegacyWordDocumentFile(name: string, content: string): File {
+  const html = [
+    "<!DOCTYPE html>",
+    '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">',
+    "<head>",
+    '<meta charset="utf-8">',
+    "<title>Document</title>",
+    "<style>body{font-family:Arial,sans-serif;font-size:12pt;line-height:1.45}p{margin:0 0 8pt}</style>",
+    "</head>",
+    "<body>",
+    ...content.split(/\r?\n/).map((line) => `<p>${escapeHtml(line) || "&nbsp;"}</p>`),
+    "</body>",
+    "</html>"
+  ].join("");
+  return new File([html], ensureFileExtension(name, "doc"), {
+    lastModified: Date.now(),
+    type: legacyWordDocumentMimeType
+  });
+}
+
+function stripWordCompatibleHtml(value: string): string {
+  if (!/<\/?[a-z][\s\S]*>/i.test(value)) {
+    return value;
+  }
+  const document = new DOMParser().parseFromString(value, "text/html");
+  return document.body.textContent?.replace(/\u00a0/g, " ").trim() ?? "";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function loadExcelWorkbook(blob: Blob): Promise<{

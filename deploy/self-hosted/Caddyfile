@@ -91,3 +91,26 @@ https://{$INSTANCE_DOMAIN}:8443 {
 		format console
 	}
 }
+
+# ONLYOFFICE Docs also expects root paths. Keeping it on a dedicated TLS port
+# avoids path rewriting and lets the chat API protect every file URL with
+# short-lived signed tokens.
+https://{$INSTANCE_DOMAIN}:8444 {
+	encode zstd gzip
+	reverse_proxy onlyoffice-document-server:80 {
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	filesapp "github.com/duclamdev/application-chat/backend/internal/modules/files/application"
+	apperrors "github.com/duclamdev/application-chat/backend/internal/shared/errors"
 	"github.com/duclamdev/application-chat/backend/internal/shared/middleware"
 	"github.com/duclamdev/application-chat/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
@@ -61,9 +62,14 @@ func (h *Handler) RegisterRoutes(router gin.IRouter, authMiddleware gin.HandlerF
 	private.GET("/files/:file_id/download", h.Download)
 	private.GET("/files/:file_id/versions", h.ListVersions)
 	ugc.POST("/files/:file_id/versions", h.CreateVersion)
+	ugc.POST("/files/:file_id/office/session", h.CreateOnlyOfficeSession)
 	private.GET("/channels/:channel_id/messages/:message_id/attachments", h.ListAttachments)
 	ugc.POST("/channels/:channel_id/messages/:message_id/attachments", h.AttachFile)
 	private.GET("/channels/:channel_id/media", h.ListChannelMedia)
+
+	office := router.Group("/office/workspaces/:workspace_id/files/:file_id")
+	office.GET("/download", h.DownloadOnlyOfficeSource)
+	office.POST("/callback", h.HandleOnlyOfficeCallback)
 }
 
 func (h *Handler) CreateUploadSession(c *gin.Context) {
@@ -296,6 +302,58 @@ func (h *Handler) Download(c *gin.Context) {
 	c.DataFromReader(status, download.ContentLength, download.File.MimeType, download.Body, headers)
 }
 
+func (h *Handler) CreateOnlyOfficeSession(c *gin.Context) {
+	session, err := h.service.CreateOnlyOfficeSession(c.Request.Context(), filesapp.OnlyOfficeSessionInput{
+		ActorUserID: middleware.CurrentUserID(c),
+		WorkspaceID: c.Param("workspace_id"),
+		FileID:      c.Param("file_id"),
+		UserName:    middleware.CurrentUserID(c),
+	})
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, nethttp.StatusOK, gin.H{"office": session})
+}
+
+func (h *Handler) DownloadOnlyOfficeSource(c *gin.Context) {
+	download, err := h.service.DownloadOnlyOfficeSource(
+		c.Request.Context(),
+		c.Param("workspace_id"),
+		c.Param("file_id"),
+		c.Query("token"),
+	)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	defer download.Body.Close()
+	c.DataFromReader(nethttp.StatusOK, download.ContentLength, download.File.MimeType, download.Body, map[string]string{
+		"Cache-Control": "private, no-cache",
+		"Content-Disposition": mime.FormatMediaType("attachment", map[string]string{
+			"filename": download.File.OriginalName,
+		}),
+	})
+}
+
+func (h *Handler) HandleOnlyOfficeCallback(c *gin.Context) {
+	var payload filesapp.OnlyOfficeCallbackPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(nethttp.StatusBadRequest, gin.H{"error": 1})
+		return
+	}
+	if _, err := h.service.HandleOnlyOfficeCallback(c.Request.Context(), filesapp.OnlyOfficeCallbackInput{
+		WorkspaceID: c.Param("workspace_id"),
+		FileID:      c.Param("file_id"),
+		Token:       c.Query("token"),
+		Payload:     payload,
+	}); err != nil {
+		c.JSON(onlyOfficeCallbackHTTPStatus(err), gin.H{"error": 1})
+		return
+	}
+	c.JSON(nethttp.StatusOK, gin.H{"error": 0})
+}
+
 func parseRangeHeader(value string) (*filesapp.DownloadRange, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -433,4 +491,12 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func onlyOfficeCallbackHTTPStatus(err error) int {
+	var appErr *apperrors.AppError
+	if errors.As(err, &appErr) && appErr.Status > 0 {
+		return appErr.Status
+	}
+	return nethttp.StatusInternalServerError
 }

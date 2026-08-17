@@ -17,12 +17,14 @@
     "@webtui/icons": "0.1.0",
     "@webtui/types": "0.1.0",
     "@webtui/ui": "0.1.0",
+    "buffer": "^5.7.1",
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",
     "mammoth": "^1.12.1",
     "next": "16.2.12",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "word-extractor": "^1.0.4",
     "zustand": "5.0.14"
   },
   "devDependencies": {

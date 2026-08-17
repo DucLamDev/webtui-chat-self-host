@@ -115,6 +115,7 @@ type Service struct {
 	now             func() time.Time
 	realtime        RealtimePublisher
 	blockChecker    BlockChecker
+	onlyOffice      OnlyOfficeOptions
 }
 
 type UploadInput struct {
@@ -150,6 +151,7 @@ type CreateVersionParams struct {
 	StorageProvider string
 	Bucket          string
 	ObjectKey       string
+	OriginalName    string
 	MimeType        string
 	ByteSize        int64
 	ChecksumSHA256  string
@@ -301,6 +303,10 @@ func (s *Service) SetStorageResolver(resolver StorageResolver) {
 	s.storageResolver = resolver
 }
 
+func (s *Service) SetOnlyOfficeOptions(options OnlyOfficeOptions) {
+	s.onlyOffice = options.normalized()
+}
+
 func (s *Service) storageForWorkspace(ctx context.Context, workspaceID string) (StorageLocation, error) {
 	if s.storageResolver != nil {
 		return s.storageResolver.ResolveWorkspace(ctx, strings.TrimSpace(workspaceID))
@@ -424,8 +430,14 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (FileDTO, error
 }
 
 func (s *Service) CreateVersion(ctx context.Context, input UploadInput, fileID string) (VersionDTO, error) {
-	if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "file.upload"); err != nil {
-		return VersionDTO{}, err
+	return s.createVersion(ctx, input, fileID, true)
+}
+
+func (s *Service) createVersion(ctx context.Context, input UploadInput, fileID string, enforcePermission bool) (VersionDTO, error) {
+	if enforcePermission {
+		if err := s.ensurePermission(ctx, input.ActorUserID, input.WorkspaceID, "file.upload"); err != nil {
+			return VersionDTO{}, err
+		}
 	}
 	fileID = strings.TrimSpace(fileID)
 	if fileID == "" {
@@ -466,6 +478,7 @@ func (s *Service) CreateVersion(ctx context.Context, input UploadInput, fileID s
 		StorageProvider: storageLocation.Provider,
 		Bucket:          storageLocation.Bucket,
 		ObjectKey:       object.Key,
+		OriginalName:    originalName,
 		MimeType:        mimeType,
 		ByteSize:        object.Size,
 		ChecksumSHA256:  checksum,
@@ -867,10 +880,13 @@ func isAllowedMimeType(mimeType string) bool {
 		"application/ogg",
 		"application/pdf",
 		"application/json",
+		"application/rtf",
 		"application/zip",
 		"application/octet-stream",
 		"application/msword",
 		"application/vnd.ms-excel",
+		"application/vnd.oasis.opendocument.spreadsheet",
+		"application/vnd.oasis.opendocument.text",
 		"application/vnd.ms-powerpoint",
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

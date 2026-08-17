@@ -261,9 +261,10 @@ SET storage_provider = $3,
     mime_type = $6,
     byte_size = $7,
     checksum_sha256 = $8,
+    original_name = COALESCE(NULLIF($9, ''), original_name),
     status = 'ready'
 WHERE workspace_id = $1::uuid AND id = $2::uuid AND deleted_at IS NULL
-`, params.WorkspaceID, params.FileID, params.StorageProvider, params.Bucket, params.ObjectKey, params.MimeType, params.ByteSize, params.ChecksumSHA256)
+`, params.WorkspaceID, params.FileID, params.StorageProvider, params.Bucket, params.ObjectKey, params.MimeType, params.ByteSize, params.ChecksumSHA256, params.OriginalName)
 	if err != nil {
 		return filesdomain.Version{}, err
 	}

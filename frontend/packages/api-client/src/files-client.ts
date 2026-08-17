@@ -4,6 +4,7 @@ import type {
   FileAttachment,
   FileObject,
   FileVersion,
+  OnlyOfficeEditorSession,
   ResumableUploadSession,
   UploadFileInput
 } from "@webtui/types";
@@ -184,6 +185,13 @@ export function createFilesClient(http: HttpClient) {
         form
       );
       return itemFrom<FileVersion>(data, "version") ?? (data as FileVersion);
+    },
+    async onlyOfficeSession(workspaceId: string, fileId: string) {
+      const data = await http.post<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(fileId)}/office/session`,
+        {}
+      );
+      return itemFrom<OnlyOfficeEditorSession>(data, "office") ?? (data as OnlyOfficeEditorSession);
     },
     async attachments(workspaceId: string, channelId: string, messageId: string) {
       const data = await http.get<unknown>(
