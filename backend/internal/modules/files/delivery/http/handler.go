@@ -321,7 +321,7 @@ func (h *Handler) DownloadOnlyOfficeSource(c *gin.Context) {
 		c.Request.Context(),
 		c.Param("workspace_id"),
 		c.Param("file_id"),
-		c.Query("token"),
+		onlyOfficeAccessToken(c),
 	)
 	if err != nil {
 		response.Error(c, err)
@@ -345,13 +345,20 @@ func (h *Handler) HandleOnlyOfficeCallback(c *gin.Context) {
 	if _, err := h.service.HandleOnlyOfficeCallback(c.Request.Context(), filesapp.OnlyOfficeCallbackInput{
 		WorkspaceID: c.Param("workspace_id"),
 		FileID:      c.Param("file_id"),
-		Token:       c.Query("token"),
+		Token:       onlyOfficeAccessToken(c),
 		Payload:     payload,
 	}); err != nil {
 		c.JSON(onlyOfficeCallbackHTTPStatus(err), gin.H{"error": 1})
 		return
 	}
 	c.JSON(nethttp.StatusOK, gin.H{"error": 0})
+}
+
+func onlyOfficeAccessToken(c *gin.Context) string {
+	if token := strings.TrimSpace(c.Query("access_token")); token != "" {
+		return token
+	}
+	return c.Query("token")
 }
 
 func parseRangeHeader(value string) (*filesapp.DownloadRange, error) {

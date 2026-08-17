@@ -155,8 +155,8 @@ func (s *Service) CreateOnlyOfficeSession(ctx context.Context, input OnlyOfficeS
 	}
 
 	basePath := options.APIBaseURL + "/api/v1/office/workspaces/" + url.PathEscape(input.WorkspaceID) + "/files/" + url.PathEscape(input.FileID)
-	downloadURL := basePath + "/download?token=" + url.QueryEscape(downloadToken)
-	callbackURL := basePath + "/callback?token=" + url.QueryEscape(callbackToken)
+	downloadURL := basePath + "/download?access_token=" + url.QueryEscape(downloadToken)
+	callbackURL := basePath + "/callback?access_token=" + url.QueryEscape(callbackToken)
 	config := map[string]any{
 		"documentType": documentType,
 		"type":         "desktop",
