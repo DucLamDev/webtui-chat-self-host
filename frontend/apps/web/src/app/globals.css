@@ -5779,6 +5779,125 @@
   box-shadow: 0 0 0 3px rgb(0 104 255 / 10%);
 }
 
+.live-file-editor-dialog__word-textarea {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+}
+
+.live-excel-editor {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.live-excel-editor__toolbar {
+  align-items: center;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 8px;
+}
+
+.live-excel-editor__toolbar nav,
+.live-excel-editor__toolbar > div {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.live-excel-editor__toolbar nav {
+  overflow-x: auto;
+}
+
+.live-excel-editor__toolbar nav button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+  height: 30px;
+  padding: 0 11px;
+}
+
+.live-excel-editor__toolbar nav button.is-active {
+  background: #eaf3ff;
+  border-color: #93c5fd;
+  color: #075dc8;
+}
+
+.live-excel-editor__table-wrap {
+  background: var(--surface);
+  min-height: 0;
+  overflow: auto;
+}
+
+.live-excel-editor table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 720px;
+  width: max-content;
+}
+
+.live-excel-editor th,
+.live-excel-editor td {
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  min-width: 132px;
+  padding: 0;
+}
+
+.live-excel-editor th {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  height: 32px;
+  position: sticky;
+  text-align: center;
+  top: 0;
+  z-index: 1;
+}
+
+.live-excel-editor tbody th {
+  left: 0;
+  min-width: 46px;
+  position: sticky;
+  z-index: 1;
+}
+
+.live-excel-editor thead th:first-child {
+  left: 0;
+  min-width: 46px;
+  z-index: 2;
+}
+
+.live-excel-editor input {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  height: 34px;
+  outline: 0;
+  padding: 0 9px;
+  width: 100%;
+}
+
+.live-excel-editor input:focus {
+  background: #eef6ff;
+  box-shadow: inset 0 0 0 2px var(--brand-500);
+}
+
 @media (max-width: 767px) {
   .live-file-editor-backdrop {
     padding: 0;
@@ -5808,6 +5927,11 @@
   .live-file-editor-dialog__body aside {
     max-height: 132px;
     overflow: auto;
+  }
+
+  .live-excel-editor__toolbar {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 
@@ -8333,6 +8457,54 @@ html:not([data-theme="dark"]) .chat-app-shell--zalo .ui-tooltip__content {
   gap: 10px;
   grid-template-columns: minmax(220px, 520px) auto;
   justify-content: space-between;
+}
+
+.chat-app-shell--zalo .directory-toolbar--files {
+  align-items: start;
+  margin-bottom: 10px;
+}
+
+.chat-app-shell--zalo .file-type-filter-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.chat-app-shell--zalo .file-type-filter {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 11px;
+}
+
+.chat-app-shell--zalo .file-type-filter:hover {
+  border-color: #b9d4ff;
+  color: var(--brand-700);
+}
+
+.chat-app-shell--zalo .file-type-filter--active {
+  background: #eaf3ff;
+  border-color: #93c5fd;
+  color: #075dc8;
+}
+
+.chat-app-shell--zalo .file-type-filter small {
+  background: rgba(255, 255, 255, .85);
+  border-radius: 999px;
+  color: inherit;
+  font-size: 10.5px;
+  min-width: 18px;
+  padding: 2px 6px;
+  text-align: center;
 }
 
 /* Settings has an explicit visual order instead of an uneven four-column grid. */
@@ -12344,6 +12516,26 @@ textarea {
   object-fit: cover;
 }
 
+.chat-app-shell--zalo .attachment-video-placeholder {
+  align-items: center;
+  background: linear-gradient(135deg, #eaf3ff 0%, #f8fbff 100%);
+  border: 0;
+  color: var(--zalo-blue);
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 7px;
+  justify-items: center;
+  min-height: 118px;
+  padding: 18px;
+  width: 100%;
+}
+
+.chat-app-shell--zalo .attachment-video-placeholder:disabled {
+  color: var(--zalo-muted);
+  cursor: wait;
+}
+
 .chat-app-shell--zalo .attachment-media-card__caption {
   background: transparent;
   border: 0;
@@ -15398,6 +15590,47 @@ button.message-reply-preview:hover {
   width: 32px;
 }
 
+.talk-meeting-overlay__actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.talk-meeting-overlay__recording {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 7px 9px;
+}
+
+.talk-meeting-overlay__recording.is-live {
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #be123c;
+}
+
+.talk-meeting-overlay > header button.talk-meeting-overlay__record {
+  border: 1px solid #cbd7e6;
+  gap: 6px;
+  padding: 0 10px;
+  width: auto;
+}
+
+.talk-meeting-overlay > header button.talk-meeting-overlay__record.is-live {
+  background: #fff1f2;
+  border-color: #fda4af;
+  color: #be123c;
+}
+
+.talk-meeting-overlay > header button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
 .jitsi-meeting-stage,
 .jitsi-meeting-stage__frame,
 .jitsi-meeting-stage__frame > div,
@@ -15421,6 +15654,81 @@ button.message-reply-preview:hover {
   width: 100%;
 }
 
+.jitsi-meeting-stage__tools {
+  align-items: center;
+  background: rgb(10 16 26 / 74%);
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 12px;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 28%);
+  display: flex;
+  gap: 6px;
+  left: 14px;
+  padding: 6px;
+  position: absolute;
+  top: 14px;
+  z-index: 5;
+}
+
+.jitsi-meeting-stage__tools button {
+  align-items: center;
+  background: rgb(255 255 255 / 10%);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 9px;
+  color: #eaf2ff;
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  min-width: 32px;
+}
+
+.jitsi-meeting-stage__tools button:hover,
+.jitsi-meeting-stage__tools button.is-active {
+  background: #2563eb;
+  border-color: #60a5fa;
+  color: #fff;
+}
+
+.jitsi-meeting-stage__tools button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.jitsi-annotation-palette {
+  align-items: center;
+  border-left: 1px solid rgb(255 255 255 / 16%);
+  display: flex;
+  gap: 5px;
+  margin-left: 2px;
+  padding-left: 8px;
+}
+
+.jitsi-annotation-palette button[style] {
+  border-radius: 999px;
+  height: 20px;
+  min-width: 20px;
+  width: 20px;
+}
+
+.jitsi-annotation-palette button[style].is-active {
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.jitsi-annotation-layer {
+  height: 100%;
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  touch-action: none;
+  width: 100%;
+  z-index: 4;
+}
+
+.jitsi-annotation-layer.is-drawing {
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
 .jitsi-meeting-stage__status {
   align-content: center;
   background: #f7f9fc;
@@ -15432,6 +15740,7 @@ button.message-reply-preview:hover {
   padding: 24px;
   position: absolute;
   text-align: center;
+  z-index: 6;
 }
 
 .jitsi-meeting-stage__status span {
@@ -16833,8 +17142,9 @@ button.message-reply-preview:hover {
 .chat-app-shell--zalo .settings-shell .settings-card--profile .profile-form__row {
   align-items: end;
   display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(180px, 240px) minmax(220px, 1fr) minmax(180px, .8fr) auto;
+  column-gap: 18px;
+  row-gap: 12px;
+  grid-template-columns: minmax(180px, 240px) minmax(220px, 1fr) minmax(200px, .8fr) max-content;
   width: 100%;
 }
 
@@ -16842,6 +17152,12 @@ button.message-reply-preview:hover {
   grid-column: auto !important;
   grid-row: auto !important;
   justify-self: start;
+}
+
+.chat-app-shell--zalo .settings-shell .settings-card--profile .profile-form__row > .ui-button {
+  justify-self: start;
+  margin-left: 6px;
+  min-width: 112px;
 }
 
 .chat-app-shell--zalo .settings-shell .settings-card--appearance,
@@ -16941,6 +17257,10 @@ button.message-reply-preview:hover {
   .chat-app-shell--zalo .settings-shell .organization-branding-form > .ui-button,
   .chat-app-shell--zalo .settings-shell .zone-storage-form__wide {
     grid-column: auto !important;
+  }
+
+  .chat-app-shell--zalo .settings-shell .settings-card--profile .profile-form__row > .ui-button {
+    margin-left: 0;
   }
 }
 

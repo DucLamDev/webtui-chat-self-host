@@ -203,9 +203,10 @@ export function createWebhooksClient(http: HttpClient) {
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/outgoing-webhooks/${encodeURIComponent(webhookId)}`
       );
     },
-    async deliveries(workspaceId: string, webhookId: string) {
+    async deliveries(workspaceId: string, webhookId: string, params: QueryParams = {}) {
       const data = await http.get<unknown>(
-        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/outgoing-webhooks/${encodeURIComponent(webhookId)}/deliveries`
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/outgoing-webhooks/${encodeURIComponent(webhookId)}/deliveries`,
+        { query: params }
       );
       return collectionFrom<WebhookDelivery>(data, "deliveries");
     },

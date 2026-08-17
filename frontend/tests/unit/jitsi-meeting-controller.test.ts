@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildJitsiConfigOverwrite,
+  buildJitsiToolbarButtons,
   createJitsiMeetingController,
   ensureJitsiIframePermissions,
+  JITSI_INTERFACE_CONFIG_OVERWRITE,
   JITSI_LEAVE_EVENTS,
+  readJitsiScreenSharingState,
   type JitsiExternalAPIInstance
 } from "../../apps/web/src/features/chat/components/jitsi-meeting-controller";
 
 function fakeAPI() {
-  const listeners = new Map<string, () => void>();
+  const listeners = new Map<string, (...args: unknown[]) => void>();
   const api: JitsiExternalAPIInstance = {
     addListener: vi.fn((event, listener) => listeners.set(event, listener)),
     dispose: vi.fn(),
@@ -74,5 +78,36 @@ describe("Jitsi meeting controller", () => {
       expect.stringContaining("display-capture")
     );
     expect(iframe.allowFullscreen).toBe(true);
+  });
+
+  it("builds a presenter toolbar with screen sharing and recording controls", () => {
+    expect(buildJitsiToolbarButtons({
+      canPresent: true,
+      canRecord: true,
+      chatEnabled: true
+    })).toEqual(expect.arrayContaining(["desktop", "recording", "chat", "participants-pane"]));
+  });
+
+  it("keeps meeting branding and generated room keys out of the Jitsi chrome", () => {
+    const config = buildJitsiConfigOverwrite({
+      meetingSubject: "Sprint weekly",
+      microphoneEnabled: true,
+      toolbarButtons: ["desktop"],
+      videoEnabled: false
+    });
+
+    expect(config.hideConferenceSubject).toBe(true);
+    expect(config.subject).toBe("Sprint weekly");
+    expect(config.startWithAudioMuted).toBe(false);
+    expect(config.startWithVideoMuted).toBe(true);
+    expect(JITSI_INTERFACE_CONFIG_OVERWRITE.SHOW_JITSI_WATERMARK).toBe(false);
+    expect(JITSI_INTERFACE_CONFIG_OVERWRITE.SHOW_POWERED_BY).toBe(false);
+  });
+
+  it("reads screen sharing state from the external api event payload", () => {
+    expect(readJitsiScreenSharingState({ on: true })).toBe(true);
+    expect(readJitsiScreenSharingState(true)).toBe(true);
+    expect(readJitsiScreenSharingState({ on: false })).toBe(false);
+    expect(readJitsiScreenSharingState(null)).toBe(false);
   });
 });

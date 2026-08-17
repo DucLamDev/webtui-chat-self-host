@@ -293,6 +293,23 @@ const detailTabs: Array<{ label: string; value: DetailTab }> = [
   { label: "File", value: "files" }
 ];
 
+type FileTypeFilter = "all" | "image" | "video" | "text" | "excel" | "word" | "csv" | "md";
+
+const fileTypeFilterOptions: Array<{ label: string; value: FileTypeFilter }> = [
+  { label: "Tất cả", value: "all" },
+  { label: "Ảnh", value: "image" },
+  { label: "Video", value: "video" },
+  { label: "Text", value: "text" },
+  { label: "Excel", value: "excel" },
+  { label: "Word", value: "word" },
+  { label: "CSV", value: "csv" },
+  { label: "MD", value: "md" }
+];
+
+const textFileExtensions = new Set(["txt", "log", "json", "yaml", "yml", "xml", "html", "css", "js", "jsx", "ts", "tsx", "sql", "php", "ini", "conf"]);
+const excelFileExtensions = new Set(["xls", "xlsx", "xlsm", "ods"]);
+const wordFileExtensions = new Set(["doc", "docx", "rtf", "odt"]);
+
 const quickReactions = [
   { className: "reaction-choice--like", emoji: "👍", icon: ThumbsUp, label: "Thích" },
   { className: "reaction-choice--love", emoji: "❤️", icon: Heart, label: "Yêu thích" },
@@ -335,11 +352,18 @@ const uploadAcceptList = [
 ];
 const imageUploadAcceptList = ["image/*"];
 const maxLiveEditableFileBytes = 2 * 1024 * 1024;
+const maxLiveEditableOfficeFileBytes = 25 * 1024 * 1024;
+const maxLiveExcelRows = 500;
+const maxLiveExcelColumns = 50;
+const wordDocumentMimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const excelWorkbookMimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const liveEditableMimeTypes = new Set([
   "application/json",
   "application/javascript",
   "application/typescript",
   "application/xml",
+  excelWorkbookMimeType,
+  wordDocumentMimeType,
   "application/x-httpd-php",
   "application/x-sh",
   "application/yaml",
@@ -364,6 +388,7 @@ const liveEditableExtensions = new Set([
   "css",
   "csv",
   "dart",
+  "docx",
   "env",
   "go",
   "h",
@@ -388,9 +413,18 @@ const liveEditableExtensions = new Set([
   "tsx",
   "txt",
   "xml",
+  "xlsx",
   "yaml",
   "yml"
 ]);
+
+type LiveFileEditorKind = "text" | "word" | "excel";
+type LiveExcelSheet = {
+  name: string;
+  originalRows: string[][];
+  rows: string[][];
+};
+type LiveFileSaveMetadata = Record<string, string>;
 
 type NotificationMode = "all" | "mentions" | "muted";
 
@@ -2429,7 +2463,7 @@ export function ChatWorkspace() {
       return;
     }
     if (!isLiveEditableFile(file)) {
-      setToast("Chỉ hỗ trợ sửa trực tiếp file text, markdown, JSON, CSV và mã nguồn.");
+      setToast("Chỉ hỗ trợ sửa live file text, markdown, JSON, CSV, mã nguồn, Word .docx và Excel .xlsx.");
       return;
     }
     setLiveEditingFile(file);
@@ -2439,18 +2473,13 @@ export function ChatWorkspace() {
     handleEditFile(fileItemFromAttachment(attachment));
   }
 
-  async function handleSaveLiveFile(file: FileItem, content: string) {
+  async function handleSaveLiveFile(file: FileItem, editedFile: File, metadata: LiveFileSaveMetadata = {}) {
     if (!data.workspaceId) {
       throw new Error("Chưa có workspace để lưu file.");
     }
-    const mimeType = liveEditableMimeType(file);
-    const editedFile = new File([content], file.name, {
-      lastModified: Date.now(),
-      type: mimeType
-    });
     await api.files.createVersion(data.workspaceId, file.id, {
       file: editedFile,
-      metadata: { edited_from: "web_live_editor" }
+      metadata: { edited_from: "web_live_editor", ...metadata }
     });
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.files.all(data.workspaceId) }),
@@ -3813,7 +3842,7 @@ export function ChatWorkspace() {
       ) : null}
 
       {liveEditingFile && data.workspaceId ? (
-        <LiveFileEditorDialog
+        <LiveFileEditorDialogV2
           file={liveEditingFile}
           onClose={() => setLiveEditingFile(null)}
           onDownload={() => handleDownload(liveEditingFile)}
@@ -5282,14 +5311,18 @@ function FilesPage({
   onEditFile: (file: FileItem) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [fileTypeFilter, setFileTypeFilter] = useState<FileTypeFilter>("all");
   const normalizedQuery = query.trim().toLocaleLowerCase("vi");
+  const typeFilteredFiles = fileTypeFilter === "all"
+    ? files
+    : files.filter((file) => matchesFileTypeFilter(file, fileTypeFilter));
   const visibleFiles = normalizedQuery
-    ? files.filter((file) => `${file.name} ${file.mimeType ?? ""}`.toLocaleLowerCase("vi").includes(normalizedQuery))
-    : files;
+    ? typeFilteredFiles.filter((file) => `${file.name} ${file.mimeType ?? ""}`.toLocaleLowerCase("vi").includes(normalizedQuery))
+    : typeFilteredFiles;
 
   return (
     <div className="workspace-page">
-      <div className="directory-toolbar">
+      <div className="directory-toolbar directory-toolbar--files">
         <Input
           aria-label="Tìm file"
           leftAddon={<Search size={17} />}
@@ -5297,7 +5330,26 @@ function FilesPage({
           placeholder="Tìm theo tên hoặc loại file..."
           value={query}
         />
-        <Badge tone="blue">{files.length} file</Badge>
+        <Badge tone="blue">{visibleFiles.length}/{files.length} file</Badge>
+      </div>
+      <div aria-label="Lọc loại file" className="file-type-filter-bar">
+        {fileTypeFilterOptions.map((option) => {
+          const count = option.value === "all"
+            ? files.length
+            : files.filter((file) => matchesFileTypeFilter(file, option.value)).length;
+          return (
+            <button
+              aria-pressed={fileTypeFilter === option.value}
+              className={fileTypeFilter === option.value ? "file-type-filter file-type-filter--active" : "file-type-filter"}
+              key={option.value}
+              onClick={() => setFileTypeFilter(option.value)}
+              type="button"
+            >
+              <span>{option.label}</span>
+              <small>{count}</small>
+            </button>
+          );
+        })}
       </div>
 
       {isLoading ? (
@@ -5348,6 +5400,8 @@ function FilesPage({
         </div>
       ) : query.trim() ? (
         <EmptyState description="Thử một tên file hoặc loại nội dung khác." title="Không tìm thấy file" />
+      ) : fileTypeFilter !== "all" ? (
+        <EmptyState description="Chưa có file nào thuộc loại này." title="Không tìm thấy file" />
       ) : (
         <EmptyState description="Chưa có file được chia sẻ trong các cuộc trò chuyện." title="Chưa có file" />
       )}
@@ -8520,6 +8574,313 @@ function ImagePreviewDialog({
   );
 }
 
+function LiveFileEditorDialogV2({
+  file,
+  onClose,
+  onDownload,
+  onSave,
+  workspaceId
+}: {
+  file: FileItem;
+  onClose: () => void;
+  onDownload: () => void;
+  onSave: (file: FileItem, editedFile: File, metadata?: LiveFileSaveMetadata) => Promise<void>;
+  workspaceId: string;
+}) {
+  const editorKind = liveFileEditorKind(file) ?? "text";
+  const [content, setContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
+  const [excelSheets, setExcelSheets] = useState<LiveExcelSheet[]>([]);
+  const [savedExcelSnapshot, setSavedExcelSnapshot] = useState("");
+  const [activeExcelSheetIndex, setActiveExcelSheetIndex] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [versions, setVersions] = useState<Array<{ created_at?: string; id: string; version?: number; version_number?: number }>>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const excelWorkbookRef = useRef<import("exceljs").Workbook | null>(null);
+  const excelSnapshot = useMemo(() => liveExcelSnapshot(excelSheets), [excelSheets]);
+  const hasChanges = editorKind === "excel" ? excelSnapshot !== savedExcelSnapshot : content !== savedContent;
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const editedFile = await createLiveEditedFile(file, editorKind, {
+        content,
+        excelSheets,
+        excelWorkbook: excelWorkbookRef.current
+      });
+      return onSave(file, editedFile, { editor_kind: editorKind });
+    },
+    onSuccess: async () => {
+      if (editorKind === "excel") {
+        const nextSheets = excelSheets.map((sheet) => ({
+          ...sheet,
+          originalRows: cloneLiveExcelRows(sheet.rows)
+        }));
+        setExcelSheets(nextSheets);
+        setSavedExcelSnapshot(liveExcelSnapshot(nextSheets));
+      } else {
+        setSavedContent(content);
+      }
+      setVersions(await api.files.versions(workspaceId, file.id).catch(() => []));
+    }
+  });
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  useEffect(() => {
+    let disposed = false;
+    setIsLoading(true);
+    setError(null);
+    setContent("");
+    setSavedContent("");
+    setExcelSheets([]);
+    setSavedExcelSnapshot("");
+    setActiveExcelSheetIndex(0);
+    excelWorkbookRef.current = null;
+    void Promise.all([
+      api.files.download(workspaceId, file.id),
+      api.files.versions(workspaceId, file.id).catch(() => [])
+    ])
+      .then(async ([blob, fileVersions]) => {
+        if (disposed) return;
+        const sizeLimit = liveEditableSizeLimit(editorKind);
+        if (blob.size > sizeLimit) {
+          throw new Error(`File lớn hơn ${formatFileSize(sizeLimit)}, vui lòng tải xuống để sửa bằng ứng dụng chuyên dụng.`);
+        }
+        if (editorKind === "excel") {
+          const parsed = await loadExcelWorkbook(blob);
+          if (disposed) return;
+          excelWorkbookRef.current = parsed.workbook;
+          setExcelSheets(parsed.sheets);
+          setSavedExcelSnapshot(liveExcelSnapshot(parsed.sheets));
+          setVersions(fileVersions);
+          return;
+        }
+        const text = editorKind === "word"
+          ? await loadWordDocumentText(blob)
+          : await blob.text();
+        if (disposed) return;
+        setContent(text);
+        setSavedContent(text);
+        setVersions(fileVersions);
+      })
+      .catch((loadError) => {
+        if (!disposed) {
+          setError(loadError instanceof Error ? loadError.message : "Không mở được file để sửa.");
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [editorKind, file.id, workspaceId]);
+
+  const updateExcelCell = (rowIndex: number, columnIndex: number, value: string) => {
+    setExcelSheets((current) =>
+      current.map((sheet, sheetIndex) => {
+        if (sheetIndex !== activeExcelSheetIndex) return sheet;
+        const rows = sheet.rows.map((row) => [...row]);
+        const columnCount = liveExcelColumnCount(rows);
+        while (rows.length <= rowIndex) {
+          rows.push(Array.from({ length: columnCount }, () => ""));
+        }
+        rows[rowIndex] = rows[rowIndex] ?? [];
+        while (rows[rowIndex].length <= columnIndex) {
+          rows[rowIndex].push("");
+        }
+        rows[rowIndex][columnIndex] = value;
+        return { ...sheet, rows };
+      })
+    );
+  };
+
+  const addExcelRow = () => {
+    setExcelSheets((current) =>
+      current.map((sheet, sheetIndex) => {
+        if (sheetIndex !== activeExcelSheetIndex) return sheet;
+        const columnCount = liveExcelColumnCount(sheet.rows);
+        return {
+          ...sheet,
+          rows: [...sheet.rows, Array.from({ length: columnCount }, () => "")]
+        };
+      })
+    );
+  };
+
+  const addExcelColumn = () => {
+    setExcelSheets((current) =>
+      current.map((sheet, sheetIndex) =>
+        sheetIndex === activeExcelSheetIndex
+          ? { ...sheet, rows: sheet.rows.length ? sheet.rows.map((row) => [...row, ""]) : [[""]] }
+          : sheet
+      )
+    );
+  };
+
+  return (
+    <div className="live-file-editor-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} role="presentation">
+      <section aria-label={`Sửa live ${file.name}`} aria-modal="true" className="live-file-editor-dialog" role="dialog">
+        <header>
+          <div>
+            <small>Sửa file live</small>
+            <strong>{file.name}</strong>
+            <span>{liveEditorKindLabel(editorKind)} · {file.mimeType || liveEditableMimeType(file)} · {file.size}</span>
+          </div>
+          <div>
+            <Button onClick={onDownload} size="sm" type="button" variant="secondary">
+              <Download size={15} /> Tải xuống
+            </Button>
+            <Button disabled={isLoading || !hasChanges || saveMutation.isPending} onClick={() => saveMutation.mutate()} size="sm" type="button">
+              <Cloud size={15} /> {saveMutation.isPending ? "Đang lưu..." : "Lưu version"}
+            </Button>
+            <Button aria-label="Đóng sửa file live" onClick={onClose} type="button" variant="icon">
+              <X size={19} />
+            </Button>
+          </div>
+        </header>
+        <div className="live-file-editor-dialog__body">
+          <aside>
+            <strong>Versions</strong>
+            {versions.length ? (
+              <ul>
+                {versions.slice(0, 6).map((version) => (
+                  <li key={version.id}>
+                    <span>v{version.version_number ?? version.version ?? "?"}</span>
+                    <small>{formatLiveFileVersionTime(version.created_at)}</small>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <small>Chưa có version trước đó.</small>
+            )}
+            {hasChanges ? <small className="live-file-editor-dialog__dirty">Có thay đổi chưa lưu.</small> : <small>Đã đồng bộ.</small>}
+            {editorKind === "word" ? <small>Word .docx được lưu thành version mới từ nội dung đang chỉnh.</small> : null}
+            {editorKind === "excel" ? <small>Excel .xlsx giữ workbook gốc và cập nhật các ô đã thay đổi.</small> : null}
+          </aside>
+          <div className="live-file-editor-dialog__editor">
+            {isLoading ? (
+              <PanelSkeleton />
+            ) : error ? (
+              <ErrorState description={error} title="Không mở được file" />
+            ) : editorKind === "excel" ? (
+              <LiveExcelEditor
+                activeSheetIndex={activeExcelSheetIndex}
+                onActiveSheetChange={setActiveExcelSheetIndex}
+                onAddColumn={addExcelColumn}
+                onAddRow={addExcelRow}
+                onCellChange={updateExcelCell}
+                sheets={excelSheets}
+              />
+            ) : (
+              <textarea
+                aria-label={`Nội dung ${file.name}`}
+                autoFocus
+                className={editorKind === "word" ? "live-file-editor-dialog__word-textarea" : undefined}
+                onChange={(event) => setContent(event.target.value)}
+                spellCheck={false}
+                value={content}
+              />
+            )}
+            {saveMutation.isError ? (
+              <p role="alert">{saveMutation.error instanceof Error ? saveMutation.error.message : "Không lưu được file."}</p>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function LiveExcelEditor({
+  activeSheetIndex,
+  onActiveSheetChange,
+  onAddColumn,
+  onAddRow,
+  onCellChange,
+  sheets
+}: {
+  activeSheetIndex: number;
+  onActiveSheetChange: (index: number) => void;
+  onAddColumn: () => void;
+  onAddRow: () => void;
+  onCellChange: (rowIndex: number, columnIndex: number, value: string) => void;
+  sheets: LiveExcelSheet[];
+}) {
+  const activeSheet = sheets[activeSheetIndex] ?? sheets[0];
+  const rows = activeSheet?.rows.length ? activeSheet.rows : [[""]];
+  const columnCount = liveExcelColumnCount(rows);
+
+  if (!activeSheet) {
+    return <p>Workbook không có sheet để chỉnh sửa.</p>;
+  }
+
+  return (
+    <div className="live-excel-editor">
+      <div className="live-excel-editor__toolbar">
+        <nav aria-label="Sheet Excel">
+          {sheets.map((sheet, index) => (
+            <button
+              className={index === activeSheetIndex ? "is-active" : ""}
+              key={`${sheet.name}-${index}`}
+              onClick={() => onActiveSheetChange(index)}
+              type="button"
+            >
+              {sheet.name}
+            </button>
+          ))}
+        </nav>
+        <div>
+          <Button onClick={onAddRow} size="sm" type="button" variant="secondary">
+            <Plus size={14} /> Dòng
+          </Button>
+          <Button onClick={onAddColumn} size="sm" type="button" variant="secondary">
+            <Plus size={14} /> Cột
+          </Button>
+        </div>
+      </div>
+      <div className="live-excel-editor__table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th aria-label="Dòng" />
+              {Array.from({ length: columnCount }, (_, columnIndex) => (
+                <th key={columnIndex}>{excelColumnLabel(columnIndex)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                <th>{rowIndex + 1}</th>
+                {Array.from({ length: columnCount }, (_, columnIndex) => (
+                  <td key={columnIndex}>
+                    <input
+                      aria-label={`${activeSheet.name} ${excelColumnLabel(columnIndex)}${rowIndex + 1}`}
+                      onChange={(event) => onCellChange(rowIndex, columnIndex, event.target.value)}
+                      value={row[columnIndex] ?? ""}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function LiveFileEditorDialog({
   file,
   onClose,
@@ -10152,12 +10513,7 @@ function fileItemFromAttachment(attachment: MessageAttachmentItem): FileItem {
 }
 
 function isLiveEditableFile(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): boolean {
-  const mimeType = file.mimeType?.trim().toLowerCase() ?? "";
-  if (mimeType.startsWith("text/") || liveEditableMimeTypes.has(mimeType)) {
-    return true;
-  }
-  const extension = fileExtension(file.name);
-  return extension ? liveEditableExtensions.has(extension) : false;
+  return liveFileEditorKind(file) !== null;
 }
 
 function liveEditableMimeType(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): string {
@@ -10171,6 +10527,8 @@ function liveEditableMimeType(file: Pick<FileItem | MessageAttachmentItem, "mime
       return "application/json";
     case "csv":
       return "text/csv";
+    case "docx":
+      return wordDocumentMimeType;
     case "html":
       return "text/html";
     case "md":
@@ -10178,12 +10536,219 @@ function liveEditableMimeType(file: Pick<FileItem | MessageAttachmentItem, "mime
     case "xml":
     case "svg":
       return "text/xml";
+    case "xlsx":
+      return excelWorkbookMimeType;
     case "yaml":
     case "yml":
       return "text/yaml";
     default:
       return "text/plain";
   }
+}
+
+function liveFileEditorKind(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): LiveFileEditorKind | null {
+  const mimeType = file.mimeType?.trim().toLowerCase().split(";")[0] ?? "";
+  const extension = fileExtension(file.name);
+  if (extension === "docx" || mimeType === wordDocumentMimeType) {
+    return "word";
+  }
+  if (extension === "xlsx" || mimeType === excelWorkbookMimeType) {
+    return "excel";
+  }
+  if (mimeType.startsWith("text/") || liveEditableMimeTypes.has(mimeType)) {
+    return "text";
+  }
+  return extension && liveEditableExtensions.has(extension) ? "text" : null;
+}
+
+function liveEditorKindLabel(kind: LiveFileEditorKind): string {
+  switch (kind) {
+    case "excel":
+      return "Excel live";
+    case "word":
+      return "Word live";
+    default:
+      return "Text live";
+  }
+}
+
+function liveEditableSizeLimit(kind: LiveFileEditorKind): number {
+  return kind === "text" ? maxLiveEditableFileBytes : maxLiveEditableOfficeFileBytes;
+}
+
+async function createLiveEditedFile(
+  sourceFile: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">,
+  editorKind: LiveFileEditorKind,
+  input: {
+    content: string;
+    excelSheets: LiveExcelSheet[];
+    excelWorkbook: import("exceljs").Workbook | null;
+  }
+): Promise<File> {
+  if (editorKind === "word") {
+    return createWordDocumentFile(sourceFile.name, input.content);
+  }
+  if (editorKind === "excel") {
+    return createExcelWorkbookFile(sourceFile.name, input.excelWorkbook, input.excelSheets);
+  }
+  const mimeType = liveEditableMimeType(sourceFile);
+  return new File([input.content], sourceFile.name, {
+    lastModified: Date.now(),
+    type: mimeType
+  });
+}
+
+async function loadWordDocumentText(blob: Blob): Promise<string> {
+  const mammoth = await import("mammoth");
+  const result = await mammoth.extractRawText({ arrayBuffer: await blob.arrayBuffer() });
+  return result.value ?? "";
+}
+
+async function createWordDocumentFile(name: string, content: string): Promise<File> {
+  const { Document, Packer, Paragraph, TextRun } = await import("docx");
+  const lines = content.split(/\r?\n/);
+  const paragraphs = (lines.length ? lines : [""]).map((line) =>
+    new Paragraph({
+      children: [new TextRun(line || " ")]
+    })
+  );
+  const document = new Document({
+    sections: [{ children: paragraphs }]
+  });
+  const blob = await Packer.toBlob(document);
+  return new File([blob], ensureFileExtension(name, "docx"), {
+    lastModified: Date.now(),
+    type: wordDocumentMimeType
+  });
+}
+
+async function loadExcelWorkbook(blob: Blob): Promise<{
+  workbook: import("exceljs").Workbook;
+  sheets: LiveExcelSheet[];
+}> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await blob.arrayBuffer());
+  if (!workbook.worksheets.length) {
+    workbook.addWorksheet("Sheet1");
+  }
+  const sheets = workbook.worksheets.map((worksheet) => liveExcelSheetFromWorksheet(worksheet));
+  return { workbook, sheets };
+}
+
+function liveExcelSheetFromWorksheet(worksheet: import("exceljs").Worksheet): LiveExcelSheet {
+  const { columnCount, rowCount } = liveExcelWorksheetSize(worksheet);
+  const rows = Array.from({ length: rowCount }, (_, rowIndex) =>
+    Array.from({ length: columnCount }, (_, columnIndex) =>
+      excelCellDisplayValue(worksheet.getCell(rowIndex + 1, columnIndex + 1).value)
+    )
+  );
+  return {
+    name: worksheet.name,
+    originalRows: cloneLiveExcelRows(rows),
+    rows
+  };
+}
+
+function liveExcelWorksheetSize(worksheet: import("exceljs").Worksheet): { columnCount: number; rowCount: number } {
+  let rowCount = Math.max(worksheet.actualRowCount, worksheet.rowCount, 1);
+  let columnCount = Math.max(worksheet.actualColumnCount, worksheet.columnCount, 1);
+  worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    rowCount = Math.max(rowCount, rowNumber);
+    columnCount = Math.max(columnCount, row.cellCount);
+  });
+  if (rowCount > maxLiveExcelRows || columnCount > maxLiveExcelColumns) {
+    throw new Error(`Excel live hỗ trợ tối đa ${maxLiveExcelRows} dòng và ${maxLiveExcelColumns} cột trong mỗi sheet.`);
+  }
+  return {
+    columnCount: Math.max(columnCount, 6),
+    rowCount: Math.max(rowCount, 12)
+  };
+}
+
+async function createExcelWorkbookFile(
+  name: string,
+  workbook: import("exceljs").Workbook | null,
+  sheets: LiveExcelSheet[]
+): Promise<File> {
+  if (!workbook) {
+    throw new Error("Workbook chưa được tải xong.");
+  }
+  for (const sheet of sheets) {
+    const worksheet = workbook.getWorksheet(sheet.name) ?? workbook.addWorksheet(sheet.name);
+    const rowCount = Math.max(sheet.rows.length, sheet.originalRows.length);
+    const columnCount = Math.max(liveExcelColumnCount(sheet.rows), liveExcelColumnCount(sheet.originalRows));
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        const current = sheet.rows[rowIndex]?.[columnIndex] ?? "";
+        const original = sheet.originalRows[rowIndex]?.[columnIndex] ?? "";
+        if (current !== original) {
+          worksheet.getCell(rowIndex + 1, columnIndex + 1).value = current.trim() ? current : null;
+        }
+      }
+    }
+  }
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer as unknown as BlobPart], { type: excelWorkbookMimeType });
+  return new File([blob], ensureFileExtension(name, "xlsx"), {
+    lastModified: Date.now(),
+    type: excelWorkbookMimeType
+  });
+}
+
+function excelCellDisplayValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+  if (typeof value !== "object") {
+    return String(value);
+  }
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.richText)) {
+    return record.richText
+      .map((part) => typeof part === "object" && part && "text" in part ? String((part as { text?: unknown }).text ?? "") : "")
+      .join("");
+  }
+  if ("result" in record) {
+    return excelCellDisplayValue(record.result);
+  }
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  if (typeof record.formula === "string") {
+    return `=${record.formula}`;
+  }
+  return "";
+}
+
+function cloneLiveExcelRows(rows: string[][]): string[][] {
+  return rows.map((row) => [...row]);
+}
+
+function liveExcelSnapshot(sheets: LiveExcelSheet[]): string {
+  return JSON.stringify(sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rows })));
+}
+
+function liveExcelColumnCount(rows: string[][]): number {
+  return Math.max(1, ...rows.map((row) => row.length));
+}
+
+function excelColumnLabel(index: number): string {
+  let value = "";
+  let cursor = index + 1;
+  while (cursor > 0) {
+    const remainder = (cursor - 1) % 26;
+    value = String.fromCharCode(65 + remainder) + value;
+    cursor = Math.floor((cursor - 1) / 26);
+  }
+  return value;
+}
+
+function ensureFileExtension(name: string, extension: string): string {
+  return fileExtension(name) === extension ? name : `${name.replace(/\.[^.]+$/, "")}.${extension}`;
 }
 
 function formatLiveFileVersionTime(value?: string): string {
@@ -10200,6 +10765,37 @@ function formatLiveFileVersionTime(value?: string): string {
 function fileExtension(name: string): string {
   const extension = name.trim().split(".").pop()?.toLowerCase() ?? "";
   return extension && extension !== name.trim().toLowerCase() ? extension : "";
+}
+
+function fileTypeFilterKind(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">): Exclude<FileTypeFilter, "all"> | "other" {
+  const mimeType = file.mimeType?.trim().toLowerCase() ?? "";
+  const extension = fileExtension(file.name);
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType.startsWith("video/")) {
+    return "video";
+  }
+  if (extension === "csv" || mimeType === "text/csv" || mimeType.includes("csv")) {
+    return "csv";
+  }
+  if (extension === "md" || extension === "markdown" || mimeType === "text/markdown" || mimeType === "text/x-markdown") {
+    return "md";
+  }
+  if (excelFileExtensions.has(extension) || mimeType.includes("spreadsheet") || mimeType.includes("excel")) {
+    return "excel";
+  }
+  if (wordFileExtensions.has(extension) || mimeType.includes("wordprocessingml") || mimeType.includes("msword")) {
+    return "word";
+  }
+  if (mimeType.startsWith("text/") || textFileExtensions.has(extension)) {
+    return "text";
+  }
+  return "other";
+}
+
+function matchesFileTypeFilter(file: Pick<FileItem | MessageAttachmentItem, "mimeType" | "name">, filter: FileTypeFilter): boolean {
+  return filter === "all" || fileTypeFilterKind(file) === filter;
 }
 
 function stripCodeLanguage(block: string) {
@@ -10259,10 +10855,16 @@ function AttachmentMedia({
 }) {
   const directSource = directEmbeddableMediaSource(attachment.previewUrl) ?? directEmbeddableMediaSource(attachment.url);
   const [resolvedSource, setResolvedSource] = useState<string | undefined>(directSource ?? getCachedMediaUrl(attachment.fileId));
+  const [isResolvingVideo, setIsResolvingVideo] = useState(false);
+  const [videoActivated, setVideoActivated] = useState(false);
 
   useEffect(() => {
     if (directSource) {
       setResolvedSource(directSource);
+      return undefined;
+    }
+    if (attachment.isVideo) {
+      setResolvedSource(getCachedMediaUrl(attachment.fileId));
       return undefined;
     }
 
@@ -10279,7 +10881,24 @@ function AttachmentMedia({
     return () => {
       disposed = true;
     };
-  }, [attachment.fileId, directSource, onResolve]);
+  }, [attachment.fileId, attachment.isVideo, directSource, onResolve]);
+
+  async function handleOpenVideo() {
+    if (resolvedSource) {
+      setVideoActivated(true);
+      return;
+    }
+    setIsResolvingVideo(true);
+    try {
+      const source = await resolveCachedMediaUrl(attachment.fileId, () => onResolve(attachment.fileId));
+      setResolvedSource(source);
+      setVideoActivated(true);
+    } catch {
+      setResolvedSource(undefined);
+    } finally {
+      setIsResolvingVideo(false);
+    }
+  }
 
   if (attachment.isAudio) {
     return resolvedSource
@@ -10291,13 +10910,23 @@ function AttachmentMedia({
     return (
       <div className="attachment-card attachment-media-card attachment-media-card--video attachment-video">
         <div className="attachment-media-card__preview">
-          {resolvedSource ? (
+          {resolvedSource && videoActivated ? (
             <video controls playsInline preload="metadata" src={resolvedSource}>
               Trình duyệt của bạn không hỗ trợ phát video.
             </video>
-          ) : <span className="attachment-media-loading">Đang tải video...</span>}
+          ) : (
+            <button
+              className="attachment-video-placeholder"
+              disabled={isResolvingVideo}
+              onClick={() => void handleOpenVideo()}
+              type="button"
+            >
+              <Play size={22} />
+              <span>{isResolvingVideo ? "Đang mở video..." : "Mở video"}</span>
+            </button>
+          )}
         </div>
-        <button className="attachment-media-card__caption" disabled={!resolvedSource} onClick={() => onDownload(attachment)} title={attachment.name} type="button">
+        <button className="attachment-media-card__caption" onClick={() => onDownload(attachment)} title={attachment.name} type="button">
           {attachment.name}
         </button>
       </div>

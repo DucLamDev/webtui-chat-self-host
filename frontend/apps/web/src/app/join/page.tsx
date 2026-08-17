@@ -21,6 +21,7 @@ import {
 import { legalPolicyConfig } from "@/features/auth/legal-policy-config";
 import { publicApi, runtimeEnvironment } from "@/lib/api";
 import { JitsiMeeting, type JitsiMeetingHandle } from "@/features/chat/components/jitsi-meeting";
+import { buildJitsiToolbarButtons } from "@/features/chat/components/jitsi-meeting-controller";
 
 type StoredGuestSession = {
   accessToken: string;
@@ -152,6 +153,7 @@ export default function PublicConversationJoinPage() {
         displayName={guestSession?.displayName || displayName}
         meetingBaseUrl={joinedRoom.meeting_base_url}
         microphoneEnabled={joinedRoom.guest_microphone_enabled}
+        roomTitle={joinedRoom.channel_name}
         roomMode={joinedRoom.room_mode}
         roomKey={joinedRoom.meeting_room_key}
         videoEnabled={joinedRoom.guest_camera_enabled}
@@ -302,6 +304,7 @@ function PublicMeetingRoom({
   displayName,
   meetingBaseUrl,
   microphoneEnabled,
+  roomTitle,
   roomMode,
   roomKey,
   videoEnabled
@@ -310,6 +313,7 @@ function PublicMeetingRoom({
   displayName: string;
   meetingBaseUrl?: string;
   microphoneEnabled: boolean;
+  roomTitle: string;
   roomMode: "internal" | "public" | "webinar";
   roomKey: string;
   videoEnabled: boolean;
@@ -319,18 +323,10 @@ function PublicMeetingRoom({
   const baseUrl = meetingBaseUrl?.trim()
     || process.env.NEXT_PUBLIC_JITSI_BASE_URL?.trim()
     || defaultMeetingBaseUrl();
+  const canPresent = roomMode !== "webinar";
   const toolbarButtons = useMemo(
-    () => [
-        ...(roomMode === "webinar" ? [] : ["microphone", "camera", "select-background"]),
-        ...(!chatLocked ? ["chat"] : []),
-        ...(!chatLocked ? ["participants-pane"] : []),
-        "raisehand",
-        "tileview",
-        "fullscreen",
-        "settings",
-        "hangup"
-      ],
-    [chatLocked, roomMode]
+    () => buildJitsiToolbarButtons({ canPresent, chatEnabled: !chatLocked }),
+    [canPresent, chatLocked]
   );
 
   if (!baseUrl) {
@@ -359,7 +355,9 @@ function PublicMeetingRoom({
     <main className="public-meeting-room">
       <JitsiMeeting
         baseUrl={baseUrl}
+        canAnnotate={canPresent}
         displayName={displayName}
+        meetingTitle={roomTitle}
         microphoneEnabled={microphoneEnabled}
         onClose={() => setHasLeft(true)}
         ref={meetingRef}

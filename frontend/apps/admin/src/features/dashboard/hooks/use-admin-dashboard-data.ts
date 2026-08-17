@@ -197,8 +197,8 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
 
   const auditLogsQuery = useQuery({
     enabled: Boolean(workspaceId && canViewAudit && isActiveSection("overview", "roles")),
-    queryFn: () => api.admin.auditLogs(workspaceId, { limit: 50 }),
-    queryKey: queryKeys.admin.auditLogs(workspaceId),
+    queryFn: () => api.admin.auditLogs(workspaceId, { limit: 200 }),
+    queryKey: queryKeys.admin.auditLogs(workspaceId, "limit:200"),
     retry: false
   });
 
@@ -325,7 +325,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
 
   const webhookDeliveriesQuery = useQuery({
     enabled: Boolean(workspaceId && options.selectedOutgoingWebhookId && canManageWebhooks && isActiveSection("integrations")),
-    queryFn: () => api.webhooks.deliveries(workspaceId, options.selectedOutgoingWebhookId ?? ""),
+    queryFn: () => api.webhooks.deliveries(workspaceId, options.selectedOutgoingWebhookId ?? "", { limit: 100 }),
     queryKey: queryKeys.integrations.webhookDeliveries(workspaceId, options.selectedOutgoingWebhookId ?? ""),
     retry: false
   });
@@ -339,7 +339,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
 
   const cronjobRunsQuery = useQuery({
     enabled: Boolean(workspaceId && options.selectedCronJobId && canManageCronjobs && isActiveSection("cronjobs")),
-    queryFn: () => api.cronjobs.runs(workspaceId, options.selectedCronJobId ?? "", { limit: 50 }),
+    queryFn: () => api.cronjobs.runs(workspaceId, options.selectedCronJobId ?? "", { limit: 100 }),
     queryKey: queryKeys.operations.cronJobRuns(workspaceId, options.selectedCronJobId ?? ""),
     retry: false
   });
@@ -353,7 +353,7 @@ export function useAdminDashboardData(options: AdminDashboardDataOptions = {}) {
 
   const backupRunsQuery = useQuery({
     enabled: Boolean(workspaceId && options.selectedBackupJobId && canManageBackups && isActiveSection("backups")),
-    queryFn: () => api.backups.runs(workspaceId, options.selectedBackupJobId ?? "", { limit: 50 }),
+    queryFn: () => api.backups.runs(workspaceId, options.selectedBackupJobId ?? "", { limit: 100 }),
     queryKey: queryKeys.operations.backupRuns(workspaceId, options.selectedBackupJobId ?? ""),
     retry: false
   });

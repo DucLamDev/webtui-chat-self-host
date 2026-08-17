@@ -2805,6 +2805,14 @@ function CronJobRunsTable({
   runs: CronJobRun[];
   selectedJob: CronJob | null;
 }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const pageCount = Math.max(1, Math.ceil(runs.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visibleRuns = runs.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  useEffect(() => setPage(1), [runs.length, selectedJob?.id]);
+
   if (!selectedJob) {
     return <EmptyState description="Chọn cronjob ở bảng bên trên để xem lịch sử chạy." title="Chưa chọn cronjob" />;
   }
@@ -2818,26 +2826,29 @@ function CronJobRunsTable({
   }
 
   return (
-    <div className="data-table data-table--runs" role="table">
-      <div className="data-table__row data-table__row--head" role="row">
-        <span>Trạng thái</span>
-        <span>Bắt đầu</span>
-        <span>Kết thúc</span>
-        <span>Thời lượng</span>
-        <span>Log</span>
-      </div>
-      {runs.map((run) => (
-        <div className="data-table__row" key={run.id} role="row">
-          <span>
-            <Badge tone={statusTone(run.status)}>{run.status}</Badge>
-          </span>
-          <span>{formatDateTime(run.started_at)}</span>
-          <span>{formatDateTime(run.finished_at)}</span>
-          <span>{formatDuration(run.duration_ms)}</span>
-          <span className="log-snippet">{run.error ?? run.log ?? "Chưa có log"}</span>
+    <>
+      <div className="data-table data-table--runs" role="table">
+        <div className="data-table__row data-table__row--head" role="row">
+          <span>Trạng thái</span>
+          <span>Bắt đầu</span>
+          <span>Kết thúc</span>
+          <span>Thời lượng</span>
+          <span>Log</span>
         </div>
-      ))}
-    </div>
+        {visibleRuns.map((run) => (
+          <div className="data-table__row" key={run.id} role="row">
+            <span>
+              <Badge tone={statusTone(run.status)}>{run.status}</Badge>
+            </span>
+            <span>{formatDateTime(run.started_at)}</span>
+            <span>{formatDateTime(run.finished_at)}</span>
+            <span>{formatDuration(run.duration_ms)}</span>
+            <span className="log-snippet">{run.error ?? run.log ?? "Chưa có log"}</span>
+          </div>
+        ))}
+      </div>
+      <PaginationFooter count={runs.length} onPageChange={setPage} page={safePage} pageCount={pageCount} pageSize={pageSize} />
+    </>
   );
 }
 
@@ -2916,6 +2927,14 @@ function BackupRunsTable({
   runs: BackupRun[];
   selectedJob: BackupJob | null;
 }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const pageCount = Math.max(1, Math.ceil(runs.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visibleRuns = runs.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  useEffect(() => setPage(1), [runs.length, selectedJob?.id]);
+
   if (!selectedJob) {
     return <EmptyState description="Chọn backup job ở bảng bên trên để xem lịch sử chạy." title="Chưa chọn backup" />;
   }
@@ -2929,30 +2948,43 @@ function BackupRunsTable({
   }
 
   return (
-    <div className="data-table data-table--runs" role="table">
-      <div className="data-table__row data-table__row--head" role="row">
-        <span>Trạng thái</span>
-        <span>Bắt đầu</span>
-        <span>Kết thúc</span>
-        <span>Dung lượng</span>
-        <span>Kết quả</span>
-      </div>
-      {runs.map((run) => (
-        <div className="data-table__row" key={run.id} role="row">
-          <span>
-            <Badge tone={statusTone(run.status)}>{run.status}</Badge>
-          </span>
-          <span>{formatDateTime(run.started_at)}</span>
-          <span>{formatDateTime(run.finished_at)}</span>
-          <span>{formatBytes(run.byte_size)}</span>
-          <span className="log-snippet">{run.error ?? run.object_key ?? run.checksum_sha256 ?? "Chưa có kết quả"}</span>
+    <>
+      <div className="data-table data-table--runs" role="table">
+        <div className="data-table__row data-table__row--head" role="row">
+          <span>Trạng thái</span>
+          <span>Bắt đầu</span>
+          <span>Kết thúc</span>
+          <span>Dung lượng</span>
+          <span>Kết quả</span>
         </div>
-      ))}
-    </div>
+        {visibleRuns.map((run) => (
+          <div className="data-table__row" key={run.id} role="row">
+            <span>
+              <Badge tone={statusTone(run.status)}>{run.status}</Badge>
+            </span>
+            <span>{formatDateTime(run.started_at)}</span>
+            <span>{formatDateTime(run.finished_at)}</span>
+            <span>{formatBytes(run.byte_size)}</span>
+            <span className="log-snippet">{run.error ?? run.object_key ?? run.checksum_sha256 ?? "Chưa có kết quả"}</span>
+          </div>
+        ))}
+      </div>
+      <PaginationFooter count={runs.length} onPageChange={setPage} page={safePage} pageCount={pageCount} pageSize={pageSize} />
+    </>
   );
 }
 
 function AuditPanel({ compact = false, data }: { compact?: boolean; data: DashboardData }) {
+  const [page, setPage] = useState(1);
+  const pageSize = compact ? 6 : 10;
+  const pageCount = Math.max(1, Math.ceil(data.auditLogs.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visibleLogs = compact
+    ? data.auditLogs.slice(0, pageSize)
+    : data.auditLogs.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  useEffect(() => setPage(1), [compact, data.auditLogs.length]);
+
   return (
     <article className="admin-panel">
       <header>
@@ -2966,25 +2998,36 @@ function AuditPanel({ compact = false, data }: { compact?: boolean; data: Dashbo
       {data.auditLogsQuery.isLoading ? (
         <TableSkeleton />
       ) : data.auditLogs.length ? (
-        <div className={compact ? "data-table data-table--audit data-table--compact" : "data-table data-table--audit"} role="table">
-          <div className="data-table__row data-table__row--head" role="row">
-            <span>Thời gian</span>
-            <span>Action</span>
-            <span>Entity</span>
-            <span>Actor</span>
-          </div>
-          {data.auditLogs.slice(0, compact ? 6 : 50).map((log) => (
-            <div className="data-table__row" key={log.id} role="row">
-              <span>{formatDateTime(log.created_at)}</span>
-              <span>{log.action}</span>
-              <span>
-                {log.entity_type}
-                {log.entity_id ? ` / ${shortId(log.entity_id)}` : ""}
-              </span>
-              <span>{log.actor_user_id ? shortId(log.actor_user_id) : "Hệ thống"}</span>
+        <>
+          <div className={compact ? "data-table data-table--audit data-table--compact" : "data-table data-table--audit"} role="table">
+            <div className="data-table__row data-table__row--head" role="row">
+              <span>Thời gian</span>
+              <span>Action</span>
+              <span>Entity</span>
+              <span>Actor</span>
             </div>
-          ))}
-        </div>
+            {visibleLogs.map((log) => (
+              <div className="data-table__row" key={log.id} role="row">
+                <span>{formatDateTime(log.created_at)}</span>
+                <span>{log.action}</span>
+                <span>
+                  {log.entity_type}
+                  {log.entity_id ? ` / ${shortId(log.entity_id)}` : ""}
+                </span>
+                <span>{log.actor_user_id ? shortId(log.actor_user_id) : "Hệ thống"}</span>
+              </div>
+            ))}
+          </div>
+          {!compact ? (
+            <PaginationFooter
+              count={data.auditLogs.length}
+              onPageChange={setPage}
+              page={safePage}
+              pageCount={pageCount}
+              pageSize={pageSize}
+            />
+          ) : null}
+        </>
       ) : (
         <EmptyState description="Backend chưa trả về audit log hoặc workspace chưa có hoạt động." title="Chưa có audit log" />
       )}
@@ -3828,6 +3871,14 @@ function OutgoingWebhookList({
 }
 
 function DeliveryPanel({ deliveries, isLoading, onTest, testDisabled }: { deliveries: WebhookDelivery[]; isLoading: boolean; onTest: () => void; testDisabled: boolean }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const pageCount = Math.max(1, Math.ceil(deliveries.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visibleDeliveries = deliveries.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  useEffect(() => setPage(1), [deliveries.length]);
+
   return (
     <article className="admin-panel">
       <header>
@@ -3840,26 +3891,35 @@ function DeliveryPanel({ deliveries, isLoading, onTest, testDisabled }: { delive
       {isLoading ? (
         <TableSkeleton />
       ) : deliveries.length ? (
-        <div className="data-table data-table--deliveries" role="table">
-          <div className="data-table__row data-table__row--head" role="row">
-            <span>Event</span>
-            <span>Status</span>
-            <span>HTTP</span>
-            <span>Lần thử</span>
-            <span>Cập nhật</span>
-          </div>
-          {deliveries.map((delivery) => (
-            <div className="data-table__row" key={delivery.id} role="row">
-              <span>{delivery.event_type}</span>
-              <span>
-                <Badge tone={delivery.status === "delivered" ? "green" : "orange"}>{delivery.status}</Badge>
-              </span>
-              <span>{delivery.response_status ?? "Chưa có"}</span>
-              <span>{delivery.attempt_count}</span>
-              <span>{formatDateTime(delivery.updated_at)}</span>
+        <>
+          <div className="data-table data-table--deliveries" role="table">
+            <div className="data-table__row data-table__row--head" role="row">
+              <span>Event</span>
+              <span>Status</span>
+              <span>HTTP</span>
+              <span>Lần thử</span>
+              <span>Cập nhật</span>
             </div>
-          ))}
-        </div>
+            {visibleDeliveries.map((delivery) => (
+              <div className="data-table__row" key={delivery.id} role="row">
+                <span>{delivery.event_type}</span>
+                <span>
+                  <Badge tone={delivery.status === "delivered" ? "green" : "orange"}>{delivery.status}</Badge>
+                </span>
+                <span>{delivery.response_status ?? "Chưa có"}</span>
+                <span>{delivery.attempt_count}</span>
+                <span>{formatDateTime(delivery.updated_at)}</span>
+              </div>
+            ))}
+          </div>
+          <PaginationFooter
+            count={deliveries.length}
+            onPageChange={setPage}
+            page={safePage}
+            pageCount={pageCount}
+            pageSize={pageSize}
+          />
+        </>
       ) : (
         <EmptyState description="Chọn outgoing webhook hoặc chờ backend tạo delivery." title="Chưa có delivery log" />
       )}

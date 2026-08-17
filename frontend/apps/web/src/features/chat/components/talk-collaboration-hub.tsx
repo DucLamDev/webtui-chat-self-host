@@ -36,6 +36,7 @@ import {
   Mic,
   Plus,
   ShieldCheck,
+  StopCircle,
   Trash2,
   Users,
   Video,
@@ -44,6 +45,7 @@ import {
 } from "@webtui/icons";
 import { api } from "@/lib/api";
 import { JitsiMeeting, type JitsiMeetingHandle } from "./jitsi-meeting";
+import { buildJitsiToolbarButtons } from "./jitsi-meeting-controller";
 
 type HubChannel = {
   canManage?: boolean;
@@ -519,12 +521,18 @@ export function TalkCollaborationHub({
       ) : null}
 
       {meetingRoomKey ? (
-        <JitsiMeetingOverlay
+        <JitsiMeetingOverlayV2
+          canManage={Boolean(channel.canManage)}
           chatLocked={settings.chat_locked && settings.room_mode !== "internal"}
+          channelId={channel.id}
+          currentUserId={currentUser.id}
           displayName={currentUser.name}
           meetingBaseUrl={settings.meeting_base_url}
+          meetingTitle={channel.name}
           microphoneEnabled={settings.guest_microphone_enabled || settings.room_mode === "internal"}
+          members={members}
           onClose={() => setMeetingRoomKey("")}
+          onToast={onToast}
           participantRole={
             rolesQuery.data?.find((role) => role.user_id === currentUser.id)?.role
               ?? settings.default_participant_role
@@ -532,6 +540,7 @@ export function TalkCollaborationHub({
           roomMode={settings.room_mode}
           roomKey={meetingRoomKey}
           videoEnabled={settings.guest_camera_enabled || settings.room_mode === "internal"}
+          workspaceId={workspaceId}
         />
       ) : null}
     </section>
@@ -1571,6 +1580,7 @@ function BreakoutRoomsPanel({
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function JitsiMeetingOverlay({
   chatLocked,
   displayName,
@@ -1631,6 +1641,248 @@ function JitsiMeetingOverlay({
       )}
     </div>
   );
+}
+
+function JitsiMeetingOverlayV2({
+  canManage,
+  chatLocked,
+  channelId,
+  currentUserId,
+  displayName,
+  meetingBaseUrl,
+  meetingTitle,
+  microphoneEnabled,
+  members,
+  onClose,
+  onToast,
+  participantRole,
+  roomMode,
+  roomKey,
+  videoEnabled,
+  workspaceId
+}: {
+  canManage: boolean;
+  chatLocked: boolean;
+  channelId: string;
+  currentUserId: string;
+  displayName: string;
+  meetingBaseUrl?: string;
+  meetingTitle: string;
+  microphoneEnabled: boolean;
+  members: ChannelMember[];
+  onClose: () => void;
+  onToast: (message: string) => void;
+  participantRole: CollaborationParticipantRole;
+  roomMode: CollaborationRoomMode;
+  roomKey: string;
+  videoEnabled: boolean;
+  workspaceId: string;
+}) {
+  const baseUrl = meetingBaseUrl?.trim() || jitsiBaseUrl();
+  const canPresent = roomMode === "internal" || participantRole !== "listener";
+  const canRecord = canManage || participantRole === "moderator";
+  const meetingRef = useRef<JitsiMeetingHandle>(null);
+  const nativeRecordingIdRef = useRef<string | null>(null);
+  const recording = useMeetingOverlayRecording({
+    canManage: canRecord,
+    channelId,
+    members,
+    onToast,
+    workspaceId
+  });
+  const toolbarButtons = useMemo(
+    () => buildJitsiToolbarButtons({ canPresent, canRecord, chatEnabled: !chatLocked }),
+    [canPresent, canRecord, chatLocked]
+  );
+  const activeRecording = recording.activeRecording;
+  const recordingInProgress = activeRecording?.status === "recording";
+  const recordingPending = activeRecording?.status === "pending";
+  const needsConsent = Boolean(
+    recordingPending && activeRecording?.participant_user_ids.includes(currentUserId)
+  );
+  const recordingLabel = recordingInProgress
+    ? "Dừng ghi"
+    : needsConsent
+      ? "Đồng ý ghi"
+      : recordingPending
+        ? "Chờ đồng ý"
+        : recording.policy?.enabled
+          ? "Ghi hình"
+          : "Bật ghi hình";
+  const recordDisabled = recording.isPending || (!canRecord && !needsConsent) || (recordingPending && !needsConsent);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeRecording?.status === "recording") {
+      if (nativeRecordingIdRef.current !== activeRecording.id) {
+        nativeRecordingIdRef.current = activeRecording.id;
+        meetingRef.current?.startRecording();
+      }
+      return;
+    }
+    nativeRecordingIdRef.current = null;
+  }, [activeRecording?.id, activeRecording?.status]);
+
+  const handleRecordingClick = () => {
+    if (activeRecording?.status === "recording") {
+      if (!canRecord) {
+        onToast("Chỉ chủ trì mới có thể dừng ghi hình.");
+        return;
+      }
+      meetingRef.current?.stopRecording();
+      recording.stop(activeRecording.id);
+      return;
+    }
+    if (activeRecording?.status === "pending") {
+      if (needsConsent) {
+        recording.consent(activeRecording.id);
+        return;
+      }
+      onToast("Đang chờ các thành viên đồng ý ghi hình.");
+      return;
+    }
+    if (!canRecord) {
+      onToast("Bạn chưa có quyền bắt đầu ghi hình cuộc họp.");
+      return;
+    }
+    if (!recording.policy?.enabled) {
+      recording.enablePolicy();
+      return;
+    }
+    recording.start();
+  };
+
+  return (
+    <div className="talk-meeting-overlay" role="dialog" aria-label="Phòng họp video">
+      <header>
+        <span><Video size={18} /><strong>Phòng họp bảo mật</strong></span>
+        <div className="talk-meeting-overlay__actions">
+          {activeRecording ? (
+            <span className={`talk-meeting-overlay__recording${recordingInProgress ? " is-live" : ""}`}>
+              {recordingInProgress ? "ĐANG GHI" : `${activeRecording.consent_count}/${activeRecording.participant_count} đồng ý`}
+            </span>
+          ) : null}
+          <button
+            aria-label={recordingLabel}
+            className={recordingInProgress ? "talk-meeting-overlay__record is-live" : "talk-meeting-overlay__record"}
+            disabled={recordDisabled}
+            onClick={handleRecordingClick}
+            title={recordingLabel}
+            type="button"
+          >
+            {recordingInProgress ? <StopCircle size={16} /> : <Video size={16} />}
+            <span>{recordingLabel}</span>
+          </button>
+          <button aria-label="Rời phòng họp" onClick={() => meetingRef.current ? meetingRef.current.leave() : onClose()} type="button"><X size={18} /></button>
+        </div>
+      </header>
+      {baseUrl ? (
+        <JitsiMeeting
+          baseUrl={baseUrl}
+          canAnnotate={canPresent}
+          displayName={displayName}
+          meetingTitle={meetingTitle}
+          microphoneEnabled={microphoneEnabled}
+          onClose={onClose}
+          ref={meetingRef}
+          roomKey={roomKey}
+          toolbarButtons={toolbarButtons}
+          videoEnabled={videoEnabled}
+        />
+      ) : (
+        <div className="talk-meeting-missing">
+          <ShieldCheck size={28} />
+          <strong>Chưa thể mở phòng họp</strong>
+          <p>Dịch vụ họp chưa sẵn sàng. Vui lòng đóng cửa sổ này và thử lại sau ít phút.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useMeetingOverlayRecording({
+  canManage,
+  channelId,
+  members,
+  onToast,
+  workspaceId
+}: {
+  canManage: boolean;
+  channelId: string;
+  members: ChannelMember[];
+  onToast: (message: string) => void;
+  workspaceId: string;
+}) {
+  const queryClient = useQueryClient();
+  const policyQuery = useQuery({
+    queryFn: () => api.channels.recordingPolicy(workspaceId, channelId),
+    queryKey: queryKeys.channels.recordingPolicy(workspaceId, channelId)
+  });
+  const recordingsQuery = useQuery({
+    queryFn: () => api.channels.recordings(workspaceId, channelId),
+    queryKey: queryKeys.channels.recordings(workspaceId, channelId),
+    refetchInterval: 10_000
+  });
+  const invalidateRecordings = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.channels.recordings(workspaceId, channelId) });
+  const policyMutation = useMutation({
+    mutationFn: () => {
+      const current = policyQuery.data;
+      return api.channels.updateRecordingPolicy(workspaceId, channelId, {
+        consent_required: current?.consent_required ?? true,
+        enabled: true,
+        provider: current?.provider ?? "jibri",
+        retention_days: current?.retention_days ?? 30,
+        summary_enabled: current?.summary_enabled ?? false,
+        transcription_enabled: current?.transcription_enabled ?? false
+      });
+    },
+    onError: (error) => onToast(error instanceof Error ? error.message : "Không bật được ghi hình."),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.channels.recordingPolicy(workspaceId, channelId) });
+      onToast("Đã bật chính sách ghi hình. Bấm Ghi hình để bắt đầu phiên mới.");
+    }
+  });
+  const startMutation = useMutation({
+    mutationFn: () => {
+      if (!canManage) throw new Error("Bạn chưa có quyền bắt đầu ghi hình cuộc họp.");
+      return api.channels.startRecording(workspaceId, channelId, {
+        participant_user_ids: members.map((member) => member.user_id)
+      });
+    },
+    onError: (error) => onToast(error instanceof Error ? error.message : "Không bắt đầu được ghi hình."),
+    onSuccess: invalidateRecordings
+  });
+  const consentMutation = useMutation({
+    mutationFn: (id: string) => api.channels.setRecordingConsent(workspaceId, channelId, id, true),
+    onError: (error) => onToast(error instanceof Error ? error.message : "Không gửi được đồng ý ghi hình."),
+    onSuccess: invalidateRecordings
+  });
+  const stopMutation = useMutation({
+    mutationFn: (id: string) => api.channels.stopRecording(workspaceId, channelId, id),
+    onError: (error) => onToast(error instanceof Error ? error.message : "Không dừng được ghi hình."),
+    onSuccess: invalidateRecordings
+  });
+  const activeRecording = recordingsQuery.data?.find((item) =>
+    item.status === "pending" || item.status === "recording"
+  );
+
+  return {
+    activeRecording,
+    consent: (id: string) => consentMutation.mutate(id),
+    enablePolicy: () => policyMutation.mutate(),
+    isPending: policyMutation.isPending || startMutation.isPending || consentMutation.isPending || stopMutation.isPending,
+    policy: policyQuery.data,
+    start: () => startMutation.mutate(),
+    stop: (id: string) => stopMutation.mutate(id)
+  };
 }
 
 function parseWhiteboardStrokes(content: JsonObject): WhiteboardStroke[] {
