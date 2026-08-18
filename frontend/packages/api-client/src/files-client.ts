@@ -19,7 +19,29 @@ export type ResumableBrowserUploadInput = UploadFileInput & {
   session_id?: string;
 };
 
+export type DownloadFileResult = {
+  blob: Blob;
+  checksumSha256?: string | null;
+  contentType?: string | null;
+};
+
 export function createFilesClient(http: HttpClient) {
+  async function downloadWithMetadata(workspaceId: string, fileId: string): Promise<DownloadFileResult> {
+    const response = await http.blobResponse(
+      `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(fileId)}/download`,
+      {
+        cache: "no-store",
+        query: { _fresh: Date.now() }
+      }
+    );
+
+    return {
+      blob: response.blob,
+      checksumSha256: checksumFromDownloadHeaders(response.headers),
+      contentType: response.headers.get("Content-Type")
+    };
+  }
+
   return {
     async list(workspaceId: string, params: QueryParams = {}) {
       const data = await http.get<unknown>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files`, {
@@ -157,14 +179,17 @@ export function createFilesClient(http: HttpClient) {
       );
       return itemFrom<FileObject>(data, "file");
     },
-    download(workspaceId: string, fileId: string) {
-      return http.blob(
-        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(fileId)}/download`,
-        {
-          cache: "no-store",
-          query: { _fresh: Date.now() }
-        }
+    async download(workspaceId: string, fileId: string) {
+      return (await downloadWithMetadata(workspaceId, fileId)).blob;
+    },
+    downloadWithMetadata,
+    downloadChecksumFromHeaders: checksumFromDownloadHeaders,
+    normalizeDownloadChecksum,
+    async latestChecksum(workspaceId: string, fileId: string) {
+      const data = await http.get<unknown>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(fileId)}`
       );
+      return normalizeDownloadChecksum(itemFrom<FileObject>(data, "file")?.checksum_sha256);
     },
     async versions(workspaceId: string, fileId: string) {
       const data = await http.get<unknown>(
@@ -218,4 +243,17 @@ export function createFilesClient(http: HttpClient) {
       return attachment;
     }
   };
+}
+
+function checksumFromDownloadHeaders(headers: Headers): string | null {
+  return normalizeDownloadChecksum(headers.get("X-File-Checksum-SHA256"))
+    ?? normalizeDownloadChecksum(headers.get("ETag"));
+}
+
+function normalizeDownloadChecksum(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.trim().replace(/^W\//i, "").replace(/^"|"$/g, "").toLowerCase();
+  return /^[a-f0-9]{64}$/.test(normalized) ? normalized : null;
 }

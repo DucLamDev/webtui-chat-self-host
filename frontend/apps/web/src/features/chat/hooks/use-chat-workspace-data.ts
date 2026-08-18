@@ -853,7 +853,7 @@ export function useChatWorkspaceData(currentUser: ChatUser, options: ChatWorkspa
   }, [flushOutbox, outboxItems]);
 
   const downloadMutation = useMutation({
-    mutationFn: (file: FileItem) => api.files.download(workspaceId, file.id)
+    mutationFn: (file: FileItem) => api.files.downloadWithMetadata(workspaceId, file.id)
   });
   const downloadAttachment = useCallback(
     (fileId: string) => api.files.download(workspaceId, fileId),

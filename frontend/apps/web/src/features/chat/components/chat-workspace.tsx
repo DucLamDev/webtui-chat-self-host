@@ -2423,15 +2423,19 @@ export function ChatWorkspace() {
   function handleDownload(file: FileItem) {
     data.downloadMutation.mutate(file, {
       onError: (error) => setToast(error instanceof Error ? error.message : "Không tải được file."),
-      onSuccess: (blob) => {
-        void saveDownloadedBlob(blob, file);
+      onSuccess: (download) => {
+        void saveDownloadedBlob(download.blob, file, download.checksumSha256);
       }
     });
   }
 
-  async function saveDownloadedBlob(blob: Blob, file: FileItem) {
-    if (file.checksumSha256) {
-      const isValid = await verifyBlobChecksum(blob, file.checksumSha256).catch(() => true);
+  async function saveDownloadedBlob(blob: Blob, file: FileItem, downloadChecksumSha256?: string | null) {
+    const expectedChecksum = api.files.normalizeDownloadChecksum(downloadChecksumSha256)
+      ?? await latestDownloadChecksum(file)
+      ?? api.files.normalizeDownloadChecksum(file.checksumSha256);
+
+    if (expectedChecksum) {
+      const isValid = await verifyBlobChecksum(blob, expectedChecksum).catch(() => true);
       if (!isValid) {
         setToast("Checksum file không khớp. File tải xuống có thể đã bị lỗi, vui lòng thử lại.");
         return;
@@ -2441,6 +2445,13 @@ export function ChatWorkspace() {
     await getPlatformServices().files.saveBlob(blob, file.name).catch((error: unknown) => {
       setToast(error instanceof Error ? error.message : "Không lưu được file.");
     });
+  }
+
+  async function latestDownloadChecksum(file: FileItem) {
+    const latest = await api.files.latestChecksum(data.workspaceId, file.id).catch(() => null);
+    return latest && latest !== api.files.normalizeDownloadChecksum(file.checksumSha256)
+      ? latest
+      : null;
   }
 
   function handleDownloadAttachment(attachment: MessageAttachmentItem) {

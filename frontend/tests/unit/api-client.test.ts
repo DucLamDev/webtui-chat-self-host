@@ -234,6 +234,32 @@ describe("HttpClient", () => {
     await expect(blob.text()).resolves.toBe("file-content");
   });
 
+  it("returns binary blob response metadata", async () => {
+    const checksum = "a".repeat(64);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response("file-content", {
+          headers: {
+            "ETag": `"${checksum}"`,
+            "X-File-Checksum-SHA256": checksum,
+            "content-type": "application/msword",
+          },
+          status: 200,
+        }),
+      ),
+    );
+
+    const files = createFilesClient(
+      new HttpClient({ baseUrl: "https://chat.vpsttt.com" }),
+    );
+    const download = await files.downloadWithMetadata("workspace-1", "file-1");
+
+    await expect(download.blob.text()).resolves.toBe("file-content");
+    expect(download.checksumSha256).toBe(checksum);
+    expect(download.contentType).toBe("application/msword");
+  });
+
   it("loads conversation media from the channel media endpoint", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

@@ -283,13 +283,14 @@ func (h *Handler) Download(c *gin.Context) {
 	}
 	headers := map[string]string{
 		"Accept-Ranges": "bytes",
-		"Cache-Control": "private, no-cache",
+		"Cache-Control": "private, no-cache, no-transform",
 		"Content-Disposition": mime.FormatMediaType(disposition, map[string]string{
 			"filename": download.File.OriginalName,
 		}),
 	}
 	if download.File.ChecksumSHA256 != nil && *download.File.ChecksumSHA256 != "" {
 		headers["ETag"] = `"` + *download.File.ChecksumSHA256 + `"`
+		headers["X-File-Checksum-SHA256"] = *download.File.ChecksumSHA256
 	}
 	status := nethttp.StatusOK
 	if download.Partial {
@@ -328,12 +329,17 @@ func (h *Handler) DownloadOnlyOfficeSource(c *gin.Context) {
 		return
 	}
 	defer download.Body.Close()
-	c.DataFromReader(nethttp.StatusOK, download.ContentLength, download.File.MimeType, download.Body, map[string]string{
-		"Cache-Control": "private, no-cache",
+	headers := map[string]string{
+		"Cache-Control": "private, no-cache, no-transform",
 		"Content-Disposition": mime.FormatMediaType("attachment", map[string]string{
 			"filename": download.File.OriginalName,
 		}),
-	})
+	}
+	if download.File.ChecksumSHA256 != nil && *download.File.ChecksumSHA256 != "" {
+		headers["ETag"] = `"` + *download.File.ChecksumSHA256 + `"`
+		headers["X-File-Checksum-SHA256"] = *download.File.ChecksumSHA256
+	}
+	c.DataFromReader(nethttp.StatusOK, download.ContentLength, download.File.MimeType, download.Body, headers)
 }
 
 func (h *Handler) HandleOnlyOfficeCallback(c *gin.Context) {

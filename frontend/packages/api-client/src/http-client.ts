@@ -36,6 +36,13 @@ export type RequestOptions = Omit<RequestInit, "body"> & {
   unwrap?: boolean;
 };
 
+export type BlobResponse = {
+  blob: Blob;
+  headers: Headers;
+  status: number;
+  url: string;
+};
+
 type InternalRequestOptions = RequestOptions & {
   didRefresh?: boolean;
 };
@@ -141,6 +148,11 @@ export class HttpClient {
   }
 
   async blob(path: string, options: RequestOptions = {}): Promise<Blob> {
+    const response = await this.blobResponse(path, options);
+    return response.blob;
+  }
+
+  async blobResponse(path: string, options: RequestOptions = {}): Promise<BlobResponse> {
     const requestContext = this.requestContext(path, options);
     await this.beforeRequest?.(requestContext);
     const response = await this.fetch(path, {
@@ -153,7 +165,12 @@ export class HttpClient {
       await this.throwResponseError(response, options.auth !== false, requestContext);
     }
 
-    return response.blob();
+    return {
+      blob: await response.blob(),
+      headers: response.headers,
+      status: response.status,
+      url: response.url
+    };
   }
 
   async request<TData>(

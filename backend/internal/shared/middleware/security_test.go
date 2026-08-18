@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -54,6 +55,12 @@ func TestCORSAllowsConfiguredOrigin(t *testing.T) {
 			}
 			if got := w.Header().Get("Access-Control-Allow-Origin"); got != origin {
 				t.Fatalf("Access-Control-Allow-Origin = %q", got)
+			}
+			exposed := w.Header().Get("Access-Control-Expose-Headers")
+			for _, header := range []string{"X-File-Checksum-SHA256", "ETag", "Content-Disposition"} {
+				if !strings.Contains(exposed, header) {
+					t.Fatalf("Access-Control-Expose-Headers = %q, want %q", exposed, header)
+				}
 			}
 		})
 	}
