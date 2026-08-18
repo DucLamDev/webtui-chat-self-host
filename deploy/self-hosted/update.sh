@@ -249,10 +249,34 @@ if ! docker compose --env-file .env -f compose.yml run --rm migrate; then
   exit 1
 fi
 docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate api worker web admin
+api_attempt=0
+until docker compose --env-file .env -f compose.yml exec -T api \
+  wget -qO- "http://localhost:8080/ready" >/dev/null 2>&1; do
+  api_attempt=$((api_attempt + 1))
+  if [ "$api_attempt" -ge 30 ]; then
+    echo "Updated api did not become ready within 60 seconds." >&2
+    docker compose --env-file .env -f compose.yml logs --tail=100 api >&2
+    exit 1
+  fi
+  sleep 2
+done
+echo "Updated api: ready"
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-prosody
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-jicofo jitsi-jvb
 docker compose --env-file .env -f compose.yml up -d --no-deps jitsi-web
-docker compose --env-file .env -f compose.yml up -d --no-deps onlyoffice-document-server
+docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate onlyoffice-document-server
+onlyoffice_attempt=0
+until docker compose --env-file .env -f compose.yml exec -T onlyoffice-document-server \
+  curl -fsS "http://localhost/healthcheck" >/dev/null 2>&1; do
+  onlyoffice_attempt=$((onlyoffice_attempt + 1))
+  if [ "$onlyoffice_attempt" -ge 60 ]; then
+    echo "Updated onlyoffice-document-server did not become ready within 120 seconds." >&2
+    docker compose --env-file .env -f compose.yml logs --tail=100 onlyoffice-document-server >&2
+    exit 1
+  fi
+  sleep 2
+done
+echo "Updated onlyoffice-document-server: ready"
 docker compose --env-file .env -f compose.yml up -d --no-deps --force-recreate caddy
 if [ "$PUSH_RELAY_ENABLED" = "true" ]; then
   docker compose --env-file .env -f compose.yml --profile push-relay up -d --no-deps --force-recreate push-relay
