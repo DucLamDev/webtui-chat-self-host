@@ -379,7 +379,7 @@ services:
       ONLYOFFICE_ENABLED: ${ONLYOFFICE_ENABLED:-false}
       ONLYOFFICE_PUBLIC_URL: ${ONLYOFFICE_PUBLIC_URL:-}
       ONLYOFFICE_INTERNAL_URL: ${ONLYOFFICE_INTERNAL_URL:-http://onlyoffice-document-server}
-      ONLYOFFICE_API_INTERNAL_URL: ${ONLYOFFICE_API_INTERNAL_URL:-http://api:8080}
+      ONLYOFFICE_API_INTERNAL_URL: ${ONLYOFFICE_API_INTERNAL_URL:-https://${INSTANCE_DOMAIN}}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-}
       ONLYOFFICE_SESSION_SECRET: ${ONLYOFFICE_SESSION_SECRET:-}
     volumes:
@@ -626,7 +626,10 @@ services:
       - storage_data:/srv/vpsttt-storage:ro
       - caddy_data:/data
       - caddy_config:/config
-    networks: [backend]
+    networks:
+      backend:
+        aliases:
+          - ${INSTANCE_DOMAIN}
     depends_on:
       api:
         condition: service_healthy

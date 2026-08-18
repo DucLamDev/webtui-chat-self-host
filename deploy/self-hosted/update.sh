@@ -206,7 +206,9 @@ if [ -z "$(read_env_value ONLYOFFICE_INTERNAL_URL)" ]; then
   write_env_value ONLYOFFICE_INTERNAL_URL "http://onlyoffice-document-server"
 fi
 if [ -z "$(read_env_value ONLYOFFICE_API_INTERNAL_URL)" ]; then
-  write_env_value ONLYOFFICE_API_INTERNAL_URL "http://api:8080"
+  write_env_value ONLYOFFICE_API_INTERNAL_URL "https://$INSTANCE_DOMAIN"
+elif [ "$(read_env_value ONLYOFFICE_API_INTERNAL_URL)" = "http://api:8080" ]; then
+  write_env_value ONLYOFFICE_API_INTERNAL_URL "https://$INSTANCE_DOMAIN"
 fi
 if [ -z "$(read_env_value ONLYOFFICE_IMAGE_VERSION)" ]; then
   write_env_value ONLYOFFICE_IMAGE_VERSION "latest"

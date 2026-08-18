@@ -353,7 +353,7 @@ trong chat. Mặc định tính năng tắt để tránh khởi động với se
 ONLYOFFICE_ENABLED=true
 ONLYOFFICE_PUBLIC_URL=https://chat.company.com:8444
 ONLYOFFICE_INTERNAL_URL=http://onlyoffice-document-server
-ONLYOFFICE_API_INTERNAL_URL=http://api:8080
+ONLYOFFICE_API_INTERNAL_URL=https://chat.company.com
 ONLYOFFICE_JWT_SECRET=replace-with-at-least-32-random-characters
 ONLYOFFICE_SESSION_SECRET=replace-with-at-least-32-random-characters
 ```
