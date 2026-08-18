@@ -40,6 +40,34 @@
 		}
 	}
 
+	# Older ONLYOFFICE responses may have cached URLs without the dedicated
+	# :8444 port. Keep those cache reads working while the corrected forwarded
+	# host below makes new editor sessions stay same-origin.
+	@onlyOfficeCachePreflight {
+		method OPTIONS
+		path /cache/files/*
+	}
+	handle @onlyOfficeCachePreflight {
+		header Access-Control-Allow-Origin "https://{$INSTANCE_DOMAIN}:8444"
+		header Access-Control-Allow-Credentials "true"
+		header Access-Control-Allow-Methods "GET,HEAD,OPTIONS"
+		header Access-Control-Allow-Headers "Content-Type,Range"
+		header Access-Control-Max-Age "600"
+		header Vary "Origin"
+		respond 204
+	}
+
+	@onlyOfficeCache path /cache/files/*
+	handle @onlyOfficeCache {
+		header {
+			Access-Control-Allow-Origin "https://{$INSTANCE_DOMAIN}:8444"
+			Access-Control-Allow-Credentials "true"
+			Access-Control-Expose-Headers "Accept-Ranges,Content-Range,Content-Length,Content-Type"
+			Vary "Origin"
+		}
+		reverse_proxy onlyoffice-document-server:80
+	}
+
 	# /metrics is intentionally internal-only; Prometheus scrapes api:8080 on
 	# the backend network and Caddy never publishes operational metadata.
 	@backend path /api /api/* /ws /ws/* /health /ready /version /.well-known/*
@@ -98,8 +126,10 @@ https://{$INSTANCE_DOMAIN}:8443 {
 https://{$INSTANCE_DOMAIN}:8444 {
 	encode zstd gzip
 	reverse_proxy onlyoffice-document-server:80 {
+		header_up Host {hostport}
 		header_up X-Forwarded-Proto https
-		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Host {hostport}
+		header_up X-Forwarded-Port 8444
 	}
 
 	header {

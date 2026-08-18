@@ -30,6 +30,32 @@ write_env_value() {
   fi
 }
 
+ensure_csv_env_value() {
+  key=$1
+  required=$2
+  current=$(read_env_value "$key")
+  if [ -z "$current" ]; then
+    write_env_value "$key" "$required"
+    return
+  fi
+
+  found=false
+  old_ifs=$IFS
+  IFS=,
+  for value in $current; do
+    trimmed=$(printf '%s' "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ "$trimmed" = "*" ] || [ "$trimmed" = "$required" ]; then
+      found=true
+      break
+    fi
+  done
+  IFS=$old_ifs
+
+  if [ "$found" = "false" ]; then
+    write_env_value "$key" "$current,$required"
+  fi
+}
+
 ensure_secret() {
   key=$1
   current=$(read_env_value "$key")
@@ -164,6 +190,13 @@ if [ -z "$(read_env_value ENABLE_IOS_ASSOCIATION)" ]; then
   # Older installs probed AASA unconditionally. The official first release is
   # Play-only, so preserve a fail-closed 404 until iOS is explicitly provisioned.
   write_env_value ENABLE_IOS_ASSOCIATION "false"
+fi
+if [ -z "$(read_env_value CORS_ALLOWED_ORIGINS)" ]; then
+  write_env_value CORS_ALLOWED_ORIGINS "https://$INSTANCE_DOMAIN,https://$INSTANCE_DOMAIN:8444,$PORTAL_ORIGIN,http://tauri.localhost,https://tauri.localhost,tauri://localhost"
+else
+  ensure_csv_env_value CORS_ALLOWED_ORIGINS "https://$INSTANCE_DOMAIN"
+  ensure_csv_env_value CORS_ALLOWED_ORIGINS "https://$INSTANCE_DOMAIN:8444"
+  ensure_csv_env_value CORS_ALLOWED_ORIGINS "$PORTAL_ORIGIN"
 fi
 PUSH_RELAY_ENABLED=$(read_env_value PUSH_RELAY_SERVER_ENABLED)
 PUSH_RELAY_ENABLED=$(printf '%s' "$PUSH_RELAY_ENABLED" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
