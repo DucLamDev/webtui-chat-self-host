@@ -15702,6 +15702,37 @@ button.message-reply-preview:hover {
   z-index: 5;
 }
 
+.jitsi-meeting-stage__present-button {
+  align-items: center;
+  background: rgb(32 33 36 / 92%);
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 999px;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  box-shadow: 0 12px 30px rgb(0 0 0 / 28%);
+  color: #f8fafc;
+  cursor: pointer;
+  display: inline-flex;
+  height: 44px;
+  justify-content: center;
+  left: 50%;
+  position: absolute;
+  transform: translateX(-50%);
+  width: 44px;
+  z-index: 5;
+}
+
+.jitsi-meeting-stage__present-button:hover,
+.jitsi-meeting-stage__present-button.is-active {
+  background: #2563eb;
+  border-color: #60a5fa;
+  color: #fff;
+}
+
+.jitsi-meeting-stage__present-button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
 .jitsi-meeting-stage__tools button {
   align-items: center;
   background: rgb(255 255 255 / 10%);

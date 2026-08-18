@@ -38,6 +38,7 @@ export {
   MicOff,
   Minimize2,
   Monitor,
+  MonitorUp,
   MoreVertical,
   Moon,
   PanelLeftClose,

@@ -8,7 +8,7 @@ import {
   useRef,
   useState
 } from "react";
-import { Edit3, Monitor, RefreshCw, Trash2 } from "@webtui/icons";
+import { Edit3, MonitorUp, RefreshCw, Trash2 } from "@webtui/icons";
 import {
   applyJitsiMeetingSubject,
   buildJitsiConfigOverwrite,
@@ -210,9 +210,11 @@ export const JitsiMeeting = forwardRef<JitsiMeetingHandle, {
 
   const annotationPoint = (event: ReactPointerEvent<SVGSVGElement>): AnnotationPoint => {
     const box = event.currentTarget.getBoundingClientRect();
+    const width = box.width || 1;
+    const height = box.height || 1;
     return {
-      x: Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - box.top) / box.height))
+      x: Math.max(0, Math.min(1, (event.clientX - box.left) / width)),
+      y: Math.max(0, Math.min(1, (event.clientY - box.top) / height))
     };
   };
 
@@ -252,17 +254,19 @@ export const JitsiMeeting = forwardRef<JitsiMeetingHandle, {
     <div className="jitsi-meeting-stage">
       <div className="jitsi-meeting-stage__frame" ref={containerRef} />
       {canAnnotate ? (
+        <button
+          aria-label={screenSharing ? "Dừng chia sẻ màn hình" : "Chia sẻ màn hình"}
+          className={`jitsi-meeting-stage__present-button${screenSharing ? " is-active" : ""}`}
+          disabled={status !== "ready"}
+          onClick={() => apiRef.current?.executeCommand("toggleShareScreen")}
+          title={screenSharing ? "Dừng chia sẻ màn hình" : "Chia sẻ màn hình"}
+          type="button"
+        >
+          <MonitorUp size={19} />
+        </button>
+      ) : null}
+      {canAnnotate ? (
         <div className="jitsi-meeting-stage__tools" aria-label="Công cụ trình bày">
-          <button
-            aria-label={screenSharing ? "Dừng chia sẻ màn hình" : "Chia sẻ màn hình"}
-            className={screenSharing ? "is-active" : ""}
-            disabled={status !== "ready"}
-            onClick={() => apiRef.current?.executeCommand("toggleShareScreen")}
-            title={screenSharing ? "Dừng chia sẻ màn hình" : "Chia sẻ màn hình"}
-            type="button"
-          >
-            <Monitor size={16} />
-          </button>
           <button
             aria-label={annotationEnabled ? "Tắt bút vẽ" : "Bật bút vẽ"}
             className={annotationEnabled ? "is-active" : ""}
@@ -316,6 +320,7 @@ export const JitsiMeeting = forwardRef<JitsiMeetingHandle, {
           onPointerLeave={endAnnotation}
           onPointerMove={moveAnnotation}
           onPointerUp={endAnnotation}
+          preserveAspectRatio="none"
           viewBox="0 0 1000 1000"
         >
           {renderedAnnotations.map((stroke, index) => (
@@ -327,6 +332,7 @@ export const JitsiMeeting = forwardRef<JitsiMeetingHandle, {
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth="7"
+              vectorEffect="non-scaling-stroke"
             />
           ))}
         </svg>
