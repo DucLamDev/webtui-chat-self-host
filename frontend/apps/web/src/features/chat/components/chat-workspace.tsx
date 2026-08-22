@@ -189,6 +189,15 @@ type RailItemId =
 type MessageSidebarTab = "conversations" | "channels";
 type ContactsTab = "employees" | "friends" | "discover";
 type ChatWorkspaceData = ReturnType<typeof useChatWorkspaceData>;
+type UnreadChatNotification = {
+  avatarUrl?: string;
+  body: string;
+  id: string;
+  kind: "channel" | "direct";
+  title: string;
+  unreadCount: number;
+  updatedAt: string;
+};
 
 type ChannelHashStyle = CSSProperties & {
   "--channel-hash-bg": string;
@@ -1076,8 +1085,48 @@ export function ChatWorkspace() {
     () => data.contactRequests.filter((request) => request.status === "pending" && request.direction === "incoming"),
     [data.contactRequests]
   );
-  const unreadActivityNotificationCount = data.notifications.filter(
-    (notification) => !notification.isRead && !isMessageNotification(notification)
+  const unreadChatNotifications: UnreadChatNotification[] = [
+    ...data.directConversations.flatMap((conversation) => {
+      const unreadCount = effectiveUnreadCount(conversation.id, conversation.unreadCount);
+      if (!unreadCount) {
+        return [];
+      }
+
+      return [{
+        avatarUrl: conversation.user.avatarUrl,
+        body: conversation.lastMessage || formatUnreadMessageCount(unreadCount),
+        id: conversation.id,
+        kind: "direct" as const,
+        title: conversation.user.name,
+        unreadCount,
+        updatedAt: conversation.relativeTime
+      }];
+    }),
+    ...data.channels.flatMap((channel) => {
+      if (channel.type === "direct") {
+        return [];
+      }
+
+      const unreadCount = effectiveUnreadCount(channel.id, channel.unreadCount);
+      if (!unreadCount) {
+        return [];
+      }
+
+      return [{
+        body: formatUnreadMessageCount(unreadCount),
+        id: channel.id,
+        kind: "channel" as const,
+        title: channel.name,
+        unreadCount,
+        updatedAt: channel.relativeTime
+      }];
+    })
+  ].slice(0, 12);
+  const activityNotifications = data.notifications.filter(
+    (notification) => !isMessageNotification(notification)
+  );
+  const unreadActivityNotificationCount = activityNotifications.filter(
+    (notification) => !notification.isRead
   ).length;
   const notificationBadgeCount = unreadChatMessageCount + unreadActivityNotificationCount + incomingContactRequests.length;
   useEffect(() => {
@@ -2565,6 +2614,12 @@ export function ChatWorkspace() {
     setIsNotificationsOpen(false);
   }
 
+  function handleOpenUnreadChatNotification(notification: UnreadChatNotification) {
+    setFocusedMessageId(null);
+    handleChannelSelect(notification.id);
+    setIsNotificationsOpen(false);
+  }
+
   function handleMarkAllNotificationsRead() {
     data.markAllNotificationsReadMutation.mutate(undefined, {
       onError: (error) => setToast(error instanceof Error ? error.message : "Không đánh dấu được thông báo."),
@@ -2867,9 +2922,11 @@ export function ChatWorkspace() {
             isLoading={data.notificationsQuery.isLoading || data.contactRequestsQuery.isLoading}
             isMutatingContactRequest={data.acceptContactRequestMutation.isPending || data.rejectContactRequestMutation.isPending}
             isMarkingAllRead={data.markAllNotificationsReadMutation.isPending}
-            notifications={data.notifications}
+            notifications={activityNotifications}
+            unreadChats={unreadChatNotifications}
             onAcceptContactRequest={handleAcceptIncomingRequest}
             onMarkAllRead={handleMarkAllNotificationsRead}
+            onOpenUnreadChat={handleOpenUnreadChatNotification}
             onOpenNotification={handleOpenNotification}
             onOpenContacts={() => {
               handleRailSelect("contacts");
@@ -3140,9 +3197,11 @@ export function ChatWorkspace() {
             isLoading={data.notificationsQuery.isLoading || data.contactRequestsQuery.isLoading}
             isMutatingContactRequest={data.acceptContactRequestMutation.isPending || data.rejectContactRequestMutation.isPending}
             isMarkingAllRead={data.markAllNotificationsReadMutation.isPending}
-            notifications={data.notifications}
+            notifications={activityNotifications}
+            unreadChats={unreadChatNotifications}
             onAcceptContactRequest={handleAcceptIncomingRequest}
             onMarkAllRead={handleMarkAllNotificationsRead}
+            onOpenUnreadChat={handleOpenUnreadChatNotification}
             onOpenNotification={handleOpenNotification}
             onOpenContacts={() => {
               handleRailSelect("contacts");
@@ -8087,10 +8146,12 @@ function NotificationDropdown({
   isMutatingContactRequest,
   isMarkingAllRead,
   notifications,
+  unreadChats,
   onAcceptContactRequest,
   onMarkAllRead,
   onOpenContacts,
   onOpenNotification,
+  onOpenUnreadChat,
   onRejectContactRequest
 }: {
   contactRequests: ContactRequest[];
@@ -8098,14 +8159,17 @@ function NotificationDropdown({
   isMutatingContactRequest: boolean;
   isMarkingAllRead: boolean;
   notifications: NotificationItem[];
+  unreadChats: UnreadChatNotification[];
   onAcceptContactRequest: (request: ContactRequest) => void;
   onMarkAllRead: () => void;
   onOpenContacts: () => void;
   onOpenNotification: (notification: NotificationItem) => void;
+  onOpenUnreadChat: (notification: UnreadChatNotification) => void;
   onRejectContactRequest: (request: ContactRequest) => void;
 }) {
   const unreadNotificationCount = notifications.filter((item) => !item.isRead).length;
-  const totalUnreadCount = unreadNotificationCount + contactRequests.length;
+  const unreadChatMessageCount = unreadChats.reduce((total, item) => total + item.unreadCount, 0);
+  const totalUnreadCount = unreadNotificationCount + unreadChatMessageCount + contactRequests.length;
 
   return (
     <section className="notification-dropdown" aria-label="Thông báo">
@@ -8152,6 +8216,33 @@ function NotificationDropdown({
             <button className="notification-group__link" onClick={onOpenContacts} type="button">Mở danh bạ</button>
           </section>
         ) : null}
+        {unreadChats.length ? (
+          <section className="notification-group">
+            <header><span><MessageCircle size={15} /> Tin nhắn chưa đọc</span><b>{unreadChatMessageCount}</b></header>
+            <div className="notification-list">
+              {unreadChats.map((chat) => (
+                <button
+                  className="notification-row notification-row--unread"
+                  key={`${chat.kind}-${chat.id}`}
+                  onClick={() => onOpenUnreadChat(chat)}
+                  type="button"
+                >
+                  {chat.kind === "direct" ? (
+                    <Avatar name={chat.title} size="sm" src={chat.avatarUrl} />
+                  ) : (
+                    <span className="notification-row__icon"><Hash size={16} /></span>
+                  )}
+                  <div>
+                    <strong>{chat.title}</strong>
+                    <p>{chat.body}</p>
+                    <small>{chat.updatedAt || formatUnreadMessageCount(chat.unreadCount)}</small>
+                  </div>
+                  <Badge tone="red">{chat.unreadCount}</Badge>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
         {isLoading ? (
           <PanelSkeleton />
         ) : notifications.length ? (
@@ -8176,7 +8267,7 @@ function NotificationDropdown({
               ))}
             </div>
           </section>
-        ) : !contactRequests.length ? (
+        ) : !contactRequests.length && !unreadChats.length ? (
           <EmptyState description="Thông báo mới sẽ xuất hiện tại đây." title="Bạn đã xem hết" />
         ) : null}
       </div>
@@ -10177,6 +10268,10 @@ function shouldShowDesktopNotification(
 function isMessageNotification(notification: NotificationItem): boolean {
   const type = notification.type.toLowerCase();
   return Boolean(notification.channelId && notification.messageId) || type.includes("message") || type.includes("tin_nhan");
+}
+
+function formatUnreadMessageCount(count: number): string {
+  return `${count} tin nhắn chưa đọc`;
 }
 
 function isMentionNotification(notification: NotificationItem): boolean {

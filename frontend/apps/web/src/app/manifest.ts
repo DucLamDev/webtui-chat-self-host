@@ -1,5 +1,7 @@
 import type { MetadataRoute } from "next";
 
+export const dynamic = "force-static";
+
 const appName = process.env.NEXT_PUBLIC_APP_NAME?.trim() || "WebTui Chat";
 const shortName = appName.length > 18 ? "WebTui Chat" : appName;
 
