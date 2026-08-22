@@ -38,6 +38,7 @@ const ugcMutationRoutes: ReadonlyArray<readonly [string, RegExp]> = [
   ["PUT", new RegExp(`^${workspacePrefix}/files/uploads/[^/]+/parts/[^/]+$`)],
   ["POST", new RegExp(`^${workspacePrefix}/files/uploads/[^/]+/complete$`)],
   ["POST", new RegExp(`^${workspacePrefix}/files/[^/]+/versions$`)],
+  ["POST", new RegExp(`^${workspacePrefix}/files/[^/]+/office/session$`)],
   ["POST", new RegExp(`^${messagePrefix}/attachments$`)],
   ["POST", new RegExp(`^${workspacePrefix}/calls$`)],
   ["POST", new RegExp(`^${workspacePrefix}/calls/[^/]+/accept$`)],

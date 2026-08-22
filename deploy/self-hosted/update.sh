@@ -229,6 +229,9 @@ fi
 if [ -z "$(read_env_value NEXT_PUBLIC_JITSI_BASE_URL)" ]; then
   write_env_value NEXT_PUBLIC_JITSI_BASE_URL "$MEETING_URL"
 fi
+if [ -z "$(read_env_value NEXT_PUBLIC_ENABLE_CUSTOM_MODULES)" ]; then
+  write_env_value NEXT_PUBLIC_ENABLE_CUSTOM_MODULES "false"
+fi
 if [ -z "$(read_env_value ONLYOFFICE_ENABLED)" ]; then
   write_env_value ONLYOFFICE_ENABLED "false"
 fi

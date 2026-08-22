@@ -75,6 +75,7 @@ import {
   adminPageMeta,
   adminSectionGroup,
   canAccessAdminSection,
+  customAdminModulesEnabled,
   isAdminSectionEnabled,
   type AdminNavId,
   resolveAdminSection
@@ -653,7 +654,9 @@ function AdminMessagesSection({ data, searchQuery, setSearchQuery }: { data: Das
         <AdminSummaryCard hint="Dữ liệu API" icon={<MessageCircle size={20} />} label="Tổng tin nhắn" tone="blue" value={data.adminMessages.length} />
         <AdminSummaryCard hint="Trong ngày" icon={<CalendarClock size={20} />} label="Tin nhắn hôm nay" tone="green" value={todayCount} />
         <AdminSummaryCard hint="Người dùng duy nhất" icon={<Users size={20} />} label="Người gửi" tone="purple" value={senders.length} />
-        <AdminSummaryCard hint={`${data.adminMessages.length ? ((botCount / data.adminMessages.length) * 100).toFixed(1) : "0"}% tổng số`} icon={<Bot size={20} />} label="Bot messages" tone="orange" value={botCount} />
+        {customAdminModulesEnabled ? (
+          <AdminSummaryCard hint={`${data.adminMessages.length ? ((botCount / data.adminMessages.length) * 100).toFixed(1) : "0"}% tổng số`} icon={<Bot size={20} />} label="Bot messages" tone="orange" value={botCount} />
+        ) : null}
       </div>
 
       <div className="admin-filter-bar">
@@ -743,7 +746,9 @@ function AdminChannelsSection({ data, searchQuery, setSearchQuery }: { data: Das
         <AdminSummaryCard hint="Kênh" icon={<Hash size={20} />} label="Tổng kênh" tone="blue" value={data.adminChannels.length} />
         <AdminSummaryCard hint={`${percentage(publicCount, data.adminChannels.length)}% tổng số`} icon={<MessageCircle size={20} />} label="Kênh công khai" tone="green" value={publicCount} />
         <AdminSummaryCard hint={`${percentage(privateCount, data.adminChannels.length)}% tổng số`} icon={<ShieldCheck size={20} />} label="Kênh riêng tư" tone="purple" value={privateCount} />
-        <AdminSummaryCard hint={`${percentage(sessionCount, data.adminChannels.length)}% tổng số`} icon={<Bot size={20} />} label="Phiên bot riêng tư" tone="orange" value={sessionCount} />
+        {customAdminModulesEnabled ? (
+          <AdminSummaryCard hint={`${percentage(sessionCount, data.adminChannels.length)}% tổng số`} icon={<Bot size={20} />} label="Phiên bot riêng tư" tone="orange" value={sessionCount} />
+        ) : null}
       </div>
 
       <div className="admin-filter-bar">
@@ -3312,10 +3317,14 @@ function InstanceAdministration({
     try {
       await data.updateZoneQuotaMutation.mutateAsync({
         enforcement_mode: formValue(form, "enforcement_mode") as "monitor" | "hard",
-        max_automation_installations: Number(formValue(form, "max_automation_installations")),
+        max_automation_installations: customAdminModulesEnabled
+          ? Number(formValue(form, "max_automation_installations"))
+          : quotaOverview?.quota.max_automation_installations ?? 0,
         max_members: Number(formValue(form, "max_members")),
         max_storage_bytes: Number(formValue(form, "max_storage_bytes")),
-        max_webhooks: Number(formValue(form, "max_webhooks")),
+        max_webhooks: customAdminModulesEnabled
+          ? Number(formValue(form, "max_webhooks"))
+          : quotaOverview?.quota.max_webhooks ?? 0,
         max_workspaces: Number(formValue(form, "max_workspaces"))
       });
       showToast("Đã cập nhật quota.");
@@ -3609,8 +3618,12 @@ function InstanceAdministration({
               <label>Workspace<input defaultValue={quotaOverview.quota.max_workspaces} min={1} name="max_workspaces" type="number" /></label>
               <label>Thành viên<input defaultValue={quotaOverview.quota.max_members} min={1} name="max_members" type="number" /></label>
               <label>Storage bytes<input defaultValue={quotaOverview.quota.max_storage_bytes} min={1} name="max_storage_bytes" type="number" /></label>
-              <label>Automation<input defaultValue={quotaOverview.quota.max_automation_installations} min={1} name="max_automation_installations" type="number" /></label>
-              <label>Webhook<input defaultValue={quotaOverview.quota.max_webhooks} min={1} name="max_webhooks" type="number" /></label>
+              {customAdminModulesEnabled ? (
+                <>
+                  <label>Automation<input defaultValue={quotaOverview.quota.max_automation_installations} min={1} name="max_automation_installations" type="number" /></label>
+                  <label>Webhook<input defaultValue={quotaOverview.quota.max_webhooks} min={1} name="max_webhooks" type="number" /></label>
+                </>
+              ) : null}
               <label>
                 Chế độ
                 <select defaultValue={quotaOverview.quota.enforcement_mode} name="enforcement_mode">
@@ -3630,8 +3643,12 @@ function InstanceAdministration({
               <div><span>Workspace</span><strong>{quotaOverview.usage.workspaces}</strong></div>
               <div><span>Thành viên</span><strong>{quotaOverview.usage.members}</strong></div>
               <div><span>Storage</span><strong>{formatBytes(quotaOverview.usage.storage_bytes)}</strong></div>
-              <div><span>Automation</span><strong>{quotaOverview.usage.automation_installations}</strong></div>
-              <div><span>Webhook</span><strong>{quotaOverview.usage.webhooks}</strong></div>
+              {customAdminModulesEnabled ? (
+                <>
+                  <div><span>Automation</span><strong>{quotaOverview.usage.automation_installations}</strong></div>
+                  <div><span>Webhook</span><strong>{quotaOverview.usage.webhooks}</strong></div>
+                </>
+              ) : null}
             </div>
           ) : null}
         </article>

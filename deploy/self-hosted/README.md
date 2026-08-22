@@ -283,28 +283,21 @@ cursor để không mất sự kiện. Xem hướng dẫn cấu hình, xoay key,
 kiểm thử thiết bị thật tại
 [`docs/operations/push-notifications.md`](../../docs/operations/push-notifications.md).
 
-## Bot AI theo nghiệp vụ của tổ chức
+## Module custom-only
 
-Owner tạo bot tại `Kênh & Bot`, cài bot vào kênh, chọn provider và tạo flow.
-Flow chỉ chạy sau khi được xuất bản. Trigger hỗ trợ:
+Bản self-host mặc định không bật giao diện Automation, Bot hoặc Integrations.
+Các phần code/API nền vẫn được giữ để không phá migration và để triển khai bản
+custom theo nhu cầu từng khách hàng, nhưng không được xem là tính năng mặc định.
 
-- `{"type":"mention"}`: chạy khi tin nhắn nhắc `@slug-bot`;
-- `{"type":"keyword","keywords":["nghỉ phép","chấm công"]}`;
-- `{"type":"command","prefix":"/hr"}`;
-- `{"type":"all"}`: nhận mọi tin nhắn trong kênh đã cài bot.
-
-Ollama và LocalAI trong mạng Docker dùng được ngay khi endpoint nằm trong
-`BOT_AI_ALLOWED_HOSTS`. Với endpoint tương thích OpenAI hoặc webhook bên ngoài,
-thêm đúng hostname vào biến này. API key không lưu trực tiếp trong database:
+Khi một khách hàng cần bot nghiệp vụ, workflow tự động, API token hoặc webhook
+riêng, tạo bản build custom và đặt:
 
 ```dotenv
-BOT_AI_ALLOWED_HOSTS=ollama,local-ai,ai.company.com
-BOT_AI_OPENAI_KEY=replace-with-a-secret
+NEXT_PUBLIC_ENABLE_CUSTOM_MODULES=true
 ```
 
-Sau đó nhập `env://BOT_AI_OPENAI_KEY` vào `Secret reference`. Runtime chỉ cho
-đọc biến môi trường bắt đầu bằng `BOT_AI_`, chặn URL có credentials và chặn
-hostname công khai chưa nằm trong allowlist.
+Sau đó build lại `web` và `admin`, cấu hình secret/provider/allowlist riêng cho
+khách hàng đó, rồi kiểm thử quyền truy cập trước khi bàn giao.
 
 ## Cuộc gọi và media
 

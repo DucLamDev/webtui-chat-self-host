@@ -4,17 +4,28 @@ import {
   adminPageMeta,
   adminSectionGroup,
   canAccessAdminSection,
+  customAdminModulesEnabled,
+  customAdminSections,
+  enabledAdminSections,
   type AdminNavId,
   resolveAdminSection
 } from "../../apps/admin/src/features/dashboard/model/navigation";
 
 describe("admin navigation", () => {
-  it("lists every admin page exactly once", () => {
+  it("lists every default admin section exactly once", () => {
     const groupedItems = adminNavigationGroups.flatMap((group) => group.items);
-    const pageIds = Object.keys(adminPageMeta);
 
     expect(new Set(groupedItems).size).toBe(groupedItems.length);
-    expect([...groupedItems].sort()).toEqual([...pageIds].sort());
+    expect([...groupedItems].sort()).toEqual([...enabledAdminSections].sort());
+    expect(customAdminSections.every((section) => groupedItems.includes(section))).toBe(customAdminModulesEnabled);
+  });
+
+  it("keeps custom-only admin pages out of the default navigation until enabled", () => {
+    const pageIds = Object.keys(adminPageMeta) as AdminNavId[];
+    const disabledPageIds = pageIds.filter((section) => !enabledAdminSections.includes(section));
+    const expectedDisabledPageIds = customAdminModulesEnabled ? [] : [...customAdminSections];
+
+    expect(disabledPageIds.sort()).toEqual(expectedDisabledPageIds.sort());
   });
 
   it("uses unique group identifiers", () => {
@@ -23,10 +34,23 @@ describe("admin navigation", () => {
     expect(new Set(groupIds).size).toBe(groupIds.length);
   });
 
-  it.each(Object.keys(adminPageMeta) as AdminNavId[])(
-    "resolves the valid %s section",
+  it.each(enabledAdminSections)(
+    "resolves the enabled %s section",
     (section) => {
       expect(resolveAdminSection(section)).toBe(section);
+    }
+  );
+
+  it.each(customAdminSections)(
+    "handles the custom-only %s section according to the feature flag",
+    (section) => {
+      if (customAdminModulesEnabled) {
+        expect(resolveAdminSection(section)).toBe(section);
+        expect(adminSectionGroup(section)).not.toBe("Qu\u1ea3n tr\u1ecb");
+      } else {
+        expect(resolveAdminSection(section)).toBe("overview");
+        expect(adminSectionGroup(section)).toBe("Qu\u1ea3n tr\u1ecb");
+      }
     }
   );
 
@@ -38,25 +62,25 @@ describe("admin navigation", () => {
   );
 
   it.each([
-    ["overview", "Giám sát"],
-    ["push", "Giám sát"],
-    ["moderation", "Workspace"],
-    ["messages", "Workspace"],
-    ["channels", "Workspace"],
-    ["users", "Workspace"],
-    ["roles", "Workspace"],
-    ["integrations", "Mở rộng"],
-    ["automations", "Mở rộng"],
-    ["bots", "Mở rộng"],
-    ["cronjobs", "Vận hành"],
-    ["backups", "Vận hành"],
-    ["settings", "Vận hành"]
-  ] as const)("maps %s to the %s group", (section, group) => {
-    expect(adminSectionGroup(section)).toBe(group);
+    ["overview", "monitoring"],
+    ["push", "monitoring"],
+    ["moderation", "workspace"],
+    ["messages", "workspace"],
+    ["channels", "workspace"],
+    ["users", "workspace"],
+    ["roles", "workspace"],
+    ["cronjobs", "operations"],
+    ["backups", "operations"],
+    ["settings", "operations"]
+  ] as const)("maps %s to the %s group", (section, groupId) => {
+    const group = adminNavigationGroups.find((item) => item.id === groupId);
+
+    expect(group).toBeDefined();
+    expect(adminSectionGroup(section)).toBe(group?.label);
   });
 
   it("uses the management fallback for an unknown runtime section", () => {
-    expect(adminSectionGroup("unknown" as AdminNavId)).toBe("Quản trị");
+    expect(adminSectionGroup("unknown" as AdminNavId)).toBe("Qu\u1ea3n tr\u1ecb");
   });
 
   it("gates only the moderation section with moderation.manage", () => {

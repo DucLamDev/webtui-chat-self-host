@@ -68,7 +68,9 @@
 
 export type AdminNavId = keyof typeof adminPageMeta;
 
-export const enabledAdminSections = [
+export const customAdminModulesEnabled = process.env.NEXT_PUBLIC_ENABLE_CUSTOM_MODULES === "true";
+
+const defaultAdminSections = [
   "overview",
   "push",
   "moderation",
@@ -81,6 +83,12 @@ export const enabledAdminSections = [
   "settings"
 ] as const satisfies readonly AdminNavId[];
 
+export const customAdminSections = ["integrations", "automations", "bots"] as const satisfies readonly AdminNavId[];
+
+export const enabledAdminSections: readonly AdminNavId[] = customAdminModulesEnabled
+  ? [...defaultAdminSections, ...customAdminSections]
+  : defaultAdminSections;
+
 export const adminNavigationGroups: ReadonlyArray<{
   id: string;
   label: string;
@@ -88,6 +96,9 @@ export const adminNavigationGroups: ReadonlyArray<{
 }> = [
   { id: "monitoring", label: "Giám sát", items: ["overview", "push"] },
   { id: "workspace", label: "Workspace", items: ["moderation", "messages", "channels", "users", "roles"] },
+  ...(customAdminModulesEnabled
+    ? [{ id: "extensions", label: "Mở rộng", items: customAdminSections }]
+    : []),
   { id: "operations", label: "Vận hành", items: ["cronjobs", "backups", "settings"] }
 ];
 

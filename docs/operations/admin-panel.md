@@ -11,6 +11,11 @@ Tài liệu này mô tả chức năng đang có, cách điều hướng, quy t�
 guardrail cần tuân thủ và roadmap hoàn thiện. UI chỉ hỗ trợ người dùng thao tác;
 backend vẫn là lớp bắt buộc phải xác thực quyền cho mọi request.
 
+Trong bản self-host mặc định, nhóm `Mở rộng` gồm Tích hợp, Automation và Bot là
+custom-only, bị ẩn khỏi sidebar và route UI. Chỉ bật nhóm này trong bản build
+custom bằng `NEXT_PUBLIC_ENABLE_CUSTOM_MODULES=true` sau khi đã cấu hình quyền,
+secret và allowlist riêng cho khách hàng đó.
+
 ## Điều hướng
 
 Sidebar được chia thành bốn nhóm để giảm số mục phẳng và giúp operator tìm đúng
@@ -84,7 +89,10 @@ sau khi tạo; không đưa token vào ticket công khai, log hoặc ảnh chụ
 `workspace.manage` hoặc quyền quản lý integration chỉ để giải quyết một thao tác
 tạm thời.
 
-### Mở rộng
+### Mở rộng (custom-only)
+
+Nhóm này không xuất hiện trong bản self-host mặc định. Nội dung bên dưới chỉ áp
+dụng cho các bản custom đã bật `NEXT_PUBLIC_ENABLE_CUSTOM_MODULES=true`.
 
 #### Tích hợp
 
@@ -223,7 +231,8 @@ hạng mục P0; operator phải luôn kiểm tra lại workspace và tên đố
 
 Dashboard dùng query theo section: ngoài workspace và permission context, dữ
 liệu của một module chỉ tải khi module đó đang mở. Điều này tránh tải đồng thời
-messages, integrations, bots, cronjob và backup ngay ở trang Tổng quan.
+messages, cronjob, backup và các module custom như integrations/bots ngay ở
+trang Tổng quan.
 
 - cache query dùng chế độ `offlineFirst` và giữ dữ liệu không dùng trong một
   khoảng ngắn để quay lại section nhanh hơn;

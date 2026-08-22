@@ -9,6 +9,7 @@ app lên Google Play/App Store. Mỗi mục chưa đạt phải có owner và ng
 - [ ] Domain, DNS, TLS và firewall đã kiểm tra từ mạng ngoài.
 - [ ] Chỉ Caddy/coturn public; database, Redis, RabbitMQ không public.
 - [ ] `.env` quyền `0600`, secret ngẫu nhiên, không có `CHANGE_ME`.
+- [ ] `NEXT_PUBLIC_ENABLE_CUSTOM_MODULES=false` cho bản self-host mặc định; chỉ bật khi có bản custom.
 - [ ] `RATE_LIMIT_ENABLED=true`, CORS chỉ chứa origin cần thiết.
 - [ ] `/ready`, container restart, CPU/RAM/disk và certificate có alert.
 - [ ] Backup mã hóa ngoài VPS; restore drill thành công và có RPO/RTO.

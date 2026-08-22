@@ -164,7 +164,9 @@ const TalkCollaborationHub = dynamic(
   { loading: PanelSkeleton }
 );
 
-const railItems = [
+const customModulesEnabled = process.env.NEXT_PUBLIC_ENABLE_CUSTOM_MODULES === "true";
+
+const defaultRailItems = [
   { id: "messages", label: "Tin nhắn", icon: ConversationSolidIcon },
   { id: "channels", label: "Kênh", icon: GroupSolidIcon },
   { id: "contacts", label: "Bạn bè", icon: AddContactSolidIcon },
@@ -172,7 +174,18 @@ const railItems = [
   { id: "settings", label: "Cài đặt", icon: SettingsSolidIcon }
 ] as const;
 
-type RailItemId = (typeof railItems)[number]["id"] | "departments" | "tickets" | "bots" | "automation";
+const customRailItems = [
+  { id: "bots", label: "Bot", icon: Bot },
+  { id: "automation", label: "Automation", icon: Workflow }
+] as const;
+
+const railItems = customModulesEnabled ? [...defaultRailItems, ...customRailItems] : defaultRailItems;
+
+type RailItemId =
+  | (typeof defaultRailItems)[number]["id"]
+  | (typeof customRailItems)[number]["id"]
+  | "departments"
+  | "tickets";
 type MessageSidebarTab = "conversations" | "channels";
 type ContactsTab = "employees" | "friends" | "discover";
 type ChatWorkspaceData = ReturnType<typeof useChatWorkspaceData>;
