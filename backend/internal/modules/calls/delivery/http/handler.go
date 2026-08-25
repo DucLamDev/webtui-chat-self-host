@@ -14,6 +14,7 @@ import (
 	"github.com/duclamdev/application-chat/backend/internal/shared/middleware"
 	"github.com/duclamdev/application-chat/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -128,15 +129,35 @@ func (h *Handler) Create(c *gin.Context) {
 		response.Fail(c, nethttp.StatusBadRequest, "INVALID_JSON", "Body JSON không hợp lệ.", nil)
 		return
 	}
+	actorUserID := strings.TrimSpace(middleware.CurrentUserID(c))
+	workspaceID := strings.TrimSpace(c.Param("workspace_id"))
+	channelID := strings.TrimSpace(req.ChannelID)
+	targetUserID := strings.TrimSpace(req.TargetUserID)
+	if _, err := uuid.Parse(workspaceID); err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "VALIDATION_ERROR", "workspace_id khÃ´ng há»£p lá»‡.", nil)
+		return
+	}
+	if _, err := uuid.Parse(channelID); err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "VALIDATION_ERROR", "channel_id cuá»™c gá»i khÃ´ng há»£p lá»‡.", nil)
+		return
+	}
+	if _, err := uuid.Parse(targetUserID); err != nil {
+		response.Fail(c, nethttp.StatusBadRequest, "VALIDATION_ERROR", "target_user_id cuá»™c gá»i khÃ´ng há»£p lá»‡.", nil)
+		return
+	}
+	if actorUserID != "" && actorUserID == targetUserID {
+		response.Fail(c, nethttp.StatusBadRequest, "CALL_TARGET_INVALID", "KhÃ´ng thá»ƒ tá»± gá»i chÃ­nh mÃ¬nh.", nil)
+		return
+	}
 	clientCallID := req.ClientCallID
 	if clientCallID == "" {
 		clientCallID = c.GetHeader("Idempotency-Key")
 	}
 	call, err := h.service.Create(c.Request.Context(), callsapp.CreateInput{
-		ActorUserID:  middleware.CurrentUserID(c),
-		WorkspaceID:  c.Param("workspace_id"),
-		ChannelID:    req.ChannelID,
-		TargetUserID: req.TargetUserID,
+		ActorUserID:  actorUserID,
+		WorkspaceID:  workspaceID,
+		ChannelID:    channelID,
+		TargetUserID: targetUserID,
 		ClientCallID: clientCallID,
 		Mode:         req.Mode,
 		Metadata:     req.Metadata,

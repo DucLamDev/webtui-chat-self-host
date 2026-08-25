@@ -104,6 +104,15 @@ random_token() {
   openssl rand -hex 32
 }
 
+normalized_bool_env() {
+  value=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  case "$value" in
+    1|true|yes|on) printf '%s\n' true ;;
+    ""|0|false|no|off) printf '%s\n' false ;;
+    *) echo "$2 must be true or false." >&2; exit 1 ;;
+  esac
+}
+
 base64_file() {
   if [ ! -r "$1" ]; then
     echo "Cannot read Firebase service account JSON: $1" >&2
@@ -267,6 +276,33 @@ configure_relay_server() {
   write_env PUSH_RELAY_PUBLISHERS "$publishers"
 }
 
+repair_existing_relay_server() {
+  relay_server_enabled=$(normalized_bool_env "$(read_env PUSH_RELAY_SERVER_ENABLED)" "PUSH_RELAY_SERVER_ENABLED")
+  if [ "$relay_server_enabled" != "true" ]; then
+    return
+  fi
+  if [ -n "$(read_env PUSH_RELAY_PUBLISHERS)" ]; then
+    return
+  fi
+  if [ -z "$(read_env FIREBASE_SERVICE_ACCOUNT_FILE)$(read_env FIREBASE_SERVICE_ACCOUNT_JSON_BASE64)$(read_env APNS_PRIVATE_KEY_FILE)$(read_env APNS_PRIVATE_KEY_BASE64)" ]; then
+    echo "PUSH_RELAY_SERVER_ENABLED=true but provider credentials are missing. Pass --push-mode relay-server with Firebase/APNs credentials, or set --push-mode none." >&2
+    exit 1
+  fi
+
+  instance_id=$(public_instance_id)
+  relay_token=${PUSH_RELAY_TOKEN_INPUT:-$(read_env PUSH_RELAY_TOKEN)}
+  if [ -z "$relay_token" ]; then
+    relay_token=$(random_token)
+  fi
+  if [ "${#relay_token}" -lt 32 ]; then
+    echo "PUSH_RELAY_TOKEN must be at least 32 characters when reused as a relay publisher token." >&2
+    exit 1
+  fi
+  clear_relay_client
+  write_env PUSH_RELAY_PUBLISHERS "$instance_id=$relay_token"
+  echo "Generated PUSH_RELAY_PUBLISHERS for relay server publisher $instance_id."
+}
+
 generate_vapid() {
   require_command docker
   if ! docker compose version >/dev/null 2>&1; then
@@ -307,7 +343,7 @@ configure_web_push() {
 require_command openssl
 
 case "$PUSH_MODE" in
-  "") ;;
+  "") repair_existing_relay_server ;;
   none) configure_none ;;
   direct-fcm) configure_direct_fcm ;;
   relay-client) configure_relay_client ;;

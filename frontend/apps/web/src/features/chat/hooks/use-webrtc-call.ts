@@ -569,6 +569,14 @@ export function useWebRtcCall({
         });
         return;
       }
+      if (normalizedPeerUserId === currentUserId) {
+        setCallState({
+          error: "KhÃ´ng thá»ƒ tá»± gá»i chÃ­nh mÃ¬nh.",
+          mode,
+          status: "error"
+        });
+        return;
+      }
       if (!isCallFinished(callStateRef.current.status)) {
         return;
       }

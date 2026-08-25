@@ -1165,7 +1165,8 @@ function mapDirectConversation(
   workspaceMembers: WorkspaceMember[] = [],
   contactProfileByUserId: ReadonlyMap<string, ContactUser> = new Map()
 ): DirectConversation | null {
-  const participant = item.user ?? item.participants?.find((member) => member.user_id !== currentUserId) ?? item.participants?.[0];
+  const directUser = item.user && item.user.user_id !== currentUserId ? item.user : undefined;
+  const participant = directUser ?? item.participants?.find((member) => member.user_id !== currentUserId);
 
   if (!participant) {
     return null;

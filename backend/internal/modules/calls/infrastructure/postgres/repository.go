@@ -35,6 +35,9 @@ WHERE id = $1::uuid
 }
 
 func (r *Repository) Create(ctx context.Context, params callsapp.CreateParams) (callsdomain.Call, error) {
+	if err := ensureDirectCallChannelMembers(ctx, r.pool, params.WorkspaceID, params.ChannelID, params.InitiatorID); err != nil {
+		return callsdomain.Call{}, err
+	}
 	row := r.pool.QueryRow(ctx, `
 INSERT INTO call_sessions (workspace_id, channel_id, initiator_user_id, target_user_id, client_call_id, mode, metadata)
 SELECT c.workspace_id, c.id, $3::uuid, $4::uuid, NULLIF($5, ''), $6, $7::jsonb
@@ -62,6 +65,29 @@ RETURNING id::text, workspace_id::text, channel_id::text, initiator_user_id::tex
 		return callsdomain.Call{}, callsdomain.ErrCallParticipantDenied
 	}
 	return call, err
+}
+
+func ensureDirectCallChannelMembers(ctx context.Context, exec commandExecutor, workspaceID, channelID, actorUserID string) error {
+	_, err := exec.Exec(ctx, `
+INSERT INTO channel_members (channel_id, user_id, status)
+SELECT DISTINCT dc.channel_id, dcm.user_id, 'active'
+FROM direct_conversations dc
+JOIN direct_conversation_members dcm ON dcm.direct_conversation_id = dc.id
+WHERE dc.workspace_id = $1::uuid
+  AND dc.channel_id = $2::uuid
+  AND dc.archived_at IS NULL
+  AND EXISTS (
+      SELECT 1
+      FROM direct_conversation_members actor_member
+      WHERE actor_member.direct_conversation_id = dc.id
+        AND actor_member.user_id = $3::uuid
+  )
+ORDER BY dcm.user_id
+ON CONFLICT (channel_id, user_id)
+DO UPDATE SET status = 'active'
+WHERE channel_members.status IN ('left', 'removed', 'invited')
+`, workspaceID, channelID, actorUserID)
+	return err
 }
 
 func (r *Repository) Get(ctx context.Context, workspaceID string, callID string) (callsdomain.Call, error) {

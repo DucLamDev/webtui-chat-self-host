@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,5 +54,58 @@ func TestICEServersIssuesShortLivedTURNRESTCredential(t *testing.T) {
 	_, _ = mac.Write([]byte(username))
 	if turn["username"] != username || turn["credential"] != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
 		t.Fatalf("unexpected TURN credentials: %#v", turn)
+	}
+}
+
+func TestCreateRejectsInvalidTargetIdentifier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(nil)
+	router := gin.New()
+	router.POST("/api/v1/workspaces/:workspace_id/calls", func(c *gin.Context) {
+		c.Set(constants.ContextUserID, "11111111-1111-4111-8111-111111111111")
+		handler.Create(c)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/workspaces/22222222-2222-4222-8222-222222222222/calls",
+		strings.NewReader(`{"channel_id":"33333333-3333-4333-8333-333333333333","target_user_id":"not-a-uuid","mode":"video"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "target_user_id") {
+		t.Fatalf("body = %s, want target_user_id validation", recorder.Body.String())
+	}
+}
+
+func TestCreateRejectsSelfCallBeforeService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const userID = "11111111-1111-4111-8111-111111111111"
+	handler := NewHandler(nil)
+	router := gin.New()
+	router.POST("/api/v1/workspaces/:workspace_id/calls", func(c *gin.Context) {
+		c.Set(constants.ContextUserID, userID)
+		handler.Create(c)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/workspaces/22222222-2222-4222-8222-222222222222/calls",
+		strings.NewReader(`{"channel_id":"33333333-3333-4333-8333-333333333333","target_user_id":"`+userID+`","mode":"video"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "CALL_TARGET_INVALID") {
+		t.Fatalf("body = %s, want CALL_TARGET_INVALID", recorder.Body.String())
 	}
 }

@@ -222,6 +222,8 @@ if [ "$PUSH_RELAY_SERVER_ENABLED" = "true" ]; then
   fi
   if [ -z "$PUSH_RELAY_PUBLISHERS" ]; then
     echo "Push relay server: enabled but publisher credentials are missing" >&2
+    echo "Run: sh deploy/self-hosted/configure-notifications.sh --restart" >&2
+    echo "Or disable it with: sh deploy/self-hosted/configure-notifications.sh --push-mode none --restart" >&2
     exit 1
   fi
   if [ -z "$FIREBASE_SERVICE_ACCOUNT_FILE$FIREBASE_SERVICE_ACCOUNT_JSON_BASE64$APNS_PRIVATE_KEY_FILE$APNS_PRIVATE_KEY_BASE64" ]; then

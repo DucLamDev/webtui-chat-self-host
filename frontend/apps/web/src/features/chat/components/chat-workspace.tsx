@@ -1526,6 +1526,12 @@ export function ChatWorkspace() {
     resolvePeerName: resolveCallPeerName,
     workspaceId: data.workspaceId
   });
+  const selectedDirectPeerUserId = selectedChatChannel?.peerUserId?.trim() ?? "";
+  const canStartDirectCall =
+    selectedChatChannel?.type === "direct" &&
+    serverCapabilities?.calls !== false &&
+    Boolean(selectedDirectPeerUserId) &&
+    selectedDirectPeerUserId !== currentUser.id;
   useIncomingCallRingtone(callControls.callState.status === "incoming");
   useEffect(() => {
     if (!data.selectedChannelId || callControls.callState.status !== "idle") {
@@ -3406,8 +3412,8 @@ export function ChatWorkspace() {
                   setIsMeetingOpenRequested(true);
                 }
               }}
-              onStartAudioCall={selectedChatChannel.type === "direct" && serverCapabilities?.calls !== false ? () => void callControls.startCall("audio") : undefined}
-              onStartVideoCall={selectedChatChannel.type === "direct" && serverCapabilities?.calls !== false ? () => void callControls.startCall("video") : undefined}
+              onStartAudioCall={canStartDirectCall ? () => void callControls.startCall("audio") : undefined}
+              onStartVideoCall={canStartDirectCall ? () => void callControls.startCall("video") : undefined}
               onToggleDetailPanel={() => setIsDetailPanelOpen((current) => !current)}
               onToggleFavorite={() => handleToggleFavorite(selectedChatChannel.id)}
               onToggleSearch={handleToggleMessageSearch}
@@ -3524,7 +3530,11 @@ export function ChatWorkspace() {
                     .catch((error) => setToast(error instanceof Error ? error.message : "Không tạo được lời nhắc."));
                 }}
                 onFocusedMessageSettled={handleFocusedMessageSettled}
-                onRetryCall={(mode) => void callControls.startCall(mode)}
+                onRetryCall={(mode) => {
+                  if (canStartDirectCall) {
+                    void callControls.startCall(mode);
+                  }
+                }}
                 onRetryOutbox={(entryId) => void data.retryOutboxItem(entryId)}
                 onSearchResultSelect={(message) => {
                   if (message.rawChannelId && message.rawChannelId !== data.selectedChannelId) {
