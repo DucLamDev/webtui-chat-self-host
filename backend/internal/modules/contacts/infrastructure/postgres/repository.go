@@ -338,11 +338,11 @@ WITH target_workspace AS (
       AND deleted_at IS NULL
 ), payload AS (
     SELECT target_workspace.workspace_id,
-           actor.display_name || $6 AS body,
+           actor.display_name || $6::text AS body,
            $7::jsonb || jsonb_build_object(
              'workspace_id', target_workspace.workspace_id::text,
-             'title', $5,
-             'body', actor.display_name || $6,
+             'title', $5::text,
+             'body', actor.display_name || $6::text,
              'actor_name', actor.display_name,
              'deep_link', 'webtui://chat/contacts?workspaceId=' || target_workspace.workspace_id::text
            ) AS data
@@ -353,7 +353,7 @@ WITH target_workspace AS (
     SELECT $2::uuid,
            workspace_id,
            'invite',
-           $5,
+           $5::text,
            body,
            data
     FROM payload
@@ -361,7 +361,7 @@ WITH target_workspace AS (
         SELECT 1
         FROM notifications
         WHERE user_id = $2::uuid
-          AND data->>'event_id' = $4
+          AND data->>'event_id' = $4::text
     )
     RETURNING id, workspace_id, user_id, data
 )

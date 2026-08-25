@@ -164,6 +164,13 @@ func writePostgresError(c *gin.Context, err *pgconn.PgError) bool {
 
 	slog.Warn("Yêu cầu API gặp lỗi PostgreSQL đã được phân loại",
 		"sqlstate", err.Code,
+		"message", err.Message,
+		"detail", err.Detail,
+		"hint", err.Hint,
+		"schema", err.SchemaName,
+		"table", err.TableName,
+		"column", err.ColumnName,
+		"datatype", err.DataTypeName,
 		"constraint", err.ConstraintName,
 		"method", requestMethod(c),
 		"path", requestPath(c),
