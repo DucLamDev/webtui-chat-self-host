@@ -120,7 +120,12 @@ PUSH_RELAY_URL=$(sed -n 's/^PUSH_RELAY_URL=//p' "$ENV_FILE" | tail -n 1)
 PUSH_RELAY_TOKEN=$(sed -n 's/^PUSH_RELAY_TOKEN=//p' "$ENV_FILE" | tail -n 1)
 PUSH_RELAY_INSTANCE_ID=$(sed -n 's/^PUSH_RELAY_INSTANCE_ID=//p' "$ENV_FILE" | tail -n 1)
 FIREBASE_PROJECT_ID=$(sed -n 's/^FIREBASE_PROJECT_ID=//p' "$ENV_FILE" | tail -n 1)
+FIREBASE_SERVICE_ACCOUNT_FILE=$(sed -n 's/^FIREBASE_SERVICE_ACCOUNT_FILE=//p' "$ENV_FILE" | tail -n 1)
+FIREBASE_SERVICE_ACCOUNT_JSON_BASE64=$(sed -n 's/^FIREBASE_SERVICE_ACCOUNT_JSON_BASE64=//p' "$ENV_FILE" | tail -n 1)
 APNS_KEY_ID=$(sed -n 's/^APNS_KEY_ID=//p' "$ENV_FILE" | tail -n 1)
+APNS_TEAM_ID=$(sed -n 's/^APNS_TEAM_ID=//p' "$ENV_FILE" | tail -n 1)
+APNS_PRIVATE_KEY_FILE=$(sed -n 's/^APNS_PRIVATE_KEY_FILE=//p' "$ENV_FILE" | tail -n 1)
+APNS_PRIVATE_KEY_BASE64=$(sed -n 's/^APNS_PRIVATE_KEY_BASE64=//p' "$ENV_FILE" | tail -n 1)
 WEB_PUSH_ENABLED=$(sed -n 's/^WEB_PUSH_ENABLED=//p' "$ENV_FILE" | tail -n 1)
 WEB_PUSH_PUBLIC_KEY=$(sed -n 's/^WEB_PUSH_VAPID_PUBLIC_KEY=//p' "$ENV_FILE" | tail -n 1)
 WEB_PUSH_PRIVATE_KEY=$(sed -n 's/^WEB_PUSH_VAPID_PRIVATE_KEY=//p' "$ENV_FILE" | tail -n 1)
@@ -171,6 +176,30 @@ if [ -n "$PUSH_RELAY_URL$PUSH_RELAY_TOKEN$PUSH_RELAY_INSTANCE_ID" ]; then
   esac
   echo "Push: publisher relay configured"
 elif [ -n "$FIREBASE_PROJECT_ID" ] || [ -n "$APNS_KEY_ID" ]; then
+  if [ -n "$PUSH_RELAY_URL$PUSH_RELAY_TOKEN$PUSH_RELAY_INSTANCE_ID" ]; then
+    echo "Push: relay client and direct FCM/APNs cannot be configured together" >&2
+    exit 1
+  fi
+  if [ -n "$FIREBASE_PROJECT_ID" ]; then
+    if [ -z "$FIREBASE_SERVICE_ACCOUNT_FILE$FIREBASE_SERVICE_ACCOUNT_JSON_BASE64" ]; then
+      echo "Push: FIREBASE_SERVICE_ACCOUNT_FILE or FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 is required for direct FCM" >&2
+      exit 1
+    fi
+    if [ -n "$FIREBASE_SERVICE_ACCOUNT_FILE" ] && [ -n "$FIREBASE_SERVICE_ACCOUNT_JSON_BASE64" ]; then
+      echo "Push: configure only one Firebase service account source" >&2
+      exit 1
+    fi
+  fi
+  if [ -n "$APNS_KEY_ID$APNS_TEAM_ID$APNS_PRIVATE_KEY_FILE$APNS_PRIVATE_KEY_BASE64" ]; then
+    if [ -z "$APNS_KEY_ID" ] || [ -z "$APNS_TEAM_ID" ] || [ -z "$APNS_PRIVATE_KEY_FILE$APNS_PRIVATE_KEY_BASE64" ]; then
+      echo "Push: APNS_KEY_ID, APNS_TEAM_ID, and an APNS private key are required for direct APNs" >&2
+      exit 1
+    fi
+    if [ -n "$APNS_PRIVATE_KEY_FILE" ] && [ -n "$APNS_PRIVATE_KEY_BASE64" ]; then
+      echo "Push: configure only one APNs private key source" >&2
+      exit 1
+    fi
+  fi
   echo "Push: direct FCM/APNs configuration detected"
 else
   echo "Push: disabled (foreground WebSocket and in-app notification center still work)"
@@ -187,8 +216,16 @@ else
 fi
 
 if [ "$PUSH_RELAY_SERVER_ENABLED" = "true" ]; then
+  if [ -n "$PUSH_RELAY_URL$PUSH_RELAY_TOKEN$PUSH_RELAY_INSTANCE_ID" ]; then
+    echo "Push relay server: cannot be combined with relay client mode" >&2
+    exit 1
+  fi
   if [ -z "$PUSH_RELAY_PUBLISHERS" ]; then
     echo "Push relay server: enabled but publisher credentials are missing" >&2
+    exit 1
+  fi
+  if [ -z "$FIREBASE_SERVICE_ACCOUNT_FILE$FIREBASE_SERVICE_ACCOUNT_JSON_BASE64$APNS_PRIVATE_KEY_FILE$APNS_PRIVATE_KEY_BASE64" ]; then
+    echo "Push relay server: enabled but no FCM/APNs provider credential is configured" >&2
     exit 1
   fi
   if docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile push-relay ps --status running --services | grep -qx push-relay; then

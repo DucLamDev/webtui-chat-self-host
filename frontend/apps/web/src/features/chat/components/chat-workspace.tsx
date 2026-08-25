@@ -1484,10 +1484,22 @@ export function ChatWorkspace() {
     const directConversation = data.directConversations.find(
       (conversation) => conversation.id === data.selectedChannelWithMessages?.id
     );
+    const directPeerMember = selectedChannelMembers.find(
+      (member) => member.user_id && member.user_id !== currentUser.id
+    );
     if (!directConversation) {
+      const peerName =
+        directPeerMember?.display_name ||
+        directPeerMember?.username ||
+        directPeerMember?.email ||
+        data.selectedChannelWithMessages.name;
       return {
         ...data.selectedChannelWithMessages,
-        memberCount: selectedChannelMembersQuery.data ? selectedChannelMembers.length : data.selectedChannelWithMessages.memberCount
+        avatarUrl: directPeerMember?.avatar_url ?? data.selectedChannelWithMessages.avatarUrl,
+        memberCount: selectedChannelMembersQuery.data ? selectedChannelMembers.length : data.selectedChannelWithMessages.memberCount,
+        name: peerName,
+        peerUserId: directPeerMember?.user_id,
+        userStatus: data.selectedChannelWithMessages.userStatus
       };
     }
     return {
@@ -1499,7 +1511,7 @@ export function ChatWorkspace() {
       peerUserId: directConversation.user.id,
       userStatus: directConversation.user.status
     };
-  }, [data.directConversations, data.selectedChannelWithMessages, selectedChannelMembers, selectedChannelMembersQuery.data]);
+  }, [currentUser.id, data.directConversations, data.selectedChannelWithMessages, selectedChannelMembers, selectedChannelMembersQuery.data]);
   const callControls = useWebRtcCall({
     channelId: data.selectedChannelId,
     channelName: selectedChatChannel?.name,
@@ -9538,7 +9550,6 @@ function MessageTimeline({
               focused={focusedMessageId === message.id}
               key={message.id}
               message={message}
-              messageAuthor={messageAuthor}
               onRetryCall={onRetryCall}
             />
           );
@@ -9974,12 +9985,10 @@ function MessagePollCard({
 function CallMessageRow({
   focused,
   message,
-  messageAuthor,
   onRetryCall
 }: {
   focused: boolean;
   message: ChatMessage;
-  messageAuthor: ChatUser;
   onRetryCall: (mode: "audio" | "video") => void;
 }) {
   const callEvent = message.callEvent;
@@ -10002,7 +10011,6 @@ function CallMessageRow({
       className={`${isLocalCallRow ? "message-row message-row--local" : "message-row"} message-row--call${isMissed ? " message-row--call-missed" : ""}${focused ? " message-row--focused" : ""}`}
       data-message-id={message.id}
     >
-      {!isLocalCallRow ? <Avatar name={messageAuthor.name} src={messageAuthor.avatarUrl} status={messageAuthor.status} /> : null}
       <div className="message-row__stack">
         <div className={isMissed ? "message-call-card message-call-card--missed" : "message-call-card"}>
           <strong>{callMessageTitle(callEvent)}</strong>

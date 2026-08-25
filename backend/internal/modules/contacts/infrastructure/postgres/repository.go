@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -43,7 +44,15 @@ func (r *Repository) CreateRequest(ctx context.Context, zoneID string, actorUser
 		return contactsdomain.ContactRequest{}, contactsdomain.ErrUserNotFound
 	}
 
-	row := r.pool.QueryRow(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	row := tx.QueryRow(ctx, `
 INSERT INTO contact_requests (zone_id, requester_id, receiver_id, status)
 VALUES ($1::uuid, $2::uuid, $3::uuid, 'pending')
 RETURNING id::text
@@ -55,11 +64,29 @@ RETURNING id::text
 		}
 		return contactsdomain.ContactRequest{}, err
 	}
-	return r.byID(ctx, zoneID, requestID, actorUserID)
+	item, err := r.byIDWith(ctx, tx, zoneID, requestID, actorUserID)
+	if err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	if err := createContactNotification(ctx, tx, zoneID, item, receiverID, actorUserID, "created"); err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	return item, nil
 }
 
 func (r *Repository) AcceptRequest(ctx context.Context, zoneID string, actorUserID string, requestID string) (contactsdomain.ContactRequest, error) {
-	command, err := r.pool.Exec(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	command, err := tx.Exec(ctx, `
 UPDATE contact_requests
 SET status = 'accepted',
     responded_at = now()
@@ -75,7 +102,17 @@ WHERE id = $1::uuid
 	if command.RowsAffected() == 0 {
 		return contactsdomain.ContactRequest{}, contactsdomain.ErrContactRequestNotFound
 	}
-	return r.byID(ctx, zoneID, requestID, actorUserID)
+	item, err := r.byIDWith(ctx, tx, zoneID, requestID, actorUserID)
+	if err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	if err := createContactNotification(ctx, tx, zoneID, item, item.RequesterID, actorUserID, "accepted"); err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contactsdomain.ContactRequest{}, err
+	}
+	return item, nil
 }
 
 func (r *Repository) RejectRequest(ctx context.Context, zoneID string, actorUserID string, requestID string) (contactsdomain.ContactRequest, error) {
@@ -192,7 +229,11 @@ WHERE cr.deleted_at IS NULL
 }
 
 func (r *Repository) byID(ctx context.Context, zoneID string, requestID string, actorUserID string) (contactsdomain.ContactRequest, error) {
-	row := r.pool.QueryRow(ctx, `
+	return r.byIDWith(ctx, r.pool, zoneID, requestID, actorUserID)
+}
+
+func (r *Repository) byIDWith(ctx context.Context, queryer dbQueryer, zoneID string, requestID string, actorUserID string) (contactsdomain.ContactRequest, error) {
+	row := queryer.QueryRow(ctx, `
 SELECT cr.id::text, cr.requester_id::text, cr.receiver_id::text, cr.status,
        other_user.id::text, other_user.email::text, other_user.username::text, other_user.display_name,
        other_user.avatar_url, other_user.phone_number, other_user.status,
@@ -232,6 +273,103 @@ SELECT EXISTS (
 )
 `, zoneID, userID).Scan(&exists)
 	return exists, err
+}
+
+type dbQueryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type dbExecutor interface {
+	dbQueryer
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func createContactNotification(ctx context.Context, executor dbExecutor, zoneID string, item contactsdomain.ContactRequest, recipientID string, actorUserID string, action string) error {
+	var title string
+	var bodySuffix string
+	var eventType string
+	switch action {
+	case "accepted":
+		title = "Lời mời kết bạn đã được chấp nhận"
+		bodySuffix = " đã chấp nhận lời mời kết bạn"
+		eventType = "contact_request_accepted"
+	default:
+		title = "Lời mời kết bạn mới"
+		bodySuffix = " muốn kết bạn với bạn"
+		eventType = "contact_request"
+		action = "created"
+	}
+
+	eventID := "contact_request:" + item.ID + ":" + action
+	basePayload, err := json.Marshal(map[string]any{
+		"event_id":           eventID,
+		"event_type":         eventType,
+		"target_type":        "contact",
+		"contact_request_id": item.ID,
+		"requester_id":       item.RequesterID,
+		"receiver_id":        item.ReceiverID,
+		"actor_user_id":      actorUserID,
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = executor.Exec(ctx, `
+WITH target_workspace AS (
+    SELECT w.id AS workspace_id
+    FROM workspaces w
+    JOIN workspace_members recipient_member
+      ON recipient_member.workspace_id = w.id
+     AND recipient_member.user_id = $2::uuid
+     AND recipient_member.status = 'active'
+    LEFT JOIN workspace_members actor_member
+      ON actor_member.workspace_id = w.id
+     AND actor_member.user_id = $3::uuid
+     AND actor_member.status = 'active'
+    WHERE w.zone_id = $1::uuid
+      AND w.status = 'active'
+      AND w.deleted_at IS NULL
+    ORDER BY (actor_member.user_id IS NOT NULL) DESC, w.created_at ASC
+    LIMIT 1
+), actor AS (
+    SELECT COALESCE(NULLIF(trim(display_name), ''), username::text, 'Người dùng') AS display_name
+    FROM users
+    WHERE id = $3::uuid
+      AND deleted_at IS NULL
+), payload AS (
+    SELECT target_workspace.workspace_id,
+           actor.display_name || $6 AS body,
+           $7::jsonb || jsonb_build_object(
+             'workspace_id', target_workspace.workspace_id::text,
+             'title', $5,
+             'body', actor.display_name || $6,
+             'actor_name', actor.display_name,
+             'deep_link', 'webtui://chat/contacts?workspaceId=' || target_workspace.workspace_id::text
+           ) AS data
+    FROM target_workspace
+    CROSS JOIN actor
+), inserted AS (
+    INSERT INTO notifications (user_id, workspace_id, type, title, body, data)
+    SELECT $2::uuid,
+           workspace_id,
+           'invite',
+           $5,
+           body,
+           data
+    FROM payload
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM notifications
+        WHERE user_id = $2::uuid
+          AND data->>'event_id' = $4
+    )
+    RETURNING id, workspace_id, user_id, data
+)
+INSERT INTO notification_jobs (notification_id, workspace_id, user_id, channel, payload)
+SELECT id, workspace_id, user_id, 'push', data
+FROM inserted
+`, zoneID, recipientID, actorUserID, eventID, title, bodySuffix, string(basePayload))
+	return err
 }
 
 type rowScanner interface {

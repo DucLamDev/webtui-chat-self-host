@@ -551,7 +551,9 @@ export function useWebRtcCall({
 
   const startCall = useCallback(
     async (mode: CallMode) => {
-      if (!enabled || !workspaceId || !channelId) {
+      const normalizedChannelId = channelId?.trim() ?? "";
+      const normalizedPeerUserId = peerUserId?.trim() ?? "";
+      if (!enabled || !workspaceId || !normalizedChannelId) {
         setCallState({
           error: "Realtime chưa sẵn sàng để bắt đầu cuộc gọi.",
           mode,
@@ -559,7 +561,7 @@ export function useWebRtcCall({
         });
         return;
       }
-      if (!peerUserId) {
+      if (!normalizedPeerUserId) {
         setCallState({
           error: "Không tìm thấy người nhận cuộc gọi trong hội thoại này.",
           mode,
@@ -575,22 +577,22 @@ export function useWebRtcCall({
       let backendCallId = "";
       try {
         setCallState({
-          channelId,
+          channelId: normalizedChannelId,
           initiatorUserId: currentUserId,
           mode,
           peerName: peerName || channelName,
-          peerUserId,
+          peerUserId: normalizedPeerUserId,
           status: "outgoing"
         });
         const backendCall = await api.calls.create(workspaceId, {
-          channel_id: channelId,
+          channel_id: normalizedChannelId,
           client_call_id: newCallId(),
           metadata: {
             client: "web",
             provider: "self_hosted_webrtc"
           },
           mode,
-          target_user_id: peerUserId
+          target_user_id: normalizedPeerUserId
         });
         backendCallId = backendCall.id;
         if (operationToken !== operationTokenRef.current) {
@@ -604,7 +606,7 @@ export function useWebRtcCall({
             backendCall.initiator_user_id || currentUserId,
           mode,
           peerName: peerName || channelName,
-          peerUserId,
+          peerUserId: normalizedPeerUserId,
           status: "outgoing"
         };
         setCallState(nextState);
@@ -634,11 +636,11 @@ export function useWebRtcCall({
           {
             ...current,
             callId: backendCallId || current.callId,
-            channelId,
+            channelId: normalizedChannelId,
             initiatorUserId: currentUserId,
             mode,
             peerName: peerName || channelName,
-            peerUserId
+            peerUserId: normalizedPeerUserId
           },
           "webrtc_setup_failed",
           callErrorMessage(error)
@@ -664,13 +666,15 @@ export function useWebRtcCall({
       return;
     }
     const operationToken = ++operationTokenRef.current;
+    let accepted = false;
     try {
       setCallState({ ...current, status: "connecting" });
+      await api.calls.accept(workspaceId, current.callId);
+      accepted = true;
       await beginMediaSession(current.callId, current.mode);
       if (operationToken !== operationTokenRef.current) {
         return;
       }
-      await api.calls.accept(workspaceId, current.callId);
       await api.calls.signal(workspaceId, current.callId, "ready", {});
       const pendingOffer = pendingOfferRef.current;
       pendingOfferRef.current = null;
@@ -678,9 +682,15 @@ export function useWebRtcCall({
         await receiveOffer(current.callId, current.mode, pendingOffer);
       }
     } catch (error) {
-      await api.calls
-        .reject(workspaceId, current.callId, "webrtc_setup_failed")
-        .catch(() => undefined);
+      if (accepted) {
+        await api.calls
+          .hangup(workspaceId, current.callId, "webrtc_setup_failed")
+          .catch(() => undefined);
+      } else {
+        await api.calls
+          .reject(workspaceId, current.callId, "webrtc_setup_failed")
+          .catch(() => undefined);
+      }
       finishCall(
         current,
         "webrtc_setup_failed",

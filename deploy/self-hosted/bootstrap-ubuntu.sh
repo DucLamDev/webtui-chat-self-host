@@ -12,9 +12,15 @@ REPO_URL=""
 INSTALL_DIR=""
 SKIP_DNS_CHECK=0
 FORCE=0
+NOTIFICATION_CONFIGURE_ARGS=""
 
 usage() {
-  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--repo-url https://github.com/org/repo.git] [--install-dir /opt/vpsttt-chat] [--portal-origin https://download.webtui.vn] [--external-ip 203.0.113.10] [--skip-dns-check] [--force]"
+  echo "Usage: $0 --domain chat.example.com --email admin@example.com [--name 'Example Chat'] [--logo-url https://chat.example.com/logo.png] [--registration-mode open|invite_only|closed] [--repo-url https://github.com/org/repo.git] [--install-dir /opt/vpsttt-chat] [--portal-origin https://download.webtui.vn] [--external-ip 203.0.113.10] [--push-mode none|direct-fcm|relay-client|relay-server] [--firebase-service-account-json /path/adminsdk.json] [--firebase-service-account-base64 BASE64] [--push-relay-url URL] [--push-relay-token TOKEN] [--push-relay-publishers UUID=TOKEN] [--enable-web-push] [--skip-dns-check] [--force]"
+}
+
+append_notification_arg() {
+  NOTIFICATION_CONFIGURE_ARGS="${NOTIFICATION_CONFIGURE_ARGS}
+$1"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -28,6 +34,16 @@ while [ "$#" -gt 0 ]; do
     --install-dir) INSTALL_DIR=${2:-}; shift 2 ;;
     --portal-origin) PORTAL_ORIGIN=${2:-}; shift 2 ;;
     --external-ip) EXTERNAL_IP=${2:-}; shift 2 ;;
+    --push-mode) append_notification_arg "--push-mode"; append_notification_arg "${2:-}"; shift 2 ;;
+    --firebase-project-id) append_notification_arg "--firebase-project-id"; append_notification_arg "${2:-}"; shift 2 ;;
+    --firebase-service-account-json) append_notification_arg "--firebase-service-account-json"; append_notification_arg "${2:-}"; shift 2 ;;
+    --firebase-service-account-base64) append_notification_arg "--firebase-service-account-base64"; append_notification_arg "${2:-}"; shift 2 ;;
+    --push-relay-url) append_notification_arg "--push-relay-url"; append_notification_arg "${2:-}"; shift 2 ;;
+    --push-relay-token) append_notification_arg "--push-relay-token"; append_notification_arg "${2:-}"; shift 2 ;;
+    --push-relay-instance-id) append_notification_arg "--push-relay-instance-id"; append_notification_arg "${2:-}"; shift 2 ;;
+    --push-relay-publishers) append_notification_arg "--push-relay-publishers"; append_notification_arg "${2:-}"; shift 2 ;;
+    --enable-web-push) append_notification_arg "--enable-web-push"; shift ;;
+    --disable-web-push) append_notification_arg "--disable-web-push"; shift ;;
     --skip-dns-check) SKIP_DNS_CHECK=1; shift ;;
     --force) FORCE=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -160,6 +176,10 @@ if [ "$SKIP_DNS_CHECK" -eq 1 ]; then
 fi
 if [ "$FORCE" -eq 1 ]; then
   set -- "$@" --force
+fi
+if [ -n "$(printf '%s' "$NOTIFICATION_CONFIGURE_ARGS" | tr -d '\n')" ]; then
+  # shellcheck disable=SC2086
+  set -- "$@" $NOTIFICATION_CONFIGURE_ARGS
 fi
 
 sh deploy/self-hosted/install.sh "$@"
