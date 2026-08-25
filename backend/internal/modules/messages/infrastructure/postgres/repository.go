@@ -689,7 +689,7 @@ LIMIT 20
 	if _, err := tx.Exec(ctx, `
 INSERT INTO audit_logs (workspace_id, actor_user_id, action, entity_type, entity_id, metadata)
 VALUES ($1::uuid, $2::uuid, 'message.forward', 'message', $3::uuid,
-        jsonb_build_object('source_message_id', $4, 'source_channel_id', $5, 'target_channel_id', $6))
+        jsonb_build_object('source_message_id', $4::uuid, 'source_channel_id', $5::uuid, 'target_channel_id', $6::uuid))
 `, params.WorkspaceID, params.ActorUserID, message.ID, params.MessageID, params.SourceChannelID, params.TargetChannelID); err != nil {
 		return messagesdomain.Message{}, err
 	}
@@ -800,7 +800,7 @@ WHERE workspace_id = $1::uuid AND source_type = 'message' AND source_id = $2::uu
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO audit_logs (workspace_id, actor_user_id, action, entity_type, entity_id, metadata)
-VALUES ($1::uuid, $4::uuid, 'message.delete', 'message', $3::uuid, jsonb_build_object('channel_id', $2))
+VALUES ($1::uuid, $4::uuid, 'message.delete', 'message', $3::uuid, jsonb_build_object('channel_id', $2::uuid))
 `, params.WorkspaceID, params.ChannelID, params.MessageID, params.ActorUserID); err != nil {
 		return err
 	}

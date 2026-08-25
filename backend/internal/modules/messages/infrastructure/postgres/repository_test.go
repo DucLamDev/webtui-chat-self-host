@@ -172,3 +172,19 @@ func TestTouchDirectConversationLastMessageUpdatesSummaryFields(t *testing.T) {
 		}
 	}
 }
+
+func TestMessageAuditJSONParametersAreTyped(t *testing.T) {
+	source, err := os.ReadFile("repository.go")
+	if err != nil {
+		t.Fatalf("read repository.go: %v", err)
+	}
+	text := string(source)
+	for _, required := range []string{
+		"jsonb_build_object('channel_id', $2::uuid)",
+		"jsonb_build_object('source_message_id', $4::uuid, 'source_channel_id', $5::uuid, 'target_channel_id', $6::uuid)",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("message audit SQL is missing typed JSON parameter %q", required)
+		}
+	}
+}
