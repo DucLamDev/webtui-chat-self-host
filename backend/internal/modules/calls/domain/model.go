@@ -9,6 +9,8 @@ import (
 var (
 	ErrCallNotFound          = errors.New("không tìm thấy cuộc gọi")
 	ErrCallParticipantDenied = errors.New("người dùng không thuộc cuộc gọi")
+	ErrCallInvalidTarget     = errors.New("người nhận cuộc gọi không hợp lệ")
+	ErrCallInvalidPayload    = errors.New("dữ liệu cuộc gọi không hợp lệ")
 	ErrCallInvalidTransition = errors.New("trạng thái cuộc gọi không hợp lệ")
 )
 

@@ -182,15 +182,26 @@ func (s *Service) SetBlockChecker(checker BlockChecker) {
 func (s *Service) Create(ctx context.Context, input CreateInput) (CallDTO, error) {
 	userID := strings.TrimSpace(input.ActorUserID)
 	workspaceID := strings.TrimSpace(input.WorkspaceID)
+	channelID := strings.TrimSpace(input.ChannelID)
+	targetUserID := strings.TrimSpace(input.TargetUserID)
 	if err := s.ensureWorkspaceMember(ctx, userID, workspaceID); err != nil {
 		return CallDTO{}, err
+	}
+	if channelID == "" {
+		return CallDTO{}, apperrors.BadRequest("CALL_CHANNEL_REQUIRED", "Thiếu hội thoại để thực hiện cuộc gọi.")
+	}
+	if targetUserID == "" {
+		return CallDTO{}, apperrors.BadRequest("CALL_TARGET_REQUIRED", "Thiếu người nhận cuộc gọi.")
+	}
+	if userID != "" && userID == targetUserID {
+		return CallDTO{}, apperrors.BadRequest("CALL_TARGET_INVALID", "Không thể tự gọi chính mình.")
 	}
 	if s.blockChecker != nil {
 		blocked, err := s.blockChecker.IsInteractionBlocked(
 			ctx,
 			workspaceID,
 			userID,
-			strings.TrimSpace(input.TargetUserID),
+			targetUserID,
 		)
 		if err != nil {
 			return CallDTO{}, err
@@ -213,9 +224,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CallDTO, error
 	}
 	call, err := s.repo.Create(ctx, CreateParams{
 		WorkspaceID:  workspaceID,
-		ChannelID:    strings.TrimSpace(input.ChannelID),
+		ChannelID:    channelID,
 		InitiatorID:  userID,
-		TargetUserID: strings.TrimSpace(input.TargetUserID),
+		TargetUserID: targetUserID,
 		ClientCallID: strings.TrimSpace(input.ClientCallID),
 		Mode:         mode,
 		Metadata:     metadata,
@@ -660,6 +671,12 @@ func mapCallError(err error) error {
 	}
 	if errors.Is(err, callsdomain.ErrCallParticipantDenied) {
 		return apperrors.Forbidden("Bạn không thuộc cuộc gọi này.")
+	}
+	if errors.Is(err, callsdomain.ErrCallInvalidTarget) {
+		return apperrors.BadRequest("CALL_TARGET_INVALID", "Không thể tự gọi chính mình.")
+	}
+	if errors.Is(err, callsdomain.ErrCallInvalidPayload) {
+		return apperrors.BadRequest("CALL_PAYLOAD_INVALID", "Dữ liệu cuộc gọi không hợp lệ.")
 	}
 	if errors.Is(err, callsdomain.ErrCallInvalidTransition) {
 		return apperrors.Conflict("CALL_INVALID_TRANSITION", "Trạng thái cuộc gọi không hợp lệ.")

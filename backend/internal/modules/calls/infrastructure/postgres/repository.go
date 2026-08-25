@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	callsapp "github.com/duclamdev/application-chat/backend/internal/modules/calls/application"
@@ -61,6 +62,9 @@ RETURNING id::text, workspace_id::text, channel_id::text, initiator_user_id::tex
           client_call_id, mode, status, metadata::text, started_at, ended_at, created_at, updated_at
 	`, params.WorkspaceID, params.ChannelID, params.InitiatorID, params.TargetUserID, params.ClientCallID, params.Mode, string(params.Metadata))
 	call, err := scanCall(row)
+	if mappedErr := mapCreateCallPostgresError(err); mappedErr != nil {
+		return callsdomain.Call{}, mappedErr
+	}
 	if errors.Is(err, callsdomain.ErrCallNotFound) {
 		return callsdomain.Call{}, callsdomain.ErrCallParticipantDenied
 	}
@@ -88,6 +92,35 @@ DO UPDATE SET status = 'active'
 WHERE channel_members.status IN ('left', 'removed', 'invited')
 `, workspaceID, channelID, actorUserID)
 	return err
+}
+
+func mapCreateCallPostgresError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return nil
+	}
+	switch pgErr.Code {
+	case "23514":
+		normalized := strings.ToLower(strings.Join([]string{
+			pgErr.ConstraintName,
+			pgErr.Message,
+			pgErr.Detail,
+		}, " "))
+		if strings.Contains(normalized, "initiator_user_id") ||
+			strings.Contains(normalized, "target_user_id") ||
+			strings.Contains(normalized, "distinct_participants") ||
+			strings.Contains(normalized, "call_sessions_check") {
+			return callsdomain.ErrCallInvalidTarget
+		}
+		return callsdomain.ErrCallInvalidPayload
+	case "23502":
+		return callsdomain.ErrCallInvalidPayload
+	default:
+		return nil
+	}
 }
 
 func (r *Repository) Get(ctx context.Context, workspaceID string, callID string) (callsdomain.Call, error) {

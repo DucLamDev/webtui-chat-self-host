@@ -13,6 +13,7 @@ import (
 
 type fakeCallRepo struct {
 	call               callsdomain.Call
+	createErr          error
 	createCalled       bool
 	updateStatusCalled bool
 	messageCalled      bool
@@ -23,6 +24,9 @@ type fakeCallRepo struct {
 
 func (r *fakeCallRepo) Create(_ context.Context, params CreateParams) (callsdomain.Call, error) {
 	r.createCalled = true
+	if r.createErr != nil {
+		return callsdomain.Call{}, r.createErr
+	}
 	now := time.Now()
 	r.call = callsdomain.Call{
 		ID:              "call-1",
@@ -142,11 +146,48 @@ func TestCreateRejectsBlockedInteraction(t *testing.T) {
 	service.SetBlockChecker(staticCallBlockChecker{blocked: true})
 
 	_, err := service.Create(context.Background(), CreateInput{
-		ActorUserID: "user-a", WorkspaceID: "workspace-1", TargetUserID: "user-b", Mode: "audio",
+		ActorUserID: "user-a", WorkspaceID: "workspace-1", ChannelID: "channel-1", TargetUserID: "user-b", Mode: "audio",
 	})
 	var appErr *apperrors.AppError
 	if !errors.As(err, &appErr) || appErr.Code != "INTERACTION_BLOCKED" {
 		t.Fatalf("Create() error = %#v, want INTERACTION_BLOCKED", err)
+	}
+}
+
+func TestCreateRejectsSelfCallBeforeRepository(t *testing.T) {
+	repo := &fakeCallRepo{}
+	service := NewService(repo, fakeCallChecker{allowed: true}, nil)
+
+	_, err := service.Create(context.Background(), CreateInput{
+		ActorUserID:  "user-1",
+		WorkspaceID:  "workspace-1",
+		ChannelID:    "channel-1",
+		TargetUserID: "user-1",
+		Mode:         "video",
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "CALL_TARGET_INVALID" {
+		t.Fatalf("Create() error = %#v, want CALL_TARGET_INVALID", err)
+	}
+	if repo.createCalled {
+		t.Fatal("Create() không được gọi repository khi tự gọi chính mình")
+	}
+}
+
+func TestCreateMapsInvalidCallPayloadRepositoryError(t *testing.T) {
+	repo := &fakeCallRepo{createErr: callsdomain.ErrCallInvalidPayload}
+	service := NewService(repo, fakeCallChecker{allowed: true}, nil)
+
+	_, err := service.Create(context.Background(), CreateInput{
+		ActorUserID:  "user-1",
+		WorkspaceID:  "workspace-1",
+		ChannelID:    "channel-1",
+		TargetUserID: "user-2",
+		Mode:         "video",
+	})
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != "CALL_PAYLOAD_INVALID" {
+		t.Fatalf("Create() error = %#v, want CALL_PAYLOAD_INVALID", err)
 	}
 }
 
