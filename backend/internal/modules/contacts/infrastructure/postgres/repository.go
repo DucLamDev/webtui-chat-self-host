@@ -32,6 +32,26 @@ func (r *Repository) ListRequests(ctx context.Context, zoneID string, actorUserI
 	return r.list(ctx, zoneID, actorUserID, status)
 }
 
+func (r *Repository) GetRequest(ctx context.Context, zoneID string, actorUserID string, requestID string) (contactsdomain.ContactRequest, error) {
+	row := r.pool.QueryRow(ctx, `
+SELECT cr.id::text, cr.requester_id::text, cr.receiver_id::text, cr.status,
+       other_user.id::text, other_user.email::text, other_user.username::text, other_user.display_name,
+       other_user.avatar_url, other_user.phone_number, other_user.status,
+       cr.requested_at, cr.responded_at, cr.created_at, cr.updated_at
+FROM contact_requests cr
+JOIN users other_user
+  ON other_user.id = CASE
+      WHEN cr.requester_id = $2::uuid THEN cr.receiver_id
+      ELSE cr.requester_id
+  END
+ AND other_user.deleted_at IS NULL
+WHERE cr.id = $1::uuid
+  AND (cr.requester_id = $2::uuid OR cr.receiver_id = $2::uuid)
+  AND cr.zone_id = $3::uuid
+`, requestID, actorUserID, zoneID)
+	return scanContactRequest(row)
+}
+
 func (r *Repository) CreateRequest(ctx context.Context, zoneID string, actorUserID string, receiverID string) (contactsdomain.ContactRequest, error) {
 	if actorUserID == receiverID {
 		return contactsdomain.ContactRequest{}, contactsdomain.ErrCannotContactSelf

@@ -14,6 +14,7 @@ type Repository interface {
 	AcceptRequest(ctx context.Context, zoneID string, actorUserID string, requestID string) (contactsdomain.ContactRequest, error)
 	CancelRequest(ctx context.Context, zoneID string, actorUserID string, requestID string) (contactsdomain.ContactRequest, error)
 	CreateRequest(ctx context.Context, zoneID string, actorUserID string, receiverID string) (contactsdomain.ContactRequest, error)
+	GetRequest(ctx context.Context, zoneID string, actorUserID string, requestID string) (contactsdomain.ContactRequest, error)
 	ListContacts(ctx context.Context, zoneID string, actorUserID string) ([]contactsdomain.ContactRequest, error)
 	ListRequests(ctx context.Context, zoneID string, actorUserID string, status string) ([]contactsdomain.ContactRequest, error)
 	RejectRequest(ctx context.Context, zoneID string, actorUserID string, requestID string) (contactsdomain.ContactRequest, error)
@@ -93,7 +94,7 @@ func (s *Service) SendRequest(ctx context.Context, zoneID string, actorUserID st
 		return ContactRequestDTO{}, mapContactError(err)
 	}
 	dto := toDTO(actorUserID, item)
-	s.publishContactRealtime(ctx, zoneID, "ContactRequestCreated", item.ReceiverID, dto)
+	s.publishContactRealtime(ctx, zoneID, "ContactRequestCreated", item.ReceiverID, item.ID)
 	return dto, nil
 }
 
@@ -104,8 +105,8 @@ func (s *Service) AcceptRequest(ctx context.Context, zoneID string, actorUserID 
 		return ContactRequestDTO{}, mapContactError(err)
 	}
 	dto := toDTO(actorUserID, item)
-	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.RequesterID, dto)
-	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.ReceiverID, dto)
+	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.RequesterID, item.ID)
+	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.ReceiverID, item.ID)
 	return dto, nil
 }
 
@@ -116,8 +117,8 @@ func (s *Service) RejectRequest(ctx context.Context, zoneID string, actorUserID 
 		return ContactRequestDTO{}, mapContactError(err)
 	}
 	dto := toDTO(actorUserID, item)
-	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.RequesterID, dto)
-	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.ReceiverID, dto)
+	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.RequesterID, item.ID)
+	s.publishContactRealtime(ctx, zoneID, "ContactRequestUpdated", item.ReceiverID, item.ID)
 	return dto, nil
 }
 
@@ -127,16 +128,20 @@ func (s *Service) CancelRequest(ctx context.Context, zoneID string, actorUserID 
 	if err != nil {
 		return mapContactError(err)
 	}
-	dto := toDTO(actorUserID, item)
-	s.publishContactRealtime(ctx, zoneID, "ContactRequestCancelled", item.RequesterID, dto)
-	s.publishContactRealtime(ctx, zoneID, "ContactRequestCancelled", item.ReceiverID, dto)
+	s.publishContactRealtime(ctx, zoneID, "ContactRequestCancelled", item.RequesterID, item.ID)
+	s.publishContactRealtime(ctx, zoneID, "ContactRequestCancelled", item.ReceiverID, item.ID)
 	return nil
 }
 
-func (s *Service) publishContactRealtime(ctx context.Context, zoneID string, eventType string, userID string, request ContactRequestDTO) {
+func (s *Service) publishContactRealtime(ctx context.Context, zoneID string, eventType string, userID string, requestID string) {
 	if s.realtime == nil || strings.TrimSpace(userID) == "" {
 		return
 	}
+	item, err := s.repo.GetRequest(ctx, strings.TrimSpace(zoneID), strings.TrimSpace(userID), strings.TrimSpace(requestID))
+	if err != nil {
+		return
+	}
+	request := toDTO(userID, item)
 	_ = s.realtime.Publish(ctx, RealtimeEvent{
 		Type:   eventType,
 		ZoneID: strings.TrimSpace(zoneID),

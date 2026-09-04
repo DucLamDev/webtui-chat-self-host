@@ -1079,8 +1079,13 @@ function renderMedia(
     const remoteVideo = document.createElement("video");
     remoteVideo.autoplay = true;
     remoteVideo.className = "webtui-webrtc-call__remote-video";
+    remoteVideo.muted = true;
     remoteVideo.playsInline = true;
     remoteVideo.srcObject = remoteStream;
+    const remoteAudio = document.createElement("audio");
+    remoteAudio.autoplay = true;
+    remoteAudio.className = "webtui-webrtc-call__remote-audio";
+    remoteAudio.srcObject = remoteStream;
 
     const localVideo = document.createElement("video");
     localVideo.autoplay = true;
@@ -1088,9 +1093,10 @@ function renderMedia(
     localVideo.muted = true;
     localVideo.playsInline = true;
     localVideo.srcObject = localStream;
-    container.append(remoteVideo, localVideo);
+    container.append(remoteVideo, remoteAudio, localVideo);
     enableDraggableLocalPreview(localVideo, container);
     void remoteVideo.play().catch(() => undefined);
+    void remoteAudio.play().catch(() => undefined);
     void localVideo.play().catch(() => undefined);
     return;
   }
@@ -1165,16 +1171,21 @@ function attachRemoteStream(
   mode: CallMode,
   stream: MediaStream
 ) {
-  const selector =
+  const selectors =
     mode === "video"
-      ? ".webtui-webrtc-call__remote-video"
-      : ".webtui-webrtc-call__remote-audio";
-  const media = container.querySelector<HTMLMediaElement>(selector);
-  if (!media) {
-    return;
-  }
-  media.srcObject = stream;
-  void media.play().catch(() => undefined);
+      ? [
+          ".webtui-webrtc-call__remote-video",
+          ".webtui-webrtc-call__remote-audio"
+        ]
+      : [".webtui-webrtc-call__remote-audio"];
+  selectors.forEach((selector) => {
+    const media = container.querySelector<HTMLMediaElement>(selector);
+    if (!media) {
+      return;
+    }
+    media.srcObject = stream;
+    void media.play().catch(() => undefined);
+  });
 }
 
 function refreshLocalPreview(

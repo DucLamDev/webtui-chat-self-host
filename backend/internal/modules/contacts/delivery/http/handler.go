@@ -62,7 +62,7 @@ func (h *Handler) SendRequest(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.Created(c, request)
+	response.Created(c, gin.H{"contact_request": request})
 }
 
 func (h *Handler) AcceptRequest(c *gin.Context) {
@@ -71,7 +71,7 @@ func (h *Handler) AcceptRequest(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, nethttp.StatusOK, request)
+	response.OK(c, nethttp.StatusOK, gin.H{"contact_request": request})
 }
 
 func (h *Handler) RejectRequest(c *gin.Context) {
@@ -80,7 +80,7 @@ func (h *Handler) RejectRequest(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, nethttp.StatusOK, request)
+	response.OK(c, nethttp.StatusOK, gin.H{"contact_request": request})
 }
 
 func (h *Handler) CancelRequest(c *gin.Context) {
